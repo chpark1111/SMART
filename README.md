@@ -1,8 +1,8 @@
 # Split, Merge, and Refine: Fitting Tight Bounding Boxes via Over-Segmentation and Iterative Search (SMART), 3DV 2024
 
-[**Arxiv**](https://arxiv.org/abs/2304.04336)
+[**arXiv**](https://arxiv.org/abs/2304.04336) | [**Paper**](https://arxiv.org/pdf/2304.04336)
 
-[Chanhyeok Park \*](https://chpark1111.github.io/), [Minhyuk Sung](https://mhsung.github.io/)
+[Chanhyeok Park](https://chpark1111.github.io/), [Minhyuk Sung](https://mhsung.github.io/)
 
 ### Introduction
 
