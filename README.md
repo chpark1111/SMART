@@ -4,7 +4,7 @@
 
 [Chanhyeok Park](https://chpark1111.github.io/), [Minhyuk Sung](https://mhsung.github.io/)
 
-### Introduction
+# Introduction
 
 This repository contains the official implementation of **Split, Merge, and Refine: Fitting Tight Bounding Boxes via Over-Segmentation and Iterative Search a.k.a. SMART**.
 **SMART** is a shape abstraction technique for finding tight bounding boxes of 3D meshes without requiring any human supvervision. These rich bounding boxes can be utilized for various downstream tasks like **segmentation, deformation, generation, abstraction, collision detection, and more**.
