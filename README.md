@@ -19,6 +19,7 @@ This repository contains the official implementation of **Split, Merge, and Refi
 - [ ] Add refine section code.
 - [ ] Add MCTS section code.
 - [ ] Add code for full automation of the pipelines.
+- [ ] Add renderer for SMART.
 - [ ] Add demo mesh, script.
 - [ ] Add code for watertight tetrahedral mesh conversion.
 - [ ] Add SMART C++ code for acceleration.
@@ -67,11 +68,19 @@ This is a section for MCTS:
 python mcts.py
 ```
 
+# Renderer
+
+This is a section for rendering bounding boxes (and meshes) used in the paper.
+
 # Demo
 
 This is a section for demo
 
-# Citation
+# Reference
+
+Our bounding box rendering code is based on the [StructureNet](https://github.com/daerduoCarey/structurenet/tree/master)'s [renderer](https://github.com/daerduoCarey/structurenet/tree/master/viz_blender). We thank the authors for opening the rendering code.
+
+## Citation
 
 If you find our work useful, please consider citing:
 
@@ -84,4 +93,11 @@ If you find our work useful, please consider citing:
 }
 ```
 
-[//]: #
+## License
+
+This work is licensed under a [CC BY-NC-SA 4.0][cc-by-nc-sa].
+
+![CC BY-NC-SA 4.0][cc-by-nc-sa-image]
+
+[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
+[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
