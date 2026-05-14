@@ -811,12 +811,22 @@ tables are deferred until after exact parity is locked.
      `runs/bench_exact/action_prior_linear_smoke3_mcts5.json` kept all reported
      metric diffs at `0` and measured `1.037x` at prior weight `0.1`. It is a
      functional RL/action-ordering baseline, not a promoted speed path.
+   - Added a PyTorch MLP action-prior trainer:
+     `smart build-prior --model-type mlp`,
+     `scripts/train_action_prior_from_traces.py --model-type mlp`, and
+     `smart.build_mlp_action_prior_from_traces`. `--device auto` probes Apple
+     Silicon MPS first, then CUDA, then CPU. The saved model is a JSON weight
+     file consumed by the existing MCTS prior loader, so PyTorch is used for
+     training and exact SMART reward still evaluates the selected trajectory.
+     The first tiny CPU smoke
+     `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept metric diffs
+     at `0` but measured `0.952x`; it verifies wiring, not a speed gain.
 
    Next RL/MCTS step: generate more traces from the processed expanded set and
-   train category-specific linear and MLP priors. A global smoke prior is too
-   blunt for table cases. The prior/RL path is therefore active, but it is
-   intentionally not default until it improves quality metrics instead of merely
-   changing the search trajectory.
+   train category-specific linear and PyTorch MLP priors. A global smoke prior
+   is too blunt for table cases. The prior/RL path is therefore active, but it
+   is intentionally not default until it improves quality metrics instead of
+   merely changing the search trajectory.
 
 1. Opt-in no-reward MCTS early stop
 

@@ -395,7 +395,8 @@ smart --config configs/smoke_5.yaml build-prior \
 ```
 
 The default `--model-type counts` writes portable coord/scale logits. A
-state-aware linear policy is also available for RL/action-ordering experiments:
+state-aware linear policy and a PyTorch MLP policy are also available for
+RL/action-ordering experiments:
 
 ```bash
 smart --config configs/smoke_5.yaml build-prior \
@@ -403,7 +404,19 @@ smart --config configs/smoke_5.yaml build-prior \
   --output runs/bench_exact/priors/airplane_linear_prior.json \
   --model-type linear \
   --epochs 80
+
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_mlp_prior.json \
+  --model-type mlp \
+  --epochs 200 \
+  --hidden-size 32 \
+  --device auto
 ```
+
+For `--model-type mlp`, `--device auto` uses PyTorch and probes Apple Silicon
+MPS first, then CUDA, then CPU. The saved JSON still contains plain weights, so
+MCTS inference does not need to keep a PyTorch model object alive.
 
 The same builder is also available as a Python API:
 
@@ -418,6 +431,12 @@ smart.build_action_prior_from_traces(
 smart.build_linear_action_prior_from_traces(
     ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
     output="runs/bench_exact/priors/airplane_linear_prior.json",
+)
+
+smart.build_mlp_action_prior_from_traces(
+    ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
+    output="runs/bench_exact/priors/airplane_mlp_prior.json",
+    device="auto",
 )
 ```
 
@@ -618,15 +637,18 @@ weights change one table case. MOV improves for that case, while BVS/TOV/vIoU
 worsen, so the generic prior remains a research/quality experiment rather than
 a default. `smart build-prior --model-type linear` and
 `scripts/train_action_prior_from_traces.py --model-type linear` now train a
-state-aware pure-Python linear action prior from the same schema-v2 traces. A
-tiny MCTS2 leave-one-out check kept reported metric diffs at `0` but was slower
-(`0.852x`), while the slightly larger three-airplane MCTS5 smoke
+state-aware linear action prior from the same schema-v2 traces, and
+`--model-type mlp` trains a small PyTorch MLP prior with automatic MPS/CUDA/CPU
+device selection. A tiny MCTS2 leave-one-out check kept reported metric diffs at
+`0` but was slower (`0.852x`), while the slightly larger three-airplane MCTS5 smoke
 `runs/bench_exact/action_prior_linear_smoke3_mcts5.json` also kept metric diffs
 at `0` and measured `1.037x` at prior weight `0.1`. This proves the
-training/runtime path is wired, not that it is ready as a default. The next
-useful RL step is collecting larger category-specific traces, then replacing the
-linear scorer with a compact MLP or PUCT prior while still judging final boxes
-with SMART evaluation metrics.
+training/runtime path is wired, not that it is ready as a default. The PyTorch
+MLP smoke `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept reported
+metric diffs at `0` but measured `0.952x` on a tiny CPU run, so it is also a
+functional research path rather than a speed win yet. The next useful RL step is
+collecting larger category-specific traces, then comparing the linear, MLP, and
+PUCT prior variants while still judging final boxes with SMART evaluation metrics.
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS

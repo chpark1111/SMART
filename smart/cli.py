@@ -74,18 +74,20 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--output", required=True, help="Path to write the prior JSON")
     prior.add_argument(
         "--model-type",
-        choices=["counts", "linear"],
+        choices=["counts", "linear", "mlp"],
         default="counts",
-        help="Prior model to train: portable count logits or state-aware linear logits",
+        help="Prior model to train: portable count logits, state-aware linear logits, or a small MLP",
     )
     prior.add_argument("--min-reward", type=float, default=0.0, help="Only actions at or above this reward contribute")
     prior.add_argument("--smoothing", type=float, default=1.0, help="Additive count smoothing")
     prior.add_argument("--reward-power", type=float, default=1.0, help="Exponent applied to positive rewards")
     prior.add_argument("--include-action-logits", action="store_true", help="Also write per-action logits for same-layout experiments")
     prior.add_argument("--num-action-scale", type=int, default=0, help="Override coord/scale key count; default infers from traces")
-    prior.add_argument("--epochs", type=int, default=80, help="Training epochs for --model-type linear")
-    prior.add_argument("--learning-rate", type=float, default=0.05, help="Learning rate for --model-type linear")
-    prior.add_argument("--l2", type=float, default=1.0e-4, help="L2 regularization for --model-type linear")
+    prior.add_argument("--epochs", type=int, default=80, help="Training epochs for learned priors")
+    prior.add_argument("--learning-rate", type=float, default=0.05, help="Learning rate for learned priors")
+    prior.add_argument("--l2", type=float, default=1.0e-4, help="L2 regularization for learned priors")
+    prior.add_argument("--hidden-size", type=int, default=16, help="Hidden units for --model-type mlp")
+    prior.add_argument("--device", default="auto", help="PyTorch device for --model-type mlp: auto, mps, cuda, or cpu")
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -196,6 +198,22 @@ def main(argv: list[str] | None = None) -> int:
                 epochs=args.epochs,
                 learning_rate=args.learning_rate,
                 l2=args.l2,
+            )
+        elif args.model_type == "mlp":
+            from .action_prior import build_mlp_action_prior_from_traces
+
+            prior_payload = build_mlp_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                reward_power=args.reward_power,
+                num_action_scale=args.num_action_scale or None,
+                epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                l2=args.l2,
+                hidden_size=args.hidden_size,
+                device=args.device,
             )
         else:
             from .action_prior import build_action_prior_from_traces

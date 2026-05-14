@@ -218,6 +218,12 @@ Not promoted to default:
   `runs/bench_exact/action_prior_linear_smoke3_mcts5.json` also kept metric diffs
   at `0` and measured `1.037x` at prior weight `0.1`. This is an active
   RL/action-ordering path, not a default.
+- A PyTorch MLP prior is now wired through `--model-type mlp` and
+  `smart.build_mlp_action_prior_from_traces`. Training uses `--device auto`,
+  which probes Apple Silicon MPS first, then CUDA, then CPU. The exported prior
+  remains JSON weights and still only changes action order. The first tiny
+  CPU smoke `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept metric
+  diffs at `0` but measured `0.952x`, so it is not promoted.
 
 ## Next Work
 
@@ -227,8 +233,8 @@ Not promoted to default:
    `stateful_union_cache=true` can become the recommended exact accelerator.
 3. Rework Rust MCTS runner so it preserves the legacy tree trajectory before
    using it in exact profiles.
-4. Collect larger category-specific traces, then compare count, linear, and MLP
-   action priors as MCTS ordering policies. Research profiles may change search
+4. Collect larger category-specific traces, then compare count, linear, PyTorch
+   MLP, and PUCT action priors as MCTS ordering policies. Research profiles may change search
    order, but promotion requires aggregate quality to stay equal or improve under
    final SMART evaluation.
 5. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and

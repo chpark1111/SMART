@@ -35,10 +35,12 @@ refinement.
    `smart build-prior` or `scripts/train_action_prior_from_traces.py`.
 2. State-aware linear prior: `--model-type linear` uses category, BVS, step,
    action-unit, box-count, and penalty features as a lightweight policy baseline.
-3. Category-specific priors: separate airplane/chair/table priors from traces.
-4. Category-general MLP: shared network with category embedding.
-5. Value head: predict rollout quality only for ordering, never as final reward.
-6. Optional initializer: predict coarse bbox action schedule or improved
+3. PyTorch MLP prior: `--model-type mlp` trains a compact shared network with
+   `--device auto`, which probes Apple Silicon MPS before CUDA/CPU.
+4. Category-specific priors: separate airplane/chair/table priors from traces.
+5. Category-general MLP: larger shared network with category embedding.
+6. Value head: predict rollout quality only for ordering, never as final reward.
+7. Optional initializer: predict coarse bbox action schedule or improved
    initial boxes before exact SMART refinement.
 
 ## Promotion Rules
@@ -63,14 +65,20 @@ refinement.
 - `smart build-prior --model-type linear` and
   `smart.build_linear_action_prior_from_traces` train the first state-aware
   category-general action prior without adding a deep-learning dependency.
+- `smart build-prior --model-type mlp` and
+  `smart.build_mlp_action_prior_from_traces` now train a PyTorch MLP action prior
+  with automatic MPS/CUDA/CPU device selection. The exported prior is still a
+  JSON weight file used only for action ordering.
 - `scripts/train_action_prior_from_traces.py` is now the first explicit trainer
-  entrypoint. It supports both `counts` and `linear`; the next upgrade is a
-  category-general MLP action scorer trained from larger schema-v2 traces.
+  entrypoint. It supports `counts`, `linear`, and `mlp`; the next upgrade is a
+  larger category-general MLP/PUCT action scorer trained from schema-v2 traces.
 - Generic smoke prior experiments produced small speedups but changed one table
   case, so they are not default.
 - The first tiny linear-prior leave-one-out check kept reported metric diffs at
   `0` but was slower on MCTS2. A slightly larger three-airplane MCTS5 check kept
   metric diffs at `0` and measured `1.037x` at prior weight `0.1`, so the path is
   functional but not promoted.
+- The first tiny PyTorch MLP prior check kept reported metric diffs at `0` but
+  measured `0.952x` on CPU, so the MLP path is also wired but not promoted.
 - The next research step is category-specific trace collection followed by a
   stronger category-general policy that only changes action ordering.

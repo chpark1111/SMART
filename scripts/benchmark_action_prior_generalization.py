@@ -37,8 +37,11 @@ def main() -> int:
     parser.add_argument("--reward-backend", default="manifold_stateful")
     parser.add_argument("--mcts-backend", default="rust_stateful")
     parser.add_argument("--weights", default="0,0.5,1.0")
-    parser.add_argument("--prior-model", choices=["counts", "linear"], default="counts")
-    parser.add_argument("--linear-epochs", type=int, default=100)
+    parser.add_argument("--prior-model", choices=["counts", "linear", "mlp"], default="counts")
+    parser.add_argument("--linear-epochs", type=int, default=100, help="Deprecated alias for --prior-epochs")
+    parser.add_argument("--prior-epochs", type=int, default=0)
+    parser.add_argument("--hidden-size", type=int, default=16)
+    parser.add_argument("--device", default="auto", help="PyTorch device for --prior-model mlp")
     parser.add_argument("--transposition-table", action="store_true")
     parser.add_argument("--transposition-table-size", type=int, default=8192)
     parser.add_argument(
@@ -67,6 +70,8 @@ def main() -> int:
         help="Tolerance used to report metric-identical weights in the aggregate summary",
     )
     args = parser.parse_args()
+    if args.prior_epochs <= 0:
+        args.prior_epochs = args.linear_epochs
 
     cfg = load_config(args.config)
     output_path = Path(args.output)
@@ -361,7 +366,7 @@ def _build_prior(
     *,
     include_action_logits: bool,
 ) -> dict[str, Any]:
-    if args.prior_model == "linear":
+    if args.prior_model in {"linear", "mlp"}:
         command = [
             sys.executable,
             "scripts/train_action_prior_from_traces.py",
@@ -369,10 +374,12 @@ def _build_prior(
             "--output",
             str(output),
             "--model-type",
-            "linear",
+            args.prior_model,
             "--epochs",
-            str(args.linear_epochs),
+            str(args.prior_epochs),
         ]
+        if args.prior_model == "mlp":
+            command.extend(["--hidden-size", str(args.hidden_size), "--device", str(args.device)])
     else:
         command = [
             sys.executable,

@@ -7,7 +7,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from smart.action_prior import build_action_prior_from_traces, build_linear_action_prior_from_traces
+from smart.action_prior import (
+    build_action_prior_from_traces,
+    build_linear_action_prior_from_traces,
+    build_mlp_action_prior_from_traces,
+)
 
 
 def main() -> int:
@@ -22,9 +26,9 @@ def main() -> int:
     parser.add_argument("--output", required=True, help="output prior JSON path")
     parser.add_argument(
         "--model-type",
-        choices=["counts", "linear"],
+        choices=["counts", "linear", "mlp"],
         default="counts",
-        help="Policy family. linear is a lightweight state-aware coord/scale scorer.",
+        help="Policy family. learned models only guide action ordering.",
     )
     parser.add_argument(
         "--alpha",
@@ -48,9 +52,11 @@ def main() -> int:
         action="store_true",
         help="Also include per-action logits for same-layout experiments.",
     )
-    parser.add_argument("--epochs", type=int, default=200, help="linear policy training epochs")
-    parser.add_argument("--learning-rate", type=float, default=0.05, help="linear policy learning rate")
-    parser.add_argument("--l2", type=float, default=1e-4, help="linear policy L2 regularization")
+    parser.add_argument("--epochs", type=int, default=200, help="learned policy training epochs")
+    parser.add_argument("--learning-rate", type=float, default=0.05, help="learned policy learning rate")
+    parser.add_argument("--l2", type=float, default=1e-4, help="learned policy L2 regularization")
+    parser.add_argument("--hidden-size", type=int, default=16, help="hidden units for --model-type mlp")
+    parser.add_argument("--device", default="auto", help="PyTorch device for --model-type mlp: auto, mps, cuda, or cpu")
     args = parser.parse_args()
 
     if args.model_type == "linear":
@@ -64,6 +70,20 @@ def main() -> int:
             epochs=args.epochs,
             learning_rate=args.learning_rate,
             l2=args.l2,
+        )
+    elif args.model_type == "mlp":
+        payload = build_mlp_action_prior_from_traces(
+            args.traces,
+            output=args.output,
+            min_reward=0.0,
+            smoothing=args.alpha,
+            reward_power=1.0 if args.reward_weighted else 0.0,
+            num_action_scale=args.num_action_scale or None,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            l2=args.l2,
+            hidden_size=args.hidden_size,
+            device=args.device,
         )
     else:
         payload = build_action_prior_from_traces(
