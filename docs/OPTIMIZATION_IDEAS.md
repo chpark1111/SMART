@@ -805,11 +805,12 @@ tables are deferred until after exact parity is locked.
      `scripts/train_action_prior_from_traces.py --model-type linear`, and
      `smart.build_linear_action_prior_from_traces`. It uses schema-v2 trace
      fields such as category, BVS, step fraction, action unit, box count, and
-     penalty settings. The first tiny leave-one-out airplane smoke
-     `runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported
-     metric diffs at `0`, but measured `0.852x` because the run is dominated by
-     orchestration overhead. It is a functional RL/action-ordering baseline, not
-     a promoted speed path.
+     penalty settings. The first tiny MCTS2 leave-one-out airplane smoke kept
+     reported metric diffs at `0` but measured `0.852x`. The slightly larger
+     three-airplane MCTS5 smoke
+     `runs/bench_exact/action_prior_linear_smoke3_mcts5.json` kept all reported
+     metric diffs at `0` and measured `1.037x` at prior weight `0.1`. It is a
+     functional RL/action-ordering baseline, not a promoted speed path.
 
    Next RL/MCTS step: generate more traces from the processed expanded set and
    train category-specific linear and MLP priors. A global smoke prior is too

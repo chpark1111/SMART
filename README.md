@@ -618,14 +618,15 @@ weights change one table case. MOV improves for that case, while BVS/TOV/vIoU
 worsen, so the generic prior remains a research/quality experiment rather than
 a default. `smart build-prior --model-type linear` and
 `scripts/train_action_prior_from_traces.py --model-type linear` now train a
-state-aware pure-Python linear action prior from the same schema-v2 traces. The
-first tiny leave-one-out airplane check
-`runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported metric
-diffs at `0`, but measured `0.852x` versus weight 0 because the workload is too
-small for the learned prior overhead. This proves the training/runtime path is
-wired, not that it is faster. The next useful RL step is collecting larger
-category-specific traces, then replacing the linear scorer with a compact MLP or
-PUCT prior while still judging final boxes with SMART evaluation metrics.
+state-aware pure-Python linear action prior from the same schema-v2 traces. A
+tiny MCTS2 leave-one-out check kept reported metric diffs at `0` but was slower
+(`0.852x`), while the slightly larger three-airplane MCTS5 smoke
+`runs/bench_exact/action_prior_linear_smoke3_mcts5.json` also kept metric diffs
+at `0` and measured `1.037x` at prior weight `0.1`. This proves the
+training/runtime path is wired, not that it is ready as a default. The next
+useful RL step is collecting larger category-specific traces, then replacing the
+linear scorer with a compact MLP or PUCT prior while still judging final boxes
+with SMART evaluation metrics.
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS

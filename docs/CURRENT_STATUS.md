@@ -212,10 +212,12 @@ Not promoted to default:
 - A state-aware linear prior is now wired through
   `smart build-prior --model-type linear`,
   `scripts/train_action_prior_from_traces.py --model-type linear`, and
-  `smart.build_linear_action_prior_from_traces`. The tiny leave-one-out airplane
-  smoke `runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported
-  metric diffs at `0`, but measured `0.852x` versus the weight-0 baseline because
-  the run is too small. This is an active RL/action-ordering path, not a default.
+  `smart.build_linear_action_prior_from_traces`. The tiny MCTS2 leave-one-out
+  airplane smoke kept reported metric diffs at `0` but measured `0.852x`; the
+  slightly larger three-airplane MCTS5 smoke
+  `runs/bench_exact/action_prior_linear_smoke3_mcts5.json` also kept metric diffs
+  at `0` and measured `1.037x` at prior weight `0.1`. This is an active
+  RL/action-ordering path, not a default.
 
 ## Next Work
 

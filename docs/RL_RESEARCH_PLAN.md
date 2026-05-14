@@ -69,6 +69,8 @@ refinement.
 - Generic smoke prior experiments produced small speedups but changed one table
   case, so they are not default.
 - The first tiny linear-prior leave-one-out check kept reported metric diffs at
-  `0` but was slower on MCTS2, so the path is functional but not promoted.
+  `0` but was slower on MCTS2. A slightly larger three-airplane MCTS5 check kept
+  metric diffs at `0` and measured `1.037x` at prior weight `0.1`, so the path is
+  functional but not promoted.
 - The next research step is category-specific trace collection followed by a
   stronger category-general policy that only changes action ordering.
