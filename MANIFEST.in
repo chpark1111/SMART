@@ -1,0 +1,26 @@
+# Release packaging is controlled by [tool.maturin] in pyproject.toml.
+# This file is kept as a readable fallback for legacy setuptools tooling only.
+include README.md
+include pyproject.toml
+recursive-include configs *.yaml
+recursive-include smart/configs *.yaml
+recursive-include smart/assets/priors *.json
+recursive-include cmake *.cmake
+recursive-include docs *.md *.png
+recursive-include scripts *.py
+recursive-include rust/smart-core Cargo.toml pyproject.toml
+recursive-include rust/smart-core/src *.rs
+recursive-include smart/legacy/renderer *.blend *.txt
+recursive-include smart/vendor/manifold *
+prune smart/vendor/manifold/.github
+prune smart/vendor/manifold/build
+prune smart/vendor/manifold/docs
+prune smart/vendor/manifold/samples
+prune smart/vendor/manifold/test
+prune smart/vendor/manifold/bindings/wasm
+prune smart/vendor/manifold/bindings/python/third_party/pybind11/.github
+prune smart/vendor/manifold/bindings/python/third_party/pybind11/docs
+prune smart/vendor/manifold/bindings/python/third_party/pybind11/tests
+prune runs
+prune external
+global-exclude __pycache__ *.py[cod] .DS_Store

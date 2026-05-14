@@ -1,0 +1,99 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "smart-bbox"
+version = "0.1.0"
+description = "Official SMART pipeline for tight 3D bounding boxes"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "CC-BY-NC-SA-4.0"}
+authors = [
+  {name = "Chanhyeok Park"},
+]
+keywords = ["3d", "bounding-boxes", "shape-abstraction", "mesh", "mcts", "rust"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: Free for non-commercial use",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Rust",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+  "PyYAML",
+]
+
+[project.optional-dependencies]
+pipeline = [
+  "numpy",
+  "scipy",
+  "scikit-learn",
+  "trimesh",
+  "torch",
+  "tensorboard",
+  "tqdm",
+  "typing_extensions",
+  "coacd",
+  "rtree",
+  "matplotlib",
+]
+dev = [
+  "pytest",
+  "maturin>=1.7",
+]
+
+[project.scripts]
+smart = "smart.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/chpark1111/SMART"
+Repository = "https://github.com/chpark1111/SMART"
+Paper = "https://arxiv.org/abs/2304.04336"
+
+[tool.maturin]
+manifest-path = "rust/smart-core/Cargo.toml"
+module-name = "smart._rust"
+bindings = "pyo3"
+features = ["pyo3/extension-module"]
+python-source = "."
+include = [
+  {path = "pymesh.py", format = "wheel"},
+  {path = "smart/py.typed", format = "wheel"},
+  {path = "smart/configs/*.yaml", format = "wheel"},
+  {path = "smart/assets/priors/*.json", format = "wheel"},
+  {path = "smart/legacy/renderer/*.blend", format = "wheel"},
+  {path = "smart/legacy/renderer/*.txt", format = "wheel"},
+  {path = "configs/*.yaml", format = "sdist"},
+  {path = "docs/*.md", format = "sdist"},
+  {path = "scripts/*.py", format = "sdist"},
+  {path = "smart/assets/priors/*.json", format = "sdist"},
+  {path = "Cargo.lock", format = "sdist"},
+  {path = "rust/smart-core/Cargo.lock", format = "sdist"},
+]
+exclude = [
+  ".git/**",
+  ".pytest_cache/**",
+  "**/__pycache__/**",
+  "**/*.pyc",
+  ".DS_Store",
+  "data/**",
+  "dist/**",
+  "external/**",
+  "past_codes/**",
+  "runs/**",
+  "rust/smart-core/target/**",
+  {path = "smart/vendor/manifold/**", format = "wheel"},
+  "smart/vendor/manifold/build/**",
+  "smart/vendor/manifold/docs/**",
+  "smart/vendor/manifold/samples/**",
+  "smart/vendor/manifold/test/**",
+  "smart/vendor/manifold/wasm/**",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["past_codes", "smart/vendor", "runs", "external"]

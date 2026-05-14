@@ -1,0 +1,1 @@
+"""Legacy Blender renderer scripts."""

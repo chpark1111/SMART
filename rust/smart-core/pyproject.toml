@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "smart-core"
+version = "0.1.0"
+requires-python = ">=3.9"
+
+[tool.maturin]
+module-name = "smart._rust"
+bindings = "pyo3"
+features = ["pyo3/extension-module"]

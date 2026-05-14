@@ -1,0 +1,1 @@
+python3 ./scripts/greedy/greedy_all.py --num_worker 16 --baseline cubseg --action_unit 1e-2 --num_action_scale 1 --max_step 2000 --cover_penalty 100000000 --data_path "../Mesh2Tet/final_data/shapenet_table_e0.004_l0.2" --path_to_bbox "/home/chpark1111/docker/geometry2/research/Evaluation/baselines/CuboidAbstractionViaSeg/result/table/infer" --category table

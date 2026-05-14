@@ -1,0 +1,73 @@
+{
+  "run_name": "demo",
+  "workspace": "runs/demo",
+  "data_root": "data",
+  "normalization": {
+    "enabled": true,
+    "mode": "bbox_diagonal",
+    "target": 1.0,
+    "center": "bbox"
+  },
+  "categories": [
+    {
+      "name": "airplane",
+      "mesh_root": "data/shapenet_airplane",
+      "limit": 50,
+      "tetra": {"epsilon": 0.002, "edge_length": 0.1}
+    },
+    {
+      "name": "chair",
+      "mesh_root": "data/shapenet_chair",
+      "limit": 50,
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    },
+    {
+      "name": "table",
+      "mesh_root": "data/shapenet_table",
+      "limit": 50,
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    }
+  ],
+  "stages": {
+    "normalize": true,
+    "tetra": true,
+    "preseg": true,
+    "merge": true,
+    "refine": true,
+    "mcts": true,
+    "render": true
+  },
+  "mcts": {
+    "mcts_iter": 3000,
+    "max_step": 150,
+    "score_cache_size": 4096,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "render": {
+    "backend": "blender",
+    "input_stage": "mcts",
+    "joint_mesh": false,
+    "fallback": true,
+    "transparent": true,
+    "camera": {
+      "airplane": {
+        "ortho_scale": 1.12,
+        "shift_x": 0.10,
+        "shift_y": -0.38,
+        "rotation": [-0.25, 0.58, -0.08]
+      },
+      "chair": {
+        "ortho_scale": 1.20,
+        "shift_x": 0.10,
+        "shift_y": -0.28
+      },
+      "table": {
+        "ortho_scale": 1.55,
+        "shift_x": 0.02,
+        "shift_y": -0.25
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+"""Legacy refine argument configuration."""

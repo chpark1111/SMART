@@ -1,0 +1,1 @@
+"""Legacy merge argument configuration."""

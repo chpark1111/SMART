@@ -1,0 +1,1 @@
+"""Bundled SMART config profiles."""

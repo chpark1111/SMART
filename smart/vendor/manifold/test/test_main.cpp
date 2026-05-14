@@ -1,0 +1,451 @@
+// Copyright 2022 The Manifold Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "manifold.h"
+// #include "meshIO.h"
+#include "polygon.h"
+#include "sdf.h"
+#include "test.h"
+#include <random>
+#include <vector>
+#include <iostream>
+
+#include <unistd.h>
+#include <ios>
+#include <iostream>
+#include <fstream>
+#include <string>
+
+using namespace std;
+
+void mem_usage(double& vm_usage, double& resident_set) {
+   vm_usage = 0.0;
+   resident_set = 0.0;
+   ifstream stat_stream("/proc/self/stat",ios_base::in); //get info from proc directory
+   //create some variables to get info
+   string pid, comm, state, ppid, pgrp, session, tty_nr;
+   string tpgid, flags, minflt, cminflt, majflt, cmajflt;
+   string utime, stime, cutime, cstime, priority, nice;
+   string O, itrealvalue, starttime;
+   unsigned long vsize;
+   long rss;
+   stat_stream >> pid >> comm >> state >> ppid >> pgrp >> session >> tty_nr
+   >> tpgid >> flags >> minflt >> cminflt >> majflt >> cmajflt
+   >> utime >> stime >> cutime >> cstime >> priority >> nice
+   >> O >> itrealvalue >> starttime >> vsize >> rss; // don't care about the rest
+   stat_stream.close();
+   long page_size_kb = sysconf(_SC_PAGE_SIZE) / 1024; // for x86-64 is configured to use 2MB pages
+   vm_usage = vsize / 1024.0;
+   resident_set = rss * page_size_kb;
+}
+
+using namespace manifold;
+
+Options options;
+
+void print_usage() {
+	printf("-------------------------------\n");
+	printf("manifold_test specific options:\n");
+	printf("  -h: Print this message\n");
+	printf("  -e: Export GLB models of samples\n");
+	printf(
+		"  -v: Enable verbose output (only works if compiled with MANIFOLD_DEBUG "
+		"flag)\n");
+}
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+
+  for (int i = 1; i < argc; i++) {
+    if (argv[i][0] != '-') {
+      fprintf(stderr, "Unknown option: %s\n", argv[i]);
+      print_usage();
+      return 1;
+    }
+    switch (argv[i][1]) {
+      case 'h':
+        print_usage();
+        return 0;
+      case 'e':
+#ifndef MANIFOLD_EXPORT
+				printf(
+					"Export not possible because MANIFOLD_EXPORT compile flag is not "
+					"set.\n");
+#endif
+				options.exportModels = true;
+				break;
+			case 'v':
+				options.params.verbose = true;
+				manifold::ManifoldParams().verbose = true;
+				manifold::ManifoldParams().intermediateChecks = true;
+				break;
+			default:
+				fprintf(stderr, "Unknown option: %s\n", argv[i]);
+				print_usage();
+				return 1;
+		}
+	}
+	manifold::PolygonParams().intermediateChecks = true;
+
+	// random_device rd;
+	// default_random_engine gen{ rd() };
+
+	// uniform_real_distribution<double> len_dist{0, 0.1};
+	// uniform_int_distribution<int> rot_dist{-180, 180};
+
+	// vector<manifold::Manifold> manifolds;
+	// for(int i=0;i<50;i++) {
+	// 	double len1 = len_dist(gen), len2 = len_dist(gen), len3 = len_dist(gen);
+	// 	int rot1 = rot_dist(gen), rot2 = rot_dist(gen), rot3 = rot_dist(gen);
+
+	// 	manifolds.push_back(manifold::Manifold::Cube(glm::vec3(len1, len2, len3)));
+	// }
+
+	// for (int k=0;k<10000000;k++) {
+	// 	manifold::Manifold c = manifold::Manifold();
+	// 	for(int i=0;i<50;i++)
+	// 		if (k % 50 == i)
+	// 			c += manifolds[i];
+		
+	// 	// cout<<c.OriginalID()<<endl;
+
+	// 	manifold::Mesh nw = c.manifold::Manifold::GetMesh();
+	// 	cout << nw.vertPos.size() << " ";
+	// 	cout << c.manifold::Manifold::GetProperties().volume << endl;
+	// 	double vm, rss;
+	// 	mem_usage(vm, rss);
+	// 	cout << k<< " " << "Virtual Memory: " << vm << " Resident set size: " << rss << endl;
+	// }
+	// manifold::Mesh mesh = manifold::ImportMesh("/home/chpark1111/docker/geometry2/research/Mesh2Tet/result/shapenet_table_e0.001000_l0.050000_nv-1/1901183525f0063d2822b5101b06e070/model_manifold.obj", true);
+	// manifold::Mesh part = manifold::ImportMesh("/home/chpark1111/docker/geometry2/research/Mesh2Tet/result/shapenet_table_e0.001000_l0.050000_nv-1/1901183525f0063d2822b5101b06e070/bspnet/part1.obj", true);
+	
+	// manifold::Mesh mesh = manifold::ImportMesh("/home/chpark1111/docker/geometry2/research/Unsup3DMerging/tmp/mesh.obj", true);
+	// manifold::Mesh part = manifold::ImportMesh("/home/chpark1111/docker/geometry2/research/Unsup3DMerging/tmp/part.obj", true);
+	
+
+	// manifold::Manifold mesh_man = manifold::Manifold(mesh);
+	// manifold::Manifold part_man = manifold::Manifold(part);
+	// cout << mesh_man.GetProperties().volume << "\n";
+	// cout << part_man.GetProperties().volume << "\n";
+	// manifold::Manifold nw = part_man - mesh_man;
+	// cout << nw.GetProperties().volume << "\n";
+
+  manifold::PolygonParams().intermediateChecks = true;
+  manifold::PolygonParams().processOverlaps = false;
+
+	return RUN_ALL_TESTS();
+}
+
+Polygons SquareHole(float xOffset) {
+  Polygons polys;
+  polys.push_back({
+      {glm::vec2(2 + xOffset, 2), 0},    //
+      {glm::vec2(-2 + xOffset, 2), 0},   //
+      {glm::vec2(-2 + xOffset, -2), 0},  //
+      {glm::vec2(2 + xOffset, -2), 0},   //
+  });
+  polys.push_back({
+      {glm::vec2(-1 + xOffset, 1), 0},   //
+      {glm::vec2(1 + xOffset, 1), 0},    //
+      {glm::vec2(1 + xOffset, -1), 0},   //
+      {glm::vec2(-1 + xOffset, -1), 0},  //
+  });
+  return polys;
+}
+
+Mesh Csaszar() {
+  Mesh csaszar;
+  csaszar.vertPos = {{-20, -20, -10},  //
+                     {-20, 20, -15},   //
+                     {-5, -8, 8},      //
+                     {0, 0, 30},       //
+                     {5, 8, 8},        //
+                     {20, -20, -15},   //
+                     {20, 20, -10}};
+  csaszar.triVerts = {{1, 3, 6},  //
+                      {1, 6, 5},  //
+                      {2, 5, 6},  //
+                      {0, 2, 6},  //
+                      {0, 6, 4},  //
+                      {3, 4, 6},  //
+                      {1, 2, 3},  //
+                      {1, 4, 2},  //
+                      {1, 0, 4},  //
+                      {1, 5, 0},  //
+                      {3, 5, 4},  //
+                      {0, 5, 3},  //
+                      {0, 3, 2},  //
+                      {2, 4, 5}};
+  return csaszar;
+}
+
+struct GyroidSDF {
+  __host__ __device__ float operator()(glm::vec3 p) const {
+    const glm::vec3 min = p;
+    const glm::vec3 max = glm::vec3(glm::two_pi<float>()) - p;
+    const float min3 = glm::min(min.x, glm::min(min.y, min.z));
+    const float max3 = glm::min(max.x, glm::min(max.y, max.z));
+    const float bound = glm::min(min3, max3);
+    const float gyroid =
+        cos(p.x) * sin(p.y) + cos(p.y) * sin(p.z) + cos(p.z) * sin(p.x);
+    return glm::min(gyroid, bound);
+  }
+};
+
+Mesh Gyroid() {
+  const float period = glm::two_pi<float>();
+  return LevelSet(GyroidSDF(), {glm::vec3(0), glm::vec3(period)}, 0.5);
+}
+
+Mesh Tet() {
+  Mesh tet;
+  tet.vertPos = {{-1.0f, -1.0f, 1.0f},
+                 {-1.0f, 1.0f, -1.0f},
+                 {1.0f, -1.0f, -1.0f},
+                 {1.0f, 1.0f, 1.0f}};
+  tet.triVerts = {{2, 0, 1}, {0, 3, 1}, {2, 3, 0}, {3, 2, 1}};
+  return tet;
+}
+
+MeshGL TetGL() {
+  MeshGL tet;
+  tet.numProp = 5;
+  tet.vertProperties = {-1, -1, 1,  0, 0,   //
+                        -1, 1,  -1, 1, -1,  //
+                        1,  -1, -1, 2, -2,  //
+                        1,  1,  1,  3, -3,  //
+                        -1, 1,  -1, 4, -4,  //
+                        1,  -1, -1, 5, -5,  //
+                        1,  1,  1,  6, -6};
+  tet.triVerts = {2, 0, 1, 0, 3, 1, 2, 3, 0, 6, 5, 4};
+  tet.mergeFromVert = {4, 5, 6};
+  tet.mergeToVert = {1, 2, 3};
+  return tet;
+}
+
+MeshGL WithIndexColors(const Mesh& in) {
+  MeshGL inGL(in);
+  inGL.runOriginalID = {Manifold::ReserveIDs(1)};
+  const int numVert = in.vertPos.size();
+  inGL.numProp = 6;
+  inGL.vertProperties.resize(6 * numVert);
+  for (int i = 0; i < numVert; ++i) {
+    for (int j : {0, 1, 2}) inGL.vertProperties[6 * i + j] = in.vertPos[i][j];
+    // vertex colors
+    double a;
+    inGL.vertProperties[6 * i + 3] = powf(modf(i * sqrt(2.0), &a), 2.2);
+    inGL.vertProperties[6 * i + 4] = powf(modf(i * sqrt(3.0), &a), 2.2);
+    inGL.vertProperties[6 * i + 5] = powf(modf(i * sqrt(5.0), &a), 2.2);
+  }
+  return inGL;
+}
+
+MeshGL WithPositionColors(const Manifold& in) {
+  MeshGL inGL = in.GetMeshGL();
+  inGL.runIndex.clear();
+  inGL.runOriginalID.clear();
+  inGL.runTransform.clear();
+  inGL.faceID.clear();
+  inGL.runOriginalID = {Manifold::ReserveIDs(1)};
+  const int numVert = in.NumVert();
+  const Box bbox = in.BoundingBox();
+  const glm::vec3 size = bbox.Size();
+  const std::vector<float> oldProp = inGL.vertProperties;
+  inGL.numProp = 6;
+  inGL.vertProperties.resize(6 * numVert);
+  for (int i = 0; i < numVert; ++i) {
+    for (int j : {0, 1, 2}) inGL.vertProperties[6 * i + j] = oldProp[3 * i + j];
+    // vertex colors
+    inGL.vertProperties[6 * i + 3] = (oldProp[3 * i] - bbox.min.x) / size.x;
+    inGL.vertProperties[6 * i + 4] = (oldProp[3 * i + 1] - bbox.min.y) / size.y;
+    inGL.vertProperties[6 * i + 5] = (oldProp[3 * i + 2] - bbox.min.z) / size.z;
+  }
+  return inGL;
+}
+
+MeshGL WithNormals(const Manifold& in) {
+  const Mesh mesh = in.GetMesh();
+  MeshGL out;
+  out.runOriginalID = {Manifold::ReserveIDs(1)};
+  out.numProp = 6;
+  out.vertProperties.resize(out.numProp * mesh.vertPos.size());
+  for (int i = 0; i < mesh.vertPos.size(); ++i) {
+    for (int j : {0, 1, 2}) {
+      out.vertProperties[6 * i + j] = mesh.vertPos[i][j];
+      out.vertProperties[6 * i + 3 + j] = mesh.vertNormal[i][j];
+    }
+  }
+  out.triVerts.resize(3 * mesh.triVerts.size());
+  for (int i = 0; i < mesh.triVerts.size(); ++i) {
+    for (int j : {0, 1, 2}) out.triVerts[3 * i + j] = mesh.triVerts[i][j];
+  }
+  return out;
+}
+
+void Identical(const Mesh& mesh1, const Mesh& mesh2) {
+  ASSERT_EQ(mesh1.vertPos.size(), mesh2.vertPos.size());
+  for (int i = 0; i < mesh1.vertPos.size(); ++i)
+    for (int j : {0, 1, 2})
+      ASSERT_NEAR(mesh1.vertPos[i][j], mesh2.vertPos[i][j], 0.0001);
+
+  ASSERT_EQ(mesh1.triVerts.size(), mesh2.triVerts.size());
+  for (int i = 0; i < mesh1.triVerts.size(); ++i)
+    ASSERT_EQ(mesh1.triVerts[i], mesh2.triVerts[i]);
+}
+
+void RelatedGL(const Manifold& out, const std::vector<MeshGL>& originals,
+               bool checkNormals) {
+  ASSERT_FALSE(out.IsEmpty());
+  const glm::ivec3 normalIdx =
+      checkNormals ? glm::ivec3(3, 4, 5) : glm::ivec3(0);
+  MeshGL output = out.GetMeshGL(normalIdx);
+  for (int run = 0; run < output.runOriginalID.size(); ++run) {
+    const float* m = output.runTransform.data() + 12 * run;
+    const glm::mat4x3 transform =
+        output.runTransform.empty()
+            ? glm::mat4x3(1.0f)
+            : glm::mat4x3(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8],
+                          m[9], m[10], m[11]);
+    int i = 0;
+    for (; i < originals.size(); ++i) {
+      ASSERT_EQ(originals[i].runOriginalID.size(), 1);
+      if (originals[i].runOriginalID[0] == output.runOriginalID[run]) break;
+    }
+    ASSERT_LT(i, originals.size());
+    const MeshGL& inMesh = originals[i];
+    for (int tri = output.runIndex[run] / 3; tri < output.runIndex[run + 1] / 3;
+         ++tri) {
+      if (!output.faceID.empty()) {
+        ASSERT_LT(tri, output.faceID.size());
+      }
+      const int inTri = output.faceID.empty() ? tri : output.faceID[tri];
+      ASSERT_LT(inTri, inMesh.triVerts.size() / 3);
+      glm::ivec3 inTriangle = {inMesh.triVerts[3 * inTri],
+                               inMesh.triVerts[3 * inTri + 1],
+                               inMesh.triVerts[3 * inTri + 2]};
+      inTriangle *= inMesh.numProp;
+
+      glm::mat3 inTriPos;
+      glm::mat3 outTriPos;
+      for (int j : {0, 1, 2}) {
+        const int vert = output.triVerts[3 * tri + j];
+        glm::vec4 pos;
+        for (int k : {0, 1, 2}) {
+          pos[k] = inMesh.vertProperties[inTriangle[j] + k];
+          outTriPos[j][k] = output.vertProperties[vert * output.numProp + k];
+        }
+        pos[3] = 1;
+        inTriPos[j] = transform * pos;
+      }
+      glm::vec3 outNormal =
+          glm::cross(outTriPos[1] - outTriPos[0], outTriPos[2] - outTriPos[0]);
+      glm::vec3 inNormal =
+          glm::cross(inTriPos[1] - inTriPos[0], inTriPos[2] - inTriPos[0]);
+      const float area = glm::length(inNormal);
+      if (area == 0) continue;
+      inNormal /= area;
+
+      for (int j : {0, 1, 2}) {
+        const int vert = output.triVerts[3 * tri + j];
+        glm::vec3 edges[3];
+        for (int k : {0, 1, 2}) edges[k] = inTriPos[k] - outTriPos[j];
+        const float volume = glm::dot(edges[0], glm::cross(edges[1], edges[2]));
+        ASSERT_LE(volume, area * 100 * out.Precision());
+
+        if (checkNormals) {
+          glm::vec3 normal;
+          for (int k : {0, 1, 2})
+            normal[k] =
+                output.vertProperties[vert * output.numProp + normalIdx[k]];
+          ASSERT_NEAR(glm::length(normal), 1, 0.0001);
+          ASSERT_GT(glm::dot(normal, outNormal), 0);
+        } else {
+          for (int p = 3; p < output.numProp; ++p) {
+            const float propOut =
+                output.vertProperties[vert * output.numProp + p];
+
+            glm::vec3 inProp = {inMesh.vertProperties[inTriangle[0] + p],
+                                inMesh.vertProperties[inTriangle[1] + p],
+                                inMesh.vertProperties[inTriangle[2] + p]};
+            glm::vec3 edgesP[3];
+            for (int k : {0, 1, 2}) {
+              edgesP[k] = edges[k] + inNormal * inProp[k] - inNormal * propOut;
+            }
+            const float volumeP =
+                glm::dot(edgesP[0], glm::cross(edgesP[1], edgesP[2]));
+
+            ASSERT_LE(volumeP, area * 100 * out.Precision());
+          }
+        }
+      }
+    }
+  }
+}
+
+void ExpectMeshes(const Manifold& manifold,
+                  const std::vector<MeshSize>& meshSize) {
+  EXPECT_FALSE(manifold.IsEmpty());
+  EXPECT_TRUE(manifold.IsManifold());
+  EXPECT_TRUE(manifold.MatchesTriNormals());
+  std::vector<Manifold> manifolds = manifold.Decompose();
+  ASSERT_EQ(manifolds.size(), meshSize.size());
+  std::sort(manifolds.begin(), manifolds.end(),
+            [](const Manifold& a, const Manifold& b) {
+              return a.NumVert() != b.NumVert() ? a.NumVert() > b.NumVert()
+                                                : a.NumTri() > b.NumTri();
+            });
+  for (int i = 0; i < manifolds.size(); ++i) {
+    EXPECT_TRUE(manifolds[i].IsManifold());
+    EXPECT_EQ(manifolds[i].NumVert(), meshSize[i].numVert);
+    EXPECT_EQ(manifolds[i].NumTri(), meshSize[i].numTri);
+    EXPECT_EQ(manifolds[i].NumProp(), meshSize[i].numProp);
+    EXPECT_EQ(manifolds[i].NumPropVert(), meshSize[i].numPropVert);
+    const MeshGL meshGL = manifolds[i].GetMeshGL();
+    EXPECT_EQ(meshGL.mergeFromVert.size(), meshGL.mergeToVert.size());
+    EXPECT_EQ(meshGL.mergeFromVert.size(),
+              meshGL.NumVert() - manifolds[i].NumVert());
+    const Mesh mesh = manifolds[i].GetMesh();
+    for (const glm::vec3& normal : mesh.vertNormal) {
+      ASSERT_NEAR(glm::length(normal), 1, 0.0001);
+    }
+  }
+}
+
+void CheckManifold(const Manifold& manifold) {
+  EXPECT_TRUE(manifold.IsManifold());
+  EXPECT_TRUE(manifold.MatchesTriNormals());
+  for (const glm::vec3& normal : manifold.GetMesh().vertNormal) {
+    ASSERT_NEAR(glm::length(normal), 1, 0.0001);
+  }
+}
+
+void CheckStrictly(const Manifold& manifold) {
+  EXPECT_TRUE(manifold.IsManifold());
+  EXPECT_TRUE(manifold.MatchesTriNormals());
+  EXPECT_EQ(manifold.NumDegenerateTris(), 0);
+}
+
+void CheckGL(const Manifold& manifold) {
+  ASSERT_FALSE(manifold.IsEmpty());
+  const MeshGL meshGL = manifold.GetMeshGL();
+  EXPECT_EQ(meshGL.mergeFromVert.size(), meshGL.mergeToVert.size());
+  EXPECT_EQ(meshGL.mergeFromVert.size(), meshGL.NumVert() - manifold.NumVert());
+  EXPECT_EQ(meshGL.runIndex.size(), meshGL.runOriginalID.size() + 1);
+  EXPECT_EQ(meshGL.runIndex.front(), 0);
+  EXPECT_EQ(meshGL.runIndex.back(), 3 * meshGL.NumTri());
+  if (!meshGL.runTransform.empty()) {
+    EXPECT_EQ(meshGL.runTransform.size(), 12 * meshGL.runOriginalID.size());
+  }
+  EXPECT_EQ(meshGL.faceID.size(), meshGL.NumTri());
+}

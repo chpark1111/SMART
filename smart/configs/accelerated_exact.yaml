@@ -1,0 +1,78 @@
+{
+  "run_name": "accelerated_exact",
+  "workspace": "runs/accelerated_exact",
+  "data_root": "data",
+  "normalization": {
+    "enabled": true,
+    "mode": "bbox_diagonal",
+    "target": 1.0,
+    "center": "bbox"
+  },
+  "categories": [
+    {
+      "name": "airplane",
+      "mesh_root": "data/shapenet_airplane",
+      "limit": 50,
+      "tetra": {"epsilon": 0.002, "edge_length": 0.1}
+    },
+    {
+      "name": "chair",
+      "mesh_root": "data/shapenet_chair",
+      "limit": 50,
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    },
+    {
+      "name": "table",
+      "mesh_root": "data/shapenet_table",
+      "limit": 50,
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    }
+  ],
+  "merge": {
+    "init_type": "coacd",
+    "tilted": true,
+    "merge_eps": 0.02,
+    "fast_merge": true
+  },
+  "refine": {
+    "backend": "auto",
+    "reward_backend": "manifold",
+    "bbox_init": "grd_merged",
+    "action_unit": 0.01,
+    "num_action_scale": 1,
+    "max_step": 2000,
+    "cover_penalty": 100,
+    "score_cache_size": 65536,
+    "stateful_union_cache": false,
+    "stateful_cache_capacity": 65536,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "mcts": {
+    "backend": "auto",
+    "reward_backend": "manifold",
+    "bbox_init": "bbox_direct",
+    "action_unit": 0.02,
+    "max_step": 150,
+    "cover_penalty": 100,
+    "mcts_iter": 3000,
+    "exp_w": 0.001,
+    "grdexp": true,
+    "pns": true,
+    "skip_rate": 0.9,
+    "score_cache_size": 65536,
+    "stateful_union_cache": false,
+    "stateful_cache_capacity": 65536,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "render": {
+    "backend": "blender",
+    "input_stage": "mcts",
+    "joint_mesh": false,
+    "fallback": true,
+    "transparent": true
+  }
+}

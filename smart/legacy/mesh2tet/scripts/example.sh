@@ -1,0 +1,2 @@
+../ManifoldPlus/build/manifold --input ../data/model.obj --output ../result/model_manifold.obj
+../fTetWild/build/FloatTetwild_bin --input ../result/model_manifold.obj --output ../result/tetmesh.msh -l 0.05 -e 1e-3 --level 2 --use-floodfill --manifold-surface

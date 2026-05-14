@@ -1,0 +1,1 @@
+python3 ./scripts/greedy/greedy_all.py --num_worker 8 --merge_eps 4e-3 --action_unit 1e-2 --num_action_scale 1 --max_step 2000 --cover_penalty 100 --data_path "../Mesh2Tet/final_data/real_data_e0.004_l0.2"

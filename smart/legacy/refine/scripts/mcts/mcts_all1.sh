@@ -1,0 +1,1 @@
+python3 ./scripts/mcts/mcts_all.py --num_worker 48 --action_unit 2e-2 --max_step 800 --cover_penalty 100 --action_unit 0.02 --data_path "../Mesh2Tet/final_data/shapenet_table_e0.004_l0.2" --category table --grdexp --pns --skip_rate 0.9 --bbox_init grd_merged --mcts_iter 10000
