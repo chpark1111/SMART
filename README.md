@@ -394,6 +394,17 @@ smart --config configs/smoke_5.yaml build-prior \
   --output runs/bench_exact/priors/airplane_mcts20_prior.json
 ```
 
+The default `--model-type counts` writes portable coord/scale logits. A
+state-aware linear policy is also available for RL/action-ordering experiments:
+
+```bash
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_linear_prior.json \
+  --model-type linear \
+  --epochs 80
+```
+
 The same builder is also available as a Python API:
 
 ```python
@@ -403,12 +414,20 @@ smart.build_action_prior_from_traces(
     ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
     output="runs/bench_exact/priors/airplane_mcts20_prior.json",
 )
+
+smart.build_linear_action_prior_from_traces(
+    ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
+    output="runs/bench_exact/priors/airplane_linear_prior.json",
+)
 ```
 
 New traces use schema version 2 and record category, bbox/action layout, action
 unit, BVS, volume method, and backend metadata. The count prior builder infers
 `num_action_scale` dynamically, so it can be used for larger action-scale
-experiments without hardcoded two-scale keys.
+experiments without hardcoded two-scale keys. The linear builder uses the same
+trace schema plus state features such as BVS, step fraction, action unit, box
+count, category, and cover/penalty settings; it still changes only search order,
+not the exact reward.
 
 For same-mesh/search-layout experiments, add `--include-action-logits` to write
 per-action logits, then sweep weights with:
@@ -597,12 +616,16 @@ trace-derived action-prior sweep
 shows `1.043x` to `1.055x` speedups for prior weights `0.02` to `0.1`, but all
 weights change one table case. MOV improves for that case, while BVS/TOV/vIoU
 worsen, so the generic prior remains a research/quality experiment rather than
-a default. The next useful RL step is category-specific priors trained from
-more SMART schema-v2 traces. New traces record category, bbox/action layout,
-BVS, action unit, backend, and Manifold volume method; `smart build-prior` and
-`scripts/train_action_prior_from_traces.py` now emit schema-v2 count priors with
-dynamic action-scale metadata. Learned models should guide action order or
-rollout policy, then final outputs are still judged by SMART evaluation metrics.
+a default. `smart build-prior --model-type linear` and
+`scripts/train_action_prior_from_traces.py --model-type linear` now train a
+state-aware pure-Python linear action prior from the same schema-v2 traces. The
+first tiny leave-one-out airplane check
+`runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported metric
+diffs at `0`, but measured `0.852x` versus weight 0 because the workload is too
+small for the learned prior overhead. This proves the training/runtime path is
+wired, not that it is faster. The next useful RL step is collecting larger
+category-specific traces, then replacing the linear scorer with a compact MLP or
+PUCT prior while still judging final boxes with SMART evaluation metrics.
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS

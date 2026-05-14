@@ -800,12 +800,22 @@ tables are deferred until after exact parity is locked.
      and `1.055x`, but all changed the same table case. The changed case had
      lower MOV but worse BVS/TOV/vIoU. This means the current generic smoke
      prior is not a quality upgrade yet.
+   - Added a state-aware linear action-prior trainer:
+     `smart build-prior --model-type linear`,
+     `scripts/train_action_prior_from_traces.py --model-type linear`, and
+     `smart.build_linear_action_prior_from_traces`. It uses schema-v2 trace
+     fields such as category, BVS, step fraction, action unit, box count, and
+     penalty settings. The first tiny leave-one-out airplane smoke
+     `runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported
+     metric diffs at `0`, but measured `0.852x` because the run is dominated by
+     orchestration overhead. It is a functional RL/action-ordering baseline, not
+     a promoted speed path.
 
    Next RL/MCTS step: generate more traces from the processed expanded set and
-   train category-specific priors. A global smoke prior is too blunt for table
-   cases. The prior/RL path is therefore active, but it is intentionally not
-   default until it improves quality metrics instead of merely changing the
-   search trajectory.
+   train category-specific linear and MLP priors. A global smoke prior is too
+   blunt for table cases. The prior/RL path is therefore active, but it is
+   intentionally not default until it improves quality metrics instead of merely
+   changing the search trajectory.
 
 1. Opt-in no-reward MCTS early stop
 

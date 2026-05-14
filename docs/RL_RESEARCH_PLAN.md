@@ -33,10 +33,12 @@ refinement.
 
 1. Baseline prior: the current schema-v2 count-based trace prior from
    `smart build-prior` or `scripts/train_action_prior_from_traces.py`.
-2. Category-specific priors: separate airplane/chair/table priors from traces.
-3. Category-general MLP: shared network with category embedding.
-4. Value head: predict rollout quality only for ordering, never as final reward.
-5. Optional initializer: predict coarse bbox action schedule or improved
+2. State-aware linear prior: `--model-type linear` uses category, BVS, step,
+   action-unit, box-count, and penalty features as a lightweight policy baseline.
+3. Category-specific priors: separate airplane/chair/table priors from traces.
+4. Category-general MLP: shared network with category embedding.
+5. Value head: predict rollout quality only for ordering, never as final reward.
+6. Optional initializer: predict coarse bbox action schedule or improved
    initial boxes before exact SMART refinement.
 
 ## Promotion Rules
@@ -57,11 +59,16 @@ refinement.
 
 - Trace logging exists through `trace_actions_path`.
 - `smart build-prior` and `smart.action_prior.build_action_prior_from_traces`
-  build opt-in schema-v2 priors with dynamic action-scale metadata.
+  build opt-in schema-v2 count priors with dynamic action-scale metadata.
+- `smart build-prior --model-type linear` and
+  `smart.build_linear_action_prior_from_traces` train the first state-aware
+  category-general action prior without adding a deep-learning dependency.
 - `scripts/train_action_prior_from_traces.py` is now the first explicit trainer
-  entrypoint. It currently trains the count-based baseline; the next upgrade is
-  a category-general MLP action scorer trained from schema-v2 traces.
+  entrypoint. It supports both `counts` and `linear`; the next upgrade is a
+  category-general MLP action scorer trained from larger schema-v2 traces.
 - Generic smoke prior experiments produced small speedups but changed one table
   case, so they are not default.
+- The first tiny linear-prior leave-one-out check kept reported metric diffs at
+  `0` but was slower on MCTS2, so the path is functional but not promoted.
 - The next research step is category-specific trace collection followed by a
-  category-general policy that only changes action ordering.
+  stronger category-general policy that only changes action ordering.

@@ -21,6 +21,11 @@ try:
 except ImportError:
     smart_rust = None
 
+try:
+    from smart.action_prior import load_action_prior
+except ImportError:
+    load_action_prior = None
+
 _RUST_VECTOR_MIN = 128
 
 
@@ -158,9 +163,8 @@ class MCTSTreeSearch:
         )
         self.num_actions = self.num_bbox * (6 * self.num_action_scale + 1)
         self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
-        self.action_prior_logits = self._load_action_prior_logits(
-            str(getattr(args, "action_prior_path", "") or "")
-        )
+        self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
+        self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self._opposite_actions = self._build_opposite_actions()
         self.skip_summary_metrics = bool(getattr(args, "skip_summary_metrics", False))
 
@@ -194,35 +198,59 @@ class MCTSTreeSearch:
         print("MCTS tree initailized, Number of Bbox: %d" % (self.num_bbox))
         self._store_transposition(self.root_id)
 
-    def _load_action_prior_logits(self, path):
-        logits = np.zeros(self.num_actions, dtype=float)
+    def _load_action_prior(self, path):
         if not path or self.action_prior_weight == 0.0:
-            return logits
+            return None
         if not os.path.exists(path):
             warnings.warn("MCTS action_prior_path does not exist: %s" % path)
-            return logits
+            return None
+        if load_action_prior is not None:
+            try:
+                return load_action_prior(path)
+            except Exception as exc:
+                warnings.warn("failed to load MCTS action prior %s: %s" % (path, exc))
+                return None
         try:
             with open(path, "r", encoding="utf-8") as file:
                 payload = json.load(file)
         except Exception as exc:
             warnings.warn("failed to load MCTS action prior %s: %s" % (path, exc))
-            return logits
+            return None
+        return _LegacyActionPrior(payload)
 
-        coord_scale_logits = payload.get("coord_scale_logits", payload.get("priors", {}))
-        action_logits = payload.get("action_logits", {})
-        default_logit = float(payload.get("default_logit", 0.0))
-        per_bbox = 6 * self.num_action_scale + 1
-        for action in range(self.num_actions):
-            local = action % per_bbox
-            if str(action) in action_logits:
-                logits[action] = float(action_logits[str(action)])
-                continue
-            if local == per_bbox - 1:
-                key = "6:0"
-            else:
-                key = "%d:%d" % (local // self.num_action_scale, local % self.num_action_scale)
-            logits[action] = float(coord_scale_logits.get(key, default_logit))
-        return logits
+    def _prior_context(self):
+        if hasattr(self.env, "action_prior_context"):
+            try:
+                return self.env.action_prior_context()
+            except Exception:
+                pass
+        return {
+            "category": str(getattr(self.args, "category", "")),
+            "step": int(getattr(self.env, "step_cnt", 0)),
+            "max_step": int(getattr(self.args, "max_step", 0)),
+            "num_bbox": int(self.num_bbox),
+            "num_action_scale": int(self.num_action_scale),
+            "action_unit": float(getattr(self.args, "action_unit", 0.0)),
+            "cover_penalty": float(getattr(self.args, "cover_penalty", 100.0)),
+            "pen_rate": float(getattr(self.env, "pen_rate", 1.0)),
+        }
+
+    def _action_prior_logits_for(self, actions):
+        actions = [int(action) for action in actions]
+        if self.action_prior_weight == 0.0 or self.action_prior is None:
+            return np.zeros(len(actions), dtype=float)
+        try:
+            return np.array(
+                self.action_prior.action_logits_for(
+                    actions,
+                    num_action_scale=self.num_action_scale,
+                    context=self._prior_context(),
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            warnings.warn("failed to evaluate MCTS action prior: %s" % exc)
+            return np.zeros(len(actions), dtype=float)
 
     def _state_key(self):
         if hasattr(self.env, "_state_cache_key"):
@@ -318,15 +346,15 @@ class MCTSTreeSearch:
             try:
                 values = [
                     float(self.exp_action_reward[int(action)] * scale)
-                    + self.action_prior_weight * float(self.action_prior_logits[int(action)])
-                    for action in actions
+                    + self.action_prior_weight * float(prior_logit)
+                    for action, prior_logit in zip(actions, self._action_prior_logits_for(actions))
                 ]
                 return np.array(smart_rust.softmax_scaled(values, 1.0), dtype=float)
             except Exception:
                 pass
         x = self.exp_action_reward[actions] * scale
         if self.action_prior_weight != 0.0:
-            x = x + self.action_prior_weight * self.action_prior_logits[actions]
+            x = x + self.action_prior_weight * self._action_prior_logits_for(actions)
         x = x - np.max(x)
         exp_x = np.exp(x)
         total = exp_x.sum()
@@ -626,6 +654,33 @@ class MCTSTreeSearch:
         action_mask = np.ones(self.num_actions, dtype=bool)
         action_mask[int(action)] = 0
         return action_mask
+
+
+class _LegacyActionPrior:
+    def __init__(self, payload):
+        self.coord_scale_logits = payload.get("coord_scale_logits", payload.get("priors", {}))
+        self.action_logits = {
+            int(key): float(value)
+            for key, value in payload.get("action_logits", {}).items()
+        }
+        self.default_logit = float(payload.get("default_logit", 0.0))
+
+    def action_logits_for(self, actions, *, num_action_scale, context=None):
+        del context
+        per_bbox = 6 * int(num_action_scale) + 1
+        out = []
+        for action in actions:
+            action = int(action)
+            if action in self.action_logits:
+                out.append(self.action_logits[action])
+                continue
+            local = action % per_bbox
+            if local == per_bbox - 1:
+                key = "6:0"
+            else:
+                key = "%d:%d" % (local // int(num_action_scale), local % int(num_action_scale))
+            out.append(float(self.coord_scale_logits.get(key, self.default_logit)))
+        return out
 
 
 def _using_rust_backend():

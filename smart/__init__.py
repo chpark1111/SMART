@@ -7,9 +7,11 @@ import sys
 __all__ = [
     "__version__",
     "build_action_prior_from_traces",
+    "build_linear_action_prior_from_traces",
     "check_data",
     "doctor",
     "evaluate",
+    "load_action_prior",
     "load",
     "run_pipeline",
     "workspace",
@@ -18,9 +20,11 @@ __all__ = [
 __version__ = "0.1.0"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
+    "build_linear_action_prior_from_traces",
     "check_data",
     "doctor",
     "evaluate",
+    "load_action_prior",
     "load",
     "run_pipeline",
     "workspace",
@@ -33,6 +37,16 @@ def __getattr__(name: str):
 
         globals()[name] = build_action_prior_from_traces
         return build_action_prior_from_traces
+    if name == "build_linear_action_prior_from_traces":
+        from .action_prior import build_linear_action_prior_from_traces
+
+        globals()[name] = build_linear_action_prior_from_traces
+        return build_linear_action_prior_from_traces
+    if name == "load_action_prior":
+        from .action_prior import load_action_prior
+
+        globals()[name] = load_action_prior
+        return load_action_prior
     if name in _API_EXPORTS:
         from . import api
 

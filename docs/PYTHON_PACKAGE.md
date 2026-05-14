@@ -210,6 +210,16 @@ smart --config configs/smoke_5.yaml build-prior \
   --output runs/bench_exact/priors/airplane_mcts20_prior.json
 ```
 
+For a state-aware linear action-prior experiment, add:
+
+```bash
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_linear_prior.json \
+  --model-type linear \
+  --epochs 80
+```
+
 The same function is available from Python:
 
 ```python
@@ -218,6 +228,11 @@ import smart
 prior = smart.build_action_prior_from_traces(
     ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
     output="runs/bench_exact/priors/airplane_mcts20_prior.json",
+)
+
+linear_prior = smart.build_linear_action_prior_from_traces(
+    ["runs/bench_exact/traces/airplane_mcts20_trace.jsonl"],
+    output="runs/bench_exact/priors/airplane_linear_prior.json",
 )
 ```
 
@@ -330,6 +345,8 @@ Useful public functions:
 - `smart.check_data(config, overrides=None)`: summarize configured mesh data.
 - `smart.workspace(config, *parts, overrides=None)`: resolve paths under the configured run workspace.
 - `smart.build_action_prior_from_traces(traces, output=..., min_reward=0.0, smoothing=1.0, reward_power=1.0, include_action_logits=False)`: build an opt-in trace-derived MCTS action-prior JSON.
+- `smart.build_linear_action_prior_from_traces(traces, output=..., epochs=200, learning_rate=0.05)`: train a state-aware linear action-ordering prior from schema-v2 traces.
+- `smart.load_action_prior(path)`: load count or linear prior JSON for inspection or direct scoring.
 
 Each call returns plain Python dictionaries or paths, so the package can be used
 inside scripts, notebooks, batch runners, or CI.

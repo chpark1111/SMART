@@ -208,9 +208,14 @@ Not promoted to default:
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit
-  schema-v2 count priors with dynamic `num_action_scale` metadata. This is the
-  first concrete data layer for a category-general policy; it still guides action
-  order only and does not replace final SMART evaluation.
+  schema-v2 count priors with dynamic `num_action_scale` metadata.
+- A state-aware linear prior is now wired through
+  `smart build-prior --model-type linear`,
+  `scripts/train_action_prior_from_traces.py --model-type linear`, and
+  `smart.build_linear_action_prior_from_traces`. The tiny leave-one-out airplane
+  smoke `runs/bench_exact/action_prior_linear_airplane2_mcts2.json` kept reported
+  metric diffs at `0`, but measured `0.852x` versus the weight-0 baseline because
+  the run is too small. This is an active RL/action-ordering path, not a default.
 
 ## Next Work
 
@@ -220,9 +225,10 @@ Not promoted to default:
    `stateful_union_cache=true` can become the recommended exact accelerator.
 3. Rework Rust MCTS runner so it preserves the legacy tree trajectory before
    using it in exact profiles.
-4. Train category-specific or leave-one-out action priors from schema-v2 traces.
-   Research profiles may change search order, but promotion requires aggregate
-   quality to stay equal or improve under final exact SMART evaluation.
+4. Collect larger category-specific traces, then compare count, linear, and MLP
+   action priors as MCTS ordering policies. Research profiles may change search
+   order, but promotion requires aggregate quality to stay equal or improve under
+   final SMART evaluation.
 5. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
    keep faster/learned search profiles behind explicit research flags.
 6. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in

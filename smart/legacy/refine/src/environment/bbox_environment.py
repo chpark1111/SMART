@@ -1620,7 +1620,7 @@ class MeshBBoxEnv:
             "last_bbox_score": float(self.last_bbox_score),
             "bvs": float(
                 sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
-                / self.volume_sum
+                / max(float(self.volume_sum), 1e-12)
             ),
             "volume_sum": float(self.volume_sum),
             "cover_penalty": float(self.args.cover_penalty),
@@ -1629,6 +1629,27 @@ class MeshBBoxEnv:
         }
         with open(trace_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def action_prior_context(self):
+        return {
+            "category": str(getattr(self.args, "category", "")),
+            "mesh": self.name,
+            "step": int(self.step_cnt),
+            "max_step": int(getattr(self.args, "max_step", 0)),
+            "num_bbox": int(self.num_bbox),
+            "num_action_scale": int(self.num_action_scale),
+            "actions_per_bbox": int(self._actions_per_bbox),
+            "action_unit": float(self.action_unit),
+            "bvs": float(
+                sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
+                / self.volume_sum
+            ),
+            "volume_sum": float(self.volume_sum),
+            "cover_penalty": float(self.args.cover_penalty),
+            "pen_rate": float(self.pen_rate),
+            "reward_backend": self.reward_backend,
+            "manifold_volume_method": self.manifold_volume_method,
+        }
 
     def refine_bbox(self, action, revert=False) -> None:
         i, j, k = self._decode_action(action)

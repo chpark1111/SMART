@@ -37,6 +37,8 @@ def main() -> int:
     parser.add_argument("--reward-backend", default="manifold_stateful")
     parser.add_argument("--mcts-backend", default="rust_stateful")
     parser.add_argument("--weights", default="0,0.5,1.0")
+    parser.add_argument("--prior-model", choices=["counts", "linear"], default="counts")
+    parser.add_argument("--linear-epochs", type=int, default=100)
     parser.add_argument("--transposition-table", action="store_true")
     parser.add_argument("--transposition-table-size", type=int, default=8192)
     parser.add_argument(
@@ -81,6 +83,7 @@ def main() -> int:
         "reward_backend": args.reward_backend,
         "mcts_backend": args.mcts_backend,
         "weights": weights,
+        "prior_model": args.prior_model,
         "transposition_table": args.transposition_table,
         "transposition_table_size": args.transposition_table_size,
         "include_action_logits": args.include_action_logits,
@@ -121,6 +124,7 @@ def main() -> int:
 
         prior_path = trace_dir / f"{key}.loo_prior.json"
         target_record["prior_build"] = _build_prior(
+            args,
             train_traces,
             prior_path,
             include_action_logits=args.include_action_logits,
@@ -155,6 +159,7 @@ def main() -> int:
     if args.global_prior_output:
         global_prior_path = Path(args.global_prior_output)
         results["global_prior"] = _build_prior(
+            args,
             list(trace_paths.values()),
             global_prior_path,
             include_action_logits=args.include_action_logits,
@@ -350,21 +355,35 @@ def _target_key(target: dict[str, str]) -> str:
 
 
 def _build_prior(
+    args: argparse.Namespace,
     traces: list[Path],
     output: Path,
     *,
     include_action_logits: bool,
 ) -> dict[str, Any]:
-    command = [
-        sys.executable,
-        "scripts/build_action_prior_from_traces.py",
-        *[str(path) for path in traces],
-        "--output",
-        str(output),
-        "--min-reward",
-        "0.0",
-    ]
-    if include_action_logits:
+    if args.prior_model == "linear":
+        command = [
+            sys.executable,
+            "scripts/train_action_prior_from_traces.py",
+            *[str(path) for path in traces],
+            "--output",
+            str(output),
+            "--model-type",
+            "linear",
+            "--epochs",
+            str(args.linear_epochs),
+        ]
+    else:
+        command = [
+            sys.executable,
+            "scripts/build_action_prior_from_traces.py",
+            *[str(path) for path in traces],
+            "--output",
+            str(output),
+            "--min-reward",
+            "0.0",
+        ]
+    if include_action_logits and args.prior_model == "counts":
         command.append("--include-action-logits")
     started = time.perf_counter()
     completed = subprocess.run(command, text=True, capture_output=True, check=False)

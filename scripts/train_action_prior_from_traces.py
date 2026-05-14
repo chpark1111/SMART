@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from smart.action_prior import build_action_prior_from_traces
+from smart.action_prior import build_action_prior_from_traces, build_linear_action_prior_from_traces
 
 
 def main() -> int:
@@ -22,9 +22,9 @@ def main() -> int:
     parser.add_argument("--output", required=True, help="output prior JSON path")
     parser.add_argument(
         "--model-type",
-        choices=["counts"],
+        choices=["counts", "linear"],
         default="counts",
-        help="Policy family. counts is the current exact-reward-safe baseline.",
+        help="Policy family. linear is a lightweight state-aware coord/scale scorer.",
     )
     parser.add_argument(
         "--alpha",
@@ -48,17 +48,33 @@ def main() -> int:
         action="store_true",
         help="Also include per-action logits for same-layout experiments.",
     )
+    parser.add_argument("--epochs", type=int, default=200, help="linear policy training epochs")
+    parser.add_argument("--learning-rate", type=float, default=0.05, help="linear policy learning rate")
+    parser.add_argument("--l2", type=float, default=1e-4, help="linear policy L2 regularization")
     args = parser.parse_args()
 
-    payload = build_action_prior_from_traces(
-        args.traces,
-        output=args.output,
-        min_reward=0.0,
-        smoothing=args.alpha,
-        reward_power=1.0 if args.reward_weighted else 0.0,
-        include_action_logits=args.include_action_logits,
-        num_action_scale=args.num_action_scale or None,
-    )
+    if args.model_type == "linear":
+        payload = build_linear_action_prior_from_traces(
+            args.traces,
+            output=args.output,
+            min_reward=0.0,
+            smoothing=args.alpha,
+            reward_power=1.0 if args.reward_weighted else 0.0,
+            num_action_scale=args.num_action_scale or None,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            l2=args.l2,
+        )
+    else:
+        payload = build_action_prior_from_traces(
+            args.traces,
+            output=args.output,
+            min_reward=0.0,
+            smoothing=args.alpha,
+            reward_power=1.0 if args.reward_weighted else 0.0,
+            include_action_logits=args.include_action_logits,
+            num_action_scale=args.num_action_scale or None,
+        )
     payload["metadata"]["trainer"] = "scripts/train_action_prior_from_traces.py"
     payload["metadata"]["model_type"] = args.model_type
     payload["metadata"]["reward_weighted"] = bool(args.reward_weighted)

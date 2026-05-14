@@ -72,11 +72,20 @@ def main(argv: list[str] | None = None) -> int:
     prior = sub.add_parser("build-prior", help="Build an opt-in MCTS action-prior JSON from trace files")
     prior.add_argument("traces", nargs="+", help="Trace JSONL file(s) from mcts.trace_actions_path")
     prior.add_argument("--output", required=True, help="Path to write the prior JSON")
+    prior.add_argument(
+        "--model-type",
+        choices=["counts", "linear"],
+        default="counts",
+        help="Prior model to train: portable count logits or state-aware linear logits",
+    )
     prior.add_argument("--min-reward", type=float, default=0.0, help="Only actions at or above this reward contribute")
     prior.add_argument("--smoothing", type=float, default=1.0, help="Additive count smoothing")
     prior.add_argument("--reward-power", type=float, default=1.0, help="Exponent applied to positive rewards")
     prior.add_argument("--include-action-logits", action="store_true", help="Also write per-action logits for same-layout experiments")
     prior.add_argument("--num-action-scale", type=int, default=0, help="Override coord/scale key count; default infers from traces")
+    prior.add_argument("--epochs", type=int, default=80, help="Training epochs for --model-type linear")
+    prior.add_argument("--learning-rate", type=float, default=0.05, help="Learning rate for --model-type linear")
+    prior.add_argument("--l2", type=float, default=1.0e-4, help="L2 regularization for --model-type linear")
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -174,17 +183,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "build-prior":
-        from .action_prior import build_action_prior_from_traces
+        if args.model_type == "linear":
+            from .action_prior import build_linear_action_prior_from_traces
 
-        prior_payload = build_action_prior_from_traces(
-            args.traces,
-            output=args.output,
-            min_reward=args.min_reward,
-            smoothing=args.smoothing,
-            reward_power=args.reward_power,
-            include_action_logits=args.include_action_logits,
-            num_action_scale=args.num_action_scale or None,
-        )
+            prior_payload = build_linear_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                reward_power=args.reward_power,
+                num_action_scale=args.num_action_scale or None,
+                epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                l2=args.l2,
+            )
+        else:
+            from .action_prior import build_action_prior_from_traces
+
+            prior_payload = build_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                reward_power=args.reward_power,
+                include_action_logits=args.include_action_logits,
+                num_action_scale=args.num_action_scale or None,
+            )
         payload = prior_payload if args.json else prior_payload["metadata"]
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
