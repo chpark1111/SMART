@@ -1,8 +1,9 @@
 # SMART RL Research Plan
 
-This plan keeps SMART's exact geometric reward as the evaluator. Learned models
-should guide initialization, candidate ordering, or MCTS priors, not replace the
-coverage/tightness objective.
+This plan keeps SMART's final geometric evaluation as the arbiter. Learned
+models may change search order in research profiles, but they should guide
+initialization, candidate ordering, or MCTS priors rather than silently replacing
+the coverage/tightness objective.
 
 ## Main Direction
 
@@ -21,15 +22,17 @@ refinement.
 
 1. Run the exact or stateful exact pipeline with `trace_actions_path` enabled.
 2. Collect traces across airplane/chair/table and later more ShapeNet classes.
-3. Store successful actions, rejected/fallback actions, reward deltas, bbox
-   state summaries, and final evaluation metrics.
+3. Store successful actions, reward deltas, bbox/action layout, backend, action
+   unit, BVS, and final evaluation metrics. Trace schema v2 already records
+   these accepted-action fields; rejected/fallback candidates are the next
+   dataset expansion.
 4. Split by mesh id, not action rows, so validation tests category
    generalization.
 
 ## Training Stages
 
-1. Baseline prior: the current count-based trace prior from
-   `smart build-prior`.
+1. Baseline prior: the current schema-v2 count-based trace prior from
+   `smart build-prior` or `scripts/train_action_prior_from_traces.py`.
 2. Category-specific priors: separate airplane/chair/table priors from traces.
 3. Category-general MLP: shared network with category embedding.
 4. Value head: predict rollout quality only for ordering, never as final reward.
@@ -38,7 +41,9 @@ refinement.
 
 ## Promotion Rules
 
-- Exact reward remains active in every run.
+- Paper reproduction profile keeps the exact legacy `manifold` defaults.
+- Research profiles may use learned priors or changed search order only when
+  `allow_search_order_changes=true`.
 - Report speed and quality separately.
 - Reject a model if it improves MOV but worsens BVS/TOV/vIoU on aggregate.
 - Keep learned priors behind `allow_search_order_changes=true` until a
@@ -52,7 +57,10 @@ refinement.
 
 - Trace logging exists through `trace_actions_path`.
 - `smart build-prior` and `smart.action_prior.build_action_prior_from_traces`
-  build opt-in priors.
+  build opt-in schema-v2 priors with dynamic action-scale metadata.
+- `scripts/train_action_prior_from_traces.py` is now the first explicit trainer
+  entrypoint. It currently trains the count-based baseline; the next upgrade is
+  a category-general MLP action scorer trained from schema-v2 traces.
 - Generic smoke prior experiments produced small speedups but changed one table
   case, so they are not default.
 - The next research step is category-specific trace collection followed by a

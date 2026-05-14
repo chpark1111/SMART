@@ -214,13 +214,13 @@ def _run_mcts(
         command.extend(["--set", f"mcts.action_prior_path={prior_path}"])
     if trace_path is not None:
         command.extend(["--set", f"mcts.trace_actions_path={trace_path}"])
+    if args.mcts_backend in {"rust", "rust_stateful"} or weight != 0.0:
+        command.extend(["--set", "mcts.allow_search_order_changes=true"])
     if args.transposition_table:
         command.extend(
             [
                 "--set",
                 "mcts.transposition_table=true",
-                "--set",
-                "mcts.allow_search_order_changes=true",
                 "--set",
                 f"mcts.transposition_table_size={args.transposition_table_size}",
             ]

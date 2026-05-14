@@ -36,6 +36,7 @@ struct SmartManifoldState {
   double volume_sum = 1.0;
   double last_bbox_score = 0.0;
   bool stateful_union_cache = true;
+  bool use_properties_volume = false;
   std::size_t cache_capacity = 65536;
   std::unordered_map<std::uint64_t, double> reward_cache;
   std::vector<SmartManifoldSnapshot> history;
@@ -85,6 +86,20 @@ double signed_mesh_volume(const manifold::Mesh& mesh) {
     total += cross.x * f1.x / 6.0;
   }
   return total;
+}
+
+double mesh_output_volume(const manifold::Manifold& manifold) {
+  return signed_mesh_volume(manifold.GetMesh());
+}
+
+double properties_volume(const manifold::Manifold& manifold) {
+  return manifold.GetProperties().volume;
+}
+
+double selected_volume(const manifold::Manifold& manifold,
+                       bool use_properties_volume) {
+  return use_properties_volume ? properties_volume(manifold)
+                               : mesh_output_volume(manifold);
 }
 
 bool bbox_is_valid(const double* bounds) {
@@ -243,12 +258,12 @@ manifold::Manifold union_ordered_boxes(
   return merged;
 }
 
-double residual_volume_for_box_set(
+manifold::Manifold residual_manifold_for_box_set(
     const manifold::Manifold& surface,
     const std::vector<manifold::Manifold>& current_boxes,
     const std::vector<std::uint8_t>& current_valid,
     const manifold::Manifold* candidate_box, bool candidate_valid,
-    std::size_t candidate_idx, double empty_residual) {
+    std::size_t candidate_idx) {
   std::vector<manifold::Manifold> boxes;
   boxes.reserve(current_boxes.size());
 
@@ -258,11 +273,52 @@ double residual_volume_for_box_set(
   }
 
   if (boxes.empty()) {
-    return empty_residual;
+    return surface;
   }
   const manifold::Manifold merged = union_ordered_boxes(boxes);
-  const manifold::Manifold residual = surface - merged;
-  return signed_mesh_volume(residual.GetMesh());
+  return surface - merged;
+}
+
+double residual_volume_for_box_set(
+    const manifold::Manifold& surface,
+    const std::vector<manifold::Manifold>& current_boxes,
+    const std::vector<std::uint8_t>& current_valid,
+    const manifold::Manifold* candidate_box, bool candidate_valid,
+    std::size_t candidate_idx, double empty_residual,
+    bool use_properties_volume) {
+  bool has_box = false;
+  for (std::size_t i = 0; i < current_boxes.size(); ++i) {
+    if (i == candidate_idx) {
+      has_box = candidate_valid;
+    } else if (i < current_valid.size()) {
+      has_box = current_valid[i] != 0;
+    }
+    if (has_box) {
+      break;
+    }
+  }
+  if (!has_box) {
+    return empty_residual;
+  }
+  const manifold::Manifold residual = residual_manifold_for_box_set(
+      surface, current_boxes, current_valid, candidate_box, candidate_valid,
+      candidate_idx);
+  return selected_volume(residual, use_properties_volume);
+}
+
+manifold::Manifold residual_manifold_for_box_vertices(
+    const manifold::Manifold& surface, const float* box_vertices,
+    std::size_t n_boxes) {
+  if (n_boxes == 0) {
+    return surface;
+  }
+  std::vector<manifold::Manifold> boxes;
+  boxes.reserve(n_boxes);
+  for (std::size_t i = 0; i < n_boxes; ++i) {
+    boxes.push_back(box_from_vertices(box_vertices + i * 8 * 3));
+  }
+  const manifold::Manifold merged = union_ordered_boxes(boxes);
+  return surface - merged;
 }
 
 void state_clear_caches(SmartManifoldState* state) {
@@ -303,7 +359,8 @@ double state_current_residual(SmartManifoldState* state) {
   }
   const double residual = residual_volume_for_box_set(
       state->surface, state->boxes, state->valid, nullptr, false,
-      std::numeric_limits<std::size_t>::max(), state->volume_sum);
+      std::numeric_limits<std::size_t>::max(), state->volume_sum,
+      state->use_properties_volume);
   if (state->stateful_union_cache) {
     state->residual_cache = residual;
     state->residual_cache_valid = true;
@@ -362,7 +419,8 @@ double state_residual_for_candidate(SmartManifoldState* state,
   if (!state->stateful_union_cache) {
     return residual_volume_for_box_set(
         state->surface, state->boxes, state->valid, candidate_box,
-        candidate_valid, candidate_idx, state->volume_sum);
+        candidate_valid, candidate_idx, state->volume_sum,
+        state->use_properties_volume);
   }
 
   state_ensure_except_union(state, candidate_idx);
@@ -380,7 +438,7 @@ double state_residual_for_candidate(SmartManifoldState* state,
     merged = state->except_unions[candidate_idx];
   }
   const manifold::Manifold residual = state->surface - merged;
-  return signed_mesh_volume(residual.GetMesh());
+  return selected_volume(residual, state->use_properties_volume);
 }
 
 double state_score_axis_action_no_cache(SmartManifoldState* state,
@@ -539,7 +597,16 @@ extern "C" void smart_manifold_delete(void* handle) {
 extern "C" double smart_manifold_handle_volume(void* handle) {
   try {
     const auto* state = static_cast<SmartManifoldHandle*>(handle);
-    return signed_mesh_volume(state->manifold.GetMesh());
+    return mesh_output_volume(state->manifold);
+  } catch (...) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
+extern "C" double smart_manifold_handle_volume_properties(void* handle) {
+  try {
+    const auto* state = static_cast<SmartManifoldHandle*>(handle);
+    return properties_volume(state->manifold);
   } catch (...) {
     return std::numeric_limits<double>::quiet_NaN();
   }
@@ -550,18 +617,43 @@ extern "C" double smart_manifold_residual_volume_for_boxes(
   try {
     const auto* state = static_cast<SmartManifoldHandle*>(handle);
     if (n_boxes == 0) {
-      return signed_mesh_volume(state->manifold.GetMesh());
+      return mesh_output_volume(state->manifold);
     }
-    std::vector<manifold::Manifold> boxes;
-    boxes.reserve(n_boxes);
-    for (std::size_t i = 0; i < n_boxes; ++i) {
-      boxes.push_back(box_from_vertices(box_vertices + i * 8 * 3));
-    }
-    const manifold::Manifold merged = union_ordered_boxes(boxes);
-    const manifold::Manifold residual = state->manifold - merged;
-    return signed_mesh_volume(residual.GetMesh());
+    const manifold::Manifold residual =
+        residual_manifold_for_box_vertices(state->manifold, box_vertices, n_boxes);
+    return mesh_output_volume(residual);
   } catch (...) {
     return std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
+extern "C" double smart_manifold_residual_volume_for_boxes_properties(
+    void* handle, const float* box_vertices, std::size_t n_boxes) {
+  try {
+    const auto* state = static_cast<SmartManifoldHandle*>(handle);
+    if (n_boxes == 0) {
+      return properties_volume(state->manifold);
+    }
+    const manifold::Manifold residual =
+        residual_manifold_for_box_vertices(state->manifold, box_vertices, n_boxes);
+    return properties_volume(residual);
+  } catch (...) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
+extern "C" int smart_manifold_residual_volume_for_boxes_pair(
+    void* handle, const float* box_vertices, std::size_t n_boxes,
+    double* out_mesh_volume, double* out_properties_volume) {
+  try {
+    const auto* state = static_cast<SmartManifoldHandle*>(handle);
+    const manifold::Manifold residual =
+        residual_manifold_for_box_vertices(state->manifold, box_vertices, n_boxes);
+    *out_mesh_volume = mesh_output_volume(residual);
+    *out_properties_volume = properties_volume(residual);
+    return 1;
+  } catch (...) {
+    return 0;
   }
 }
 
@@ -571,7 +663,7 @@ extern "C" int smart_manifold_best_axis_actions_for_mask(
     std::size_t num_action_scale, double action_unit, double volume_sum,
     double last_bbox_score, double cover_penalty, double pen_rate,
     double initial_best, const double* action_scales, std::intptr_t* out_actions,
-    double* out_rewards) {
+    double* out_rewards, int volume_method) {
   try {
     const auto* state = static_cast<SmartManifoldHandle*>(handle);
     const std::size_t actions_per_bbox = 6 * num_action_scale + 1;
@@ -633,7 +725,7 @@ extern "C" int smart_manifold_best_axis_actions_for_mask(
           const double residual = residual_volume_for_box_set(
               state->manifold, current_boxes, current_valid,
               candidate_valid ? &candidate_manifold : nullptr, candidate_valid,
-              idx, volume_sum);
+              idx, volume_sum, volume_method != 0);
           const double covered = 1.0 - residual / volume_sum;
           const double score =
               -std::abs(bvs - 1.0) - (1.0 - covered) * pen_rate * cover_penalty;
@@ -659,7 +751,7 @@ extern "C" void* smart_manifold_state_new(
     const float* vertices, std::size_t n_vertices, const std::uint32_t* faces,
     std::size_t n_faces, const double* bounds, const double* rotations,
     std::size_t n_boxes, double volume_sum, double last_bbox_score,
-    int stateful_union_cache, std::size_t cache_capacity) {
+    int stateful_union_cache, std::size_t cache_capacity, int volume_method) {
   try {
     if (volume_sum <= 0.0) {
       return nullptr;
@@ -672,6 +764,7 @@ extern "C" void* smart_manifold_state_new(
     state->volume_sum = volume_sum;
     state->last_bbox_score = last_bbox_score;
     state->stateful_union_cache = stateful_union_cache != 0;
+    state->use_properties_volume = volume_method != 0;
     state->cache_capacity = std::max<std::size_t>(1, cache_capacity);
     state_rebuild_boxes(state);
     return state;

@@ -17,11 +17,24 @@ extern "C" {
     ) -> *mut std::ffi::c_void;
     fn smart_manifold_delete(handle: *mut std::ffi::c_void);
     fn smart_manifold_handle_volume(handle: *mut std::ffi::c_void) -> f64;
+    fn smart_manifold_handle_volume_properties(handle: *mut std::ffi::c_void) -> f64;
     fn smart_manifold_residual_volume_for_boxes(
         handle: *mut std::ffi::c_void,
         box_vertices: *const f32,
         n_boxes: usize,
     ) -> f64;
+    fn smart_manifold_residual_volume_for_boxes_properties(
+        handle: *mut std::ffi::c_void,
+        box_vertices: *const f32,
+        n_boxes: usize,
+    ) -> f64;
+    fn smart_manifold_residual_volume_for_boxes_pair(
+        handle: *mut std::ffi::c_void,
+        box_vertices: *const f32,
+        n_boxes: usize,
+        out_mesh_volume: *mut f64,
+        out_properties_volume: *mut f64,
+    ) -> i32;
     fn smart_manifold_best_axis_actions_for_mask(
         handle: *mut std::ffi::c_void,
         bounds: *const f64,
@@ -38,6 +51,7 @@ extern "C" {
         action_scales: *const f64,
         out_actions: *mut isize,
         out_rewards: *mut f64,
+        volume_method: i32,
     ) -> i32;
     fn smart_manifold_state_new(
         vertices: *const f32,
@@ -51,6 +65,7 @@ extern "C" {
         last_bbox_score: f64,
         stateful_union_cache: i32,
         cache_capacity: usize,
+        volume_method: i32,
     ) -> *mut std::ffi::c_void;
     fn smart_manifold_state_delete(handle: *mut std::ffi::c_void);
     fn smart_manifold_state_reset(
@@ -303,6 +318,26 @@ impl ManifoldBridgeMesh {
         }
     }
 
+    fn volume_properties(&self) -> PyResult<f64> {
+        #[cfg(not(smart_no_manifold_bridge))]
+        {
+            let volume = unsafe { smart_manifold_handle_volume_properties(self.ptr) };
+            if volume.is_finite() {
+                Ok(volume)
+            } else {
+                Err(PyValueError::new_err(
+                    "Manifold bridge properties volume failed",
+                ))
+            }
+        }
+        #[cfg(smart_no_manifold_bridge)]
+        {
+            Err(PyValueError::new_err(
+                "Manifold C++ bridge is unavailable in this build",
+            ))
+        }
+    }
+
     fn residual_volume_for_boxes(&self, box_vertices: Vec<Vec<Vec<f64>>>) -> PyResult<f64> {
         let flat_boxes = flatten_bridge_box_vertices(&box_vertices)?;
         #[cfg(not(smart_no_manifold_bridge))]
@@ -319,6 +354,72 @@ impl ManifoldBridgeMesh {
             } else {
                 Err(PyValueError::new_err(
                     "Manifold bridge residual volume evaluation failed",
+                ))
+            }
+        }
+        #[cfg(smart_no_manifold_bridge)]
+        {
+            let _ = flat_boxes;
+            Err(PyValueError::new_err(
+                "Manifold C++ bridge is unavailable in this build",
+            ))
+        }
+    }
+
+    fn residual_volume_for_boxes_properties(
+        &self,
+        box_vertices: Vec<Vec<Vec<f64>>>,
+    ) -> PyResult<f64> {
+        let flat_boxes = flatten_bridge_box_vertices(&box_vertices)?;
+        #[cfg(not(smart_no_manifold_bridge))]
+        {
+            let residual = unsafe {
+                smart_manifold_residual_volume_for_boxes_properties(
+                    self.ptr,
+                    flat_boxes.as_ptr(),
+                    box_vertices.len(),
+                )
+            };
+            if residual.is_finite() {
+                Ok(residual)
+            } else {
+                Err(PyValueError::new_err(
+                    "Manifold bridge properties residual volume evaluation failed",
+                ))
+            }
+        }
+        #[cfg(smart_no_manifold_bridge)]
+        {
+            let _ = flat_boxes;
+            Err(PyValueError::new_err(
+                "Manifold C++ bridge is unavailable in this build",
+            ))
+        }
+    }
+
+    fn residual_volume_for_boxes_pair(
+        &self,
+        box_vertices: Vec<Vec<Vec<f64>>>,
+    ) -> PyResult<(f64, f64)> {
+        let flat_boxes = flatten_bridge_box_vertices(&box_vertices)?;
+        #[cfg(not(smart_no_manifold_bridge))]
+        {
+            let mut mesh_volume = 0.0_f64;
+            let mut properties_volume = 0.0_f64;
+            let ok = unsafe {
+                smart_manifold_residual_volume_for_boxes_pair(
+                    self.ptr,
+                    flat_boxes.as_ptr(),
+                    box_vertices.len(),
+                    &mut mesh_volume,
+                    &mut properties_volume,
+                )
+            };
+            if ok == 1 && mesh_volume.is_finite() && properties_volume.is_finite() {
+                Ok((mesh_volume, properties_volume))
+            } else {
+                Err(PyValueError::new_err(
+                    "Manifold bridge residual volume pair evaluation failed",
                 ))
             }
         }
@@ -363,6 +464,75 @@ impl ManifoldBridgeMesh {
         }
     }
 
+    fn residual_volume_for_box_params_properties(
+        &self,
+        bounds: Vec<Vec<f64>>,
+        rotations: Vec<Vec<f64>>,
+    ) -> PyResult<f64> {
+        let flat_boxes = flatten_bridge_oriented_box_vertices(&bounds, &rotations)?;
+        #[cfg(not(smart_no_manifold_bridge))]
+        {
+            let residual = unsafe {
+                smart_manifold_residual_volume_for_boxes_properties(
+                    self.ptr,
+                    flat_boxes.as_ptr(),
+                    bounds.len(),
+                )
+            };
+            if residual.is_finite() {
+                Ok(residual)
+            } else {
+                Err(PyValueError::new_err(
+                    "Manifold bridge properties residual volume evaluation failed",
+                ))
+            }
+        }
+        #[cfg(smart_no_manifold_bridge)]
+        {
+            let _ = flat_boxes;
+            Err(PyValueError::new_err(
+                "Manifold C++ bridge is unavailable in this build",
+            ))
+        }
+    }
+
+    fn residual_volume_for_box_params_pair(
+        &self,
+        bounds: Vec<Vec<f64>>,
+        rotations: Vec<Vec<f64>>,
+    ) -> PyResult<(f64, f64)> {
+        let flat_boxes = flatten_bridge_oriented_box_vertices(&bounds, &rotations)?;
+        #[cfg(not(smart_no_manifold_bridge))]
+        {
+            let mut mesh_volume = 0.0_f64;
+            let mut properties_volume = 0.0_f64;
+            let ok = unsafe {
+                smart_manifold_residual_volume_for_boxes_pair(
+                    self.ptr,
+                    flat_boxes.as_ptr(),
+                    bounds.len(),
+                    &mut mesh_volume,
+                    &mut properties_volume,
+                )
+            };
+            if ok == 1 && mesh_volume.is_finite() && properties_volume.is_finite() {
+                Ok((mesh_volume, properties_volume))
+            } else {
+                Err(PyValueError::new_err(
+                    "Manifold bridge residual volume pair evaluation failed",
+                ))
+            }
+        }
+        #[cfg(smart_no_manifold_bridge)]
+        {
+            let _ = flat_boxes;
+            Err(PyValueError::new_err(
+                "Manifold C++ bridge is unavailable in this build",
+            ))
+        }
+    }
+
+    #[pyo3(signature = (bounds, rotations, bbox_idx, num_action_scale, action_unit, volume_sum, last_bbox_score, cover_penalty, pen_rate, initial_best, volume_method="mesh"))]
     #[allow(clippy::too_many_arguments)]
     fn best_axis_action(
         &self,
@@ -376,6 +546,7 @@ impl ManifoldBridgeMesh {
         cover_penalty: f64,
         pen_rate: f64,
         initial_best: f64,
+        volume_method: &str,
     ) -> PyResult<(isize, f64)> {
         if volume_sum <= 0.0 {
             return Err(PyValueError::new_err("volume_sum must be positive"));
@@ -383,6 +554,7 @@ impl ManifoldBridgeMesh {
         check_action_scale(num_action_scale)?;
         check_bridge_bbox_params(&bounds, &rotations)?;
         let action_scales = build_action_scales(num_action_scale)?;
+        let volume_method = parse_volume_method(volume_method)?;
         self.best_axis_action_ref(
             &bounds,
             &rotations,
@@ -395,21 +567,26 @@ impl ManifoldBridgeMesh {
             pen_rate,
             initial_best,
             &action_scales,
+            volume_method,
         )
     }
 
+    #[pyo3(signature = (bounds, rotations, volume_sum, volume_method="mesh"))]
     fn covered_for_bounds(
         &self,
         bounds: Vec<Vec<f64>>,
         rotations: Vec<Vec<f64>>,
         volume_sum: f64,
+        volume_method: &str,
     ) -> PyResult<f64> {
         if volume_sum <= 0.0 {
             return Err(PyValueError::new_err("volume_sum must be positive"));
         }
-        self.covered_for_bounds_ref(&bounds, &rotations, volume_sum)
+        let volume_method = parse_volume_method(volume_method)?;
+        self.covered_for_bounds_ref(&bounds, &rotations, volume_sum, volume_method)
     }
 
+    #[pyo3(signature = (bounds, rotations, bbox_mask, num_action_scale, action_unit, volume_sum, last_bbox_score, cover_penalty, pen_rate, initial_best, volume_method="mesh"))]
     #[allow(clippy::too_many_arguments)]
     fn best_axis_actions_for_mask(
         &self,
@@ -423,6 +600,7 @@ impl ManifoldBridgeMesh {
         cover_penalty: f64,
         pen_rate: f64,
         initial_best: f64,
+        volume_method: &str,
     ) -> PyResult<(Vec<isize>, Vec<f64>)> {
         if volume_sum <= 0.0 {
             return Err(PyValueError::new_err("volume_sum must be positive"));
@@ -435,6 +613,7 @@ impl ManifoldBridgeMesh {
             ));
         }
         let action_scales = build_action_scales(num_action_scale)?;
+        let volume_method = parse_volume_method(volume_method)?;
         self.best_axis_actions_for_mask_ref(
             &bounds,
             &rotations,
@@ -447,6 +626,7 @@ impl ManifoldBridgeMesh {
             pen_rate,
             initial_best,
             &action_scales,
+            volume_method,
         )
     }
 
@@ -474,6 +654,7 @@ impl ManifoldBridgeMesh {
         let mut rewards = Vec::new();
         let mut actions = Vec::new();
         let action_scales = build_action_scales(num_action_scale)?;
+        let volume_method = 0;
 
         for _ in 0..max_steps {
             let bvs_reward = -((bbox_total_volume_raw(&current_bounds) / volume_sum - 1.0).abs())
@@ -490,6 +671,7 @@ impl ManifoldBridgeMesh {
                 pen_rate,
                 bvs_reward,
                 &action_scales,
+                volume_method,
             )?;
             if action < 0 || reward <= 0.0 {
                 break;
@@ -533,6 +715,7 @@ impl ManifoldBridgeMesh {
         pen_rate: f64,
         initial_best: f64,
         action_scales: &[f64],
+        volume_method: i32,
     ) -> PyResult<Option<(Vec<isize>, Vec<f64>)>> {
         #[cfg(not(smart_no_manifold_bridge))]
         {
@@ -582,6 +765,7 @@ impl ManifoldBridgeMesh {
                     action_scales.as_ptr(),
                     actions.as_mut_ptr(),
                     rewards.as_mut_ptr(),
+                    volume_method,
                 )
             };
             if ok == 1 {
@@ -604,6 +788,7 @@ impl ManifoldBridgeMesh {
                 pen_rate,
                 initial_best,
                 action_scales,
+                volume_method,
             );
             Ok(None)
         }
@@ -623,6 +808,7 @@ impl ManifoldBridgeMesh {
         pen_rate: f64,
         initial_best: f64,
         action_scales: &[f64],
+        volume_method: i32,
     ) -> PyResult<(Vec<isize>, Vec<f64>)> {
         if let Some(result) = self.best_axis_actions_for_mask_cpp(
             bounds,
@@ -636,6 +822,7 @@ impl ManifoldBridgeMesh {
             pen_rate,
             initial_best,
             action_scales,
+            volume_method,
         )? {
             return Ok(result);
         }
@@ -679,7 +866,8 @@ impl ManifoldBridgeMesh {
                         candidate[idx][coord_idx] = original_value;
                         continue;
                     }
-                    let covered = self.covered_for_bounds_ref(&candidate, rotations, volume_sum)?;
+                    let covered =
+                        self.covered_for_bounds_ref(&candidate, rotations, volume_sum, volume_method)?;
                     let score = -((bvs - 1.0).abs()) - (1.0 - covered) * pen_rate * cover_penalty;
                     let reward = score - last_bbox_score;
                     if best_reward < reward {
@@ -710,6 +898,7 @@ impl ManifoldBridgeMesh {
         pen_rate: f64,
         initial_best: f64,
         action_scales: &[f64],
+        volume_method: i32,
     ) -> PyResult<(isize, f64)> {
         let bbox_mask = if bbox_idx < 0 {
             vec![true; bounds.len()]
@@ -735,6 +924,7 @@ impl ManifoldBridgeMesh {
             pen_rate,
             initial_best,
             action_scales,
+            volume_method,
         )? {
             let mut best_action = -1_isize;
             let mut best_reward = initial_best;
@@ -792,7 +982,8 @@ impl ManifoldBridgeMesh {
                         candidate[idx][coord_idx] = original_value;
                         continue;
                     }
-                    let covered = self.covered_for_bounds_ref(&candidate, rotations, volume_sum)?;
+                    let covered =
+                        self.covered_for_bounds_ref(&candidate, rotations, volume_sum, volume_method)?;
                     let score = -((bvs - 1.0).abs()) - (1.0 - covered) * pen_rate * cover_penalty;
                     let reward = score - last_bbox_score;
                     if best_reward < reward {
@@ -811,6 +1002,7 @@ impl ManifoldBridgeMesh {
         bounds: &[Vec<f64>],
         rotations: &[Vec<f64>],
         volume_sum: f64,
+        volume_method: i32,
     ) -> PyResult<f64> {
         if volume_sum <= 0.0 {
             return Err(PyValueError::new_err("volume_sum must be positive"));
@@ -830,11 +1022,19 @@ impl ManifoldBridgeMesh {
         #[cfg(not(smart_no_manifold_bridge))]
         {
             let residual = unsafe {
-                smart_manifold_residual_volume_for_boxes(
-                    self.ptr,
-                    flat_boxes.as_ptr(),
-                    valid_bounds.len(),
-                )
+                if volume_method == 0 {
+                    smart_manifold_residual_volume_for_boxes(
+                        self.ptr,
+                        flat_boxes.as_ptr(),
+                        valid_bounds.len(),
+                    )
+                } else {
+                    smart_manifold_residual_volume_for_boxes_properties(
+                        self.ptr,
+                        flat_boxes.as_ptr(),
+                        valid_bounds.len(),
+                    )
+                }
             };
             if residual.is_finite() {
                 Ok(1.0 - residual / volume_sum)
@@ -878,7 +1078,7 @@ impl Drop for ManifoldState {
 #[pymethods]
 impl ManifoldState {
     #[new]
-    #[pyo3(signature = (vertices, faces, bounds, rotations, num_action_scale, action_unit, volume_sum, last_bbox_score, stateful_union_cache=true, cache_capacity=65536))]
+    #[pyo3(signature = (vertices, faces, bounds, rotations, num_action_scale, action_unit, volume_sum, last_bbox_score, stateful_union_cache=true, cache_capacity=65536, volume_method="mesh"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         vertices: Vec<Vec<f64>>,
@@ -891,6 +1091,7 @@ impl ManifoldState {
         last_bbox_score: f64,
         stateful_union_cache: bool,
         cache_capacity: usize,
+        volume_method: &str,
     ) -> PyResult<Self> {
         if volume_sum <= 0.0 {
             return Err(PyValueError::new_err("volume_sum must be positive"));
@@ -901,6 +1102,7 @@ impl ManifoldState {
         let flat_bounds = flatten_f64_rows(&bounds, 6, "bounds")?;
         let flat_rotations = flatten_f64_rows(&rotations, 9, "rotations")?;
         let action_scales = build_action_scales(num_action_scale)?;
+        let volume_method = parse_volume_method(volume_method)?;
 
         #[cfg(not(smart_no_manifold_bridge))]
         {
@@ -917,6 +1119,7 @@ impl ManifoldState {
                     last_bbox_score,
                     i32::from(stateful_union_cache),
                     cache_capacity.max(1),
+                    volume_method,
                 )
             };
             if ptr.is_null() {
@@ -940,6 +1143,7 @@ impl ManifoldState {
                 flat_rotations,
                 stateful_union_cache,
                 cache_capacity,
+                volume_method,
             );
             Err(PyValueError::new_err(
                 "Manifold C++ bridge is unavailable in this build",
@@ -3636,6 +3840,16 @@ fn finite_or_error(value: f64, message: &str) -> PyResult<f64> {
         Ok(value)
     } else {
         Err(PyValueError::new_err(message.to_string()))
+    }
+}
+
+fn parse_volume_method(volume_method: &str) -> PyResult<i32> {
+    match volume_method {
+        "mesh" => Ok(0),
+        "properties" => Ok(1),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported Manifold volume method: {other}"
+        ))),
     }
 }
 

@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--smoothing", type=float, default=1.0, help="Additive count smoothing")
     prior.add_argument("--reward-power", type=float, default=1.0, help="Exponent applied to positive rewards")
     prior.add_argument("--include-action-logits", action="store_true", help="Also write per-action logits for same-layout experiments")
+    prior.add_argument("--num-action-scale", type=int, default=0, help="Override coord/scale key count; default infers from traces")
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -182,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             smoothing=args.smoothing,
             reward_power=args.reward_power,
             include_action_logits=args.include_action_logits,
+            num_action_scale=args.num_action_scale or None,
         )
         payload = prior_payload if args.json else prior_payload["metadata"]
         print(json.dumps(payload, indent=2, sort_keys=True))

@@ -84,6 +84,11 @@ class MeshBBoxEnv:
         self._cached_state_key = None
         self._rust_bbox_state = None
         self.reward_backend = str(getattr(args, "reward_backend", "manifold"))
+        self.manifold_volume_method = str(getattr(args, "manifold_volume_method", "mesh"))
+        if self.manifold_volume_method not in {"mesh", "properties"}:
+            raise ValueError(
+                "manifold_volume_method must be one of {'mesh', 'properties'}"
+            )
         self.tet_clipping_max_boxes = int(getattr(args, "tet_clipping_max_boxes", 12))
         self._tet_clipping_state = None
         self._manifold_bridge_mesh = None
@@ -959,6 +964,7 @@ class MeshBBoxEnv:
                 float(self.args.cover_penalty),
                 float(self.pen_rate),
                 float(max_reward),
+                self.manifold_volume_method,
             )
             if bridge_action >= 0 and max_reward < bridge_reward:
                 action = int(bridge_action)
@@ -1012,6 +1018,7 @@ class MeshBBoxEnv:
                 float(self.args.cover_penalty),
                 float(self.pen_rate),
                 -sys.float_info.max,
+                self.manifold_volume_method,
             )
         actions = [int(action) for action in actions]
         rewards = [float(reward) for reward in rewards]
@@ -1236,6 +1243,7 @@ class MeshBBoxEnv:
             box_bounds,
             box_rotations,
             float(self.volume_sum),
+            self.manifold_volume_method,
         )
         return -abs(bvs - 1) - (1 - covered) * self.pen_rate * self.args.cover_penalty
 
@@ -1593,17 +1601,31 @@ class MeshBBoxEnv:
         if parent:
             os.makedirs(parent, exist_ok=True)
         record = {
+            "schema_version": 2,
             "category": str(getattr(self.args, "category", "")),
             "mesh": self.name,
             "source": str(source),
             "reward_backend": self.reward_backend,
+            "manifold_volume_method": self.manifold_volume_method,
             "step": int(self.step_cnt),
             "action": int(action),
             "bbox_idx": int(bbox_idx),
             "coord_idx": int(coord_idx),
             "scale_idx": int(scale_idx),
+            "num_bbox": int(self.num_bbox),
+            "num_action_scale": int(self.num_action_scale),
+            "actions_per_bbox": int(self._actions_per_bbox),
+            "action_unit": float(self.action_unit),
             "reward": float(reward),
             "last_bbox_score": float(self.last_bbox_score),
+            "bvs": float(
+                sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
+                / self.volume_sum
+            ),
+            "volume_sum": float(self.volume_sum),
+            "cover_penalty": float(self.args.cover_penalty),
+            "pen_rate": float(self.pen_rate),
+            "candidate_backend": str(self.candidate_backend),
         }
         with open(trace_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(record, sort_keys=True) + "\n")
@@ -2231,6 +2253,7 @@ class MeshBBoxEnv:
                 float(self.last_bbox_score),
                 bool(getattr(self.args, "stateful_union_cache", True)),
                 int(getattr(self.args, "stateful_cache_capacity", 65536)),
+                self.manifold_volume_method,
             )
             self._manifold_stateful_key = state_key
             self._manifold_stateful_score = float(self.last_bbox_score)
@@ -2329,10 +2352,18 @@ class MeshBBoxEnv:
             return 0.0
 
         try:
-            residual_volume = self._manifold_bridge_mesh.residual_volume_for_box_params(
-                box_bounds,
-                box_rotations,
-            )
+            if self.manifold_volume_method == "properties" and hasattr(
+                self._manifold_bridge_mesh, "residual_volume_for_box_params_properties"
+            ):
+                residual_volume = self._manifold_bridge_mesh.residual_volume_for_box_params_properties(
+                    box_bounds,
+                    box_rotations,
+                )
+            else:
+                residual_volume = self._manifold_bridge_mesh.residual_volume_for_box_params(
+                    box_bounds,
+                    box_rotations,
+                )
             return 1.0 - (residual_volume / self.volume_sum)
         except AttributeError:
             pass
@@ -2346,7 +2377,14 @@ class MeshBBoxEnv:
             )
             box_vertices.append(vertices.tolist())
 
-        residual_volume = self._manifold_bridge_mesh.residual_volume_for_boxes(box_vertices)
+        if self.manifold_volume_method == "properties" and hasattr(
+            self._manifold_bridge_mesh, "residual_volume_for_boxes_properties"
+        ):
+            residual_volume = self._manifold_bridge_mesh.residual_volume_for_boxes_properties(
+                box_vertices
+            )
+        else:
+            residual_volume = self._manifold_bridge_mesh.residual_volume_for_boxes(box_vertices)
         return 1.0 - (residual_volume / self.volume_sum)
 
     def _refresh_step_vec(self):

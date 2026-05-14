@@ -73,6 +73,15 @@ def main() -> int:
             "cache changes boolean grouping and can move near-tie actions."
         ),
     )
+    parser.add_argument(
+        "--include-properties-volume",
+        action="store_true",
+        help=(
+            "Also benchmark reward_backend=manifold_stateful with "
+            "manifold_volume_method=properties. This is an opt-in research speed "
+            "probe; the default backend still uses GetMesh signed volume."
+        ),
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be >= 1")
@@ -88,8 +97,18 @@ def main() -> int:
             "name": "manifold_stateful",
             "reward_backend": "manifold_stateful",
             "control_backend": args.stateful_control_backend,
+            "volume_method": "mesh",
         },
     ]
+    if args.include_properties_volume:
+        backends.append(
+            {
+                "name": "manifold_stateful_properties",
+                "reward_backend": "manifold_stateful",
+                "control_backend": args.stateful_control_backend,
+                "volume_method": "properties",
+            }
+        )
     if args.include_bridge:
         backends.insert(
             1,
@@ -97,6 +116,7 @@ def main() -> int:
                 "name": "manifold_bridge",
                 "reward_backend": "manifold_bridge",
                 "control_backend": "auto",
+                "volume_method": "mesh",
             },
         )
 
@@ -111,6 +131,7 @@ def main() -> int:
         "metric_tolerance": args.metric_tolerance,
         "stateful_control_backend": args.stateful_control_backend,
         "stateful_union_cache": args.stateful_union_cache,
+        "include_properties_volume": args.include_properties_volume,
         "targets": {},
     }
 
@@ -187,6 +208,8 @@ def _run_stage(
                 "--set",
                 f"refine.reward_backend={backend['reward_backend']}",
                 "--set",
+                f"refine.manifold_volume_method={backend.get('volume_method', 'mesh')}",
+                "--set",
                 f"refine.backend={backend['control_backend']}",
                 "--set",
                 f"refine.exp_tag={tag}",
@@ -205,6 +228,8 @@ def _run_stage(
                 f"mcts.max_step={args.mcts_max_step}",
                 "--set",
                 f"mcts.reward_backend={backend['reward_backend']}",
+                "--set",
+                f"mcts.manifold_volume_method={backend.get('volume_method', 'mesh')}",
                 "--set",
                 f"mcts.backend={backend['control_backend']}",
                 "--set",

@@ -422,6 +422,17 @@ def get_parser() -> ArgumentParser:
         help="maximum candidate score entries cached by reward_backend=manifold_stateful",
     )
     parser.add_argument(
+        "--manifold_volume_method",
+        type=str,
+        default="mesh",
+        choices=["mesh", "properties"],
+        help=(
+            "Manifold residual volume extraction. mesh preserves the legacy "
+            "GetMesh signed-volume path; properties uses GetProperties().volume "
+            "and is an opt-in research speed path."
+        ),
+    )
+    parser.add_argument(
         "--stateful_unscored_apply",
         action="store_true",
         help=(
@@ -451,6 +462,12 @@ def get_parser() -> ArgumentParser:
         type=str,
         default="",
         help="optional JSONL path for accepted refine/MCTS action traces used by later policy/RL experiments",
+    )
+    parser.add_argument(
+        "--category",
+        type=str,
+        default="",
+        help="optional ShapeNet/category label written into action traces",
     )
     parser.add_argument(
         "--tet_clipping_max_boxes",

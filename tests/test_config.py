@@ -42,6 +42,8 @@ def test_accelerated_exact_profile_keeps_legacy_manifold_reward() -> None:
     assert cfg["run_name"] == "accelerated_exact"
     assert cfg["refine"]["reward_backend"] == "manifold"
     assert cfg["mcts"]["reward_backend"] == "manifold"
+    assert cfg["refine"]["manifold_volume_method"] == "mesh"
+    assert cfg["mcts"]["manifold_volume_method"] == "mesh"
     assert cfg["refine"]["backend"] == "auto"
     assert cfg["mcts"]["backend"] == "auto"
     assert cfg["mcts"]["allow_search_order_changes"] is False
@@ -98,6 +100,17 @@ def test_stateful_union_cache_profile_keeps_search_order_locked() -> None:
     assert cfg["refine"]["candidate_backend"] == "exact"
     assert cfg["mcts"]["candidate_backend"] == "exact"
     assert cfg["mcts"]["backend"] == "auto"
+    assert cfg["mcts"]["allow_search_order_changes"] is False
+
+
+def test_properties_volume_profile_is_opt_in() -> None:
+    cfg = load_config("configs/properties_volume_experimental.yaml")
+
+    assert cfg["run_name"] == "properties_volume_experimental"
+    assert cfg["refine"]["reward_backend"] == "manifold_stateful"
+    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
+    assert cfg["refine"]["manifold_volume_method"] == "properties"
+    assert cfg["mcts"]["manifold_volume_method"] == "properties"
     assert cfg["mcts"]["allow_search_order_changes"] is False
 
 
@@ -170,6 +183,19 @@ def test_search_order_changes_are_guarded_for_exact_compatibility(tmp_path) -> N
 
     assert record.status == "blocked"
     assert "changes search order" in record.error
+
+
+def test_action_prior_requires_search_order_opt_in(tmp_path) -> None:
+    cfg = {
+        "workspace": str(tmp_path),
+        "normalization": {"enabled": False},
+        "mcts": {"action_prior_weight": 0.1},
+    }
+
+    record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
+
+    assert record.status == "blocked"
+    assert "action_prior_weight" in record.error
 
 
 def test_rust_mcts_backend_requires_search_order_opt_in(tmp_path) -> None:

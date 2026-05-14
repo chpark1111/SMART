@@ -296,13 +296,32 @@ def test_manifold_state_matches_exact_cube_bridge_when_available() -> None:
         1.0,
         0.0,
     )
+    properties_state = sr.ManifoldState(
+        vertices,
+        faces,
+        [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+        rotations,
+        2,
+        0.1,
+        1.0,
+        0.0,
+        True,
+        1024,
+        "properties",
+    )
 
     assert state.valid_count() == 1
     assert abs(state.covered() - 1.0) < 1e-12
+    assert abs(properties_state.covered() - state.covered()) < 1e-12
     assert abs(state.score(cover_penalty=100.0, pen_rate=1.0)) < 1e-12
+    assert (
+        abs(properties_state.score(cover_penalty=100.0, pen_rate=1.0) - state.score(100.0, 1.0))
+        < 1e-12
+    )
     stats0 = state.cache_stats()
     assert stats0["reward_cache_size"] == 0
     assert abs(state.score_axis_action(0, 100.0, 1.0) + 0.1) < 1e-12
+    assert abs(properties_state.score_axis_action(0, 100.0, 1.0) - state.score_axis_action(0, 100.0, 1.0)) < 1e-12
     stats1 = state.cache_stats()
     assert stats1["reward_cache_misses"] == stats0["reward_cache_misses"] + 1
     assert abs(state.score_axis_action(0, 100.0, 1.0) + 0.1) < 1e-12
@@ -329,6 +348,18 @@ def test_manifold_state_matches_exact_cube_bridge_when_available() -> None:
     assert no_union_stats["reward_cache_misses"] == 1
     assert no_union_stats["except_union_builds"] == 0
     assert no_union_stats["except_union_cache_hits"] == 0
+
+    bridge = sr.ManifoldBridgeMesh(vertices, faces)
+    assert abs(bridge.covered_for_bounds(
+        [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+        rotations,
+        1.0,
+        "properties",
+    ) - bridge.covered_for_bounds(
+        [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+        rotations,
+        1.0,
+    )) < 1e-12
 
     replacement_score = state.score_replacement(
         0,
@@ -583,8 +614,14 @@ def test_optional_manifold_cpp_bridge_cube_volume() -> None:
     mesh = sr.ManifoldBridgeMesh(vertices, faces)
     half_box = [[x, y, z] for x in [0.0, 0.5] for y in [0.0, 1.0] for z in [0.0, 1.0]]
     assert abs(mesh.volume() - 1.0) < 1e-6
+    assert abs(mesh.volume_properties() - mesh.volume()) < 1e-6
     assert abs(mesh.residual_volume_for_boxes([]) - 1.0) < 1e-6
+    assert abs(mesh.residual_volume_for_boxes_properties([]) - 1.0) < 1e-6
     assert abs(mesh.residual_volume_for_boxes([half_box]) - 0.5) < 1e-6
+    assert abs(mesh.residual_volume_for_boxes_properties([half_box]) - 0.5) < 1e-6
+    mesh_volume, properties_volume = mesh.residual_volume_for_boxes_pair([half_box])
+    assert abs(mesh_volume - 0.5) < 1e-6
+    assert abs(properties_volume - 0.5) < 1e-6
     assert (
         abs(
             mesh.residual_volume_for_box_params(
@@ -592,6 +629,25 @@ def test_optional_manifold_cpp_bridge_cube_volume() -> None:
                 [[1, 0, 0, 0, 1, 0, 0, 0, 1]],
             )
             - 0.5
+        )
+        < 1e-6
+    )
+    mesh_volume, properties_volume = mesh.residual_volume_for_box_params_pair(
+        [[0, 0, 0, 0.5, 1, 1]],
+        [[1, 0, 0, 0, 1, 0, 0, 0, 1]],
+    )
+    assert abs(mesh_volume - 0.5) < 1e-6
+    assert abs(properties_volume - 0.5) < 1e-6
+    assert (
+        abs(
+            mesh.residual_volume_for_box_params_properties(
+                [[0, 0, 0, 0.5, 1, 1]],
+                [[1, 0, 0, 0, 1, 0, 0, 0, 1]],
+            )
+            - mesh.residual_volume_for_box_params(
+                [[0, 0, 0, 0.5, 1, 1]],
+                [[1, 0, 0, 0, 1, 0, 0, 0, 1]],
+            )
         )
         < 1e-6
     )

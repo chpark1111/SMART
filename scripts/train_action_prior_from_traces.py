@@ -2,21 +2,30 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-from collections import defaultdict
+import sys
+
 from pathlib import Path
-from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from smart.action_prior import build_action_prior_from_traces
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Build an opt-in SMART MCTS action prior from accepted action traces. "
-            "The output guides action sampling only; exact reward stays unchanged."
+            "Train the first opt-in SMART action prior from accepted action traces. "
+            "This trainer currently emits the count-based category-general baseline; "
+            "exact SMART reward remains the evaluator at inference time."
         )
     )
     parser.add_argument("traces", nargs="+", help="JSONL trace files from --trace_actions_path")
     parser.add_argument("--output", required=True, help="output prior JSON path")
+    parser.add_argument(
+        "--model-type",
+        choices=["counts"],
+        default="counts",
+        help="Policy family. counts is the current exact-reward-safe baseline.",
+    )
     parser.add_argument(
         "--alpha",
         type=float,
@@ -28,78 +37,36 @@ def main() -> int:
         action="store_true",
         help="weight counts by positive reward instead of plain accepted-action counts",
     )
+    parser.add_argument(
+        "--num-action-scale",
+        type=int,
+        default=0,
+        help="Override coord/scale key count. Default infers from trace schema and scale_idx values.",
+    )
+    parser.add_argument(
+        "--include-action-logits",
+        action="store_true",
+        help="Also include per-action logits for same-layout experiments.",
+    )
     args = parser.parse_args()
 
-    counts: dict[str, float] = defaultdict(float)
-    examples = 0
-    meshes = set()
-    sources: dict[str, int] = defaultdict(int)
+    payload = build_action_prior_from_traces(
+        args.traces,
+        output=args.output,
+        min_reward=0.0,
+        smoothing=args.alpha,
+        reward_power=1.0 if args.reward_weighted else 0.0,
+        include_action_logits=args.include_action_logits,
+        num_action_scale=args.num_action_scale or None,
+    )
+    payload["metadata"]["trainer"] = "scripts/train_action_prior_from_traces.py"
+    payload["metadata"]["model_type"] = args.model_type
+    payload["metadata"]["reward_weighted"] = bool(args.reward_weighted)
 
-    for trace in args.traces:
-        path = Path(trace)
-        if not path.exists():
-            raise FileNotFoundError(path)
-        with path.open("r", encoding="utf-8") as file:
-            for line in file:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                key = _coord_scale_key(row)
-                reward = float(row.get("reward", 0.0))
-                weight = max(reward, 0.0) if args.reward_weighted else 1.0
-                if weight == 0.0:
-                    continue
-                counts[key] += weight
-                examples += 1
-                if row.get("mesh"):
-                    meshes.add(str(row["mesh"]))
-                if row.get("source"):
-                    sources[str(row["source"])] += 1
-
-    keys = ["%d:%d" % (coord_idx, scale_idx) for coord_idx in range(6) for scale_idx in range(2)]
-    keys.append("6:0")
-    for key in counts:
-        if key not in keys:
-            keys.append(key)
-
-    alpha = max(float(args.alpha), 0.0)
-    total = sum(counts.values()) + alpha * len(keys)
-    default_prob = alpha / total if total > 0.0 else 1.0 / max(len(keys), 1)
-    default_logit = math.log(max(default_prob, 1e-300))
-    logits = {}
-    for key in keys:
-        prob = (counts.get(key, 0.0) + alpha) / total if total > 0.0 else default_prob
-        logits[key] = math.log(max(prob, 1e-300))
-
-    payload: dict[str, Any] = {
-        "type": "coord_scale_action_prior",
-        "coord_scale_logits": logits,
-        "default_logit": default_logit,
-        "num_examples": examples,
-        "num_meshes": len(meshes),
-        "sources": dict(sorted(sources.items())),
-        "reward_weighted": bool(args.reward_weighted),
-        "alpha": alpha,
-        "note": (
-            "Use with --action_prior_path and --action_prior_weight. This changes "
-            "MCTS action sampling order only and does not replace exact SMART reward."
-        ),
-    }
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    with open(args.output, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2, sort_keys=True)
+    print(json.dumps(payload["metadata"], indent=2, sort_keys=True))
     return 0
-
-
-def _coord_scale_key(row: dict[str, Any]) -> str:
-    coord_idx = int(row.get("coord_idx", 6))
-    scale_idx = int(row.get("scale_idx", 0))
-    if coord_idx >= 6:
-        return "6:0"
-    return "%d:%d" % (coord_idx, scale_idx)
 
 
 if __name__ == "__main__":

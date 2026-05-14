@@ -829,6 +829,8 @@ def run_refine_mesh(
         str(result_root),
         "--path_to_msh_file",
         str(tetra_root(cfg, category)),
+        "--category",
+        category["name"],
         "--path_to_bbox",
         "",
         "--bbox_init",
@@ -851,6 +853,8 @@ def run_refine_mesh(
         str(stage_cfg.get("candidate_top_k", 8)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold")),
+        "--manifold_volume_method",
+        str(stage_cfg.get("manifold_volume_method", "mesh")),
         "--stateful_cache_capacity",
         str(stage_cfg.get("stateful_cache_capacity", 65536)),
         "--tet_clipping_max_boxes",
@@ -950,6 +954,22 @@ def run_mcts_mesh(
                 "mcts.allow_search_order_changes=true for experimental runs."
             ),
         )
+    if float(stage_cfg.get("action_prior_weight", 0.0) or 0.0) != 0.0 and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.action_prior_weight changes MCTS search order. Keep it at "
+                "0 for paper-compatible runs, or set "
+                "mcts.allow_search_order_changes=true for research runs."
+            ),
+        )
     existing = latest_bbox_dir(stage_root(cfg, "mcts", category), mesh_id)
     if existing and not force:
         return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", output_path=existing)
@@ -968,6 +988,8 @@ def run_mcts_mesh(
         str(result_root),
         "--path_to_msh_file",
         str(tetra_root(cfg, category)),
+        "--category",
+        category["name"],
         "--path_to_bbox",
         str(refine_exp),
         "--bbox_init",
@@ -988,6 +1010,8 @@ def run_mcts_mesh(
         str(stage_cfg.get("candidate_top_k", 8)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold")),
+        "--manifold_volume_method",
+        str(stage_cfg.get("manifold_volume_method", "mesh")),
         "--stateful_cache_capacity",
         str(stage_cfg.get("stateful_cache_capacity", 65536)),
         "--tet_clipping_max_boxes",
@@ -1112,6 +1136,8 @@ def run_local_refine_mesh(
         str(result_root),
         "--path_to_msh_file",
         str(tetra_root(cfg, category)),
+        "--category",
+        category["name"],
         "--path_to_bbox",
         str(input_exp),
         "--bbox_init",
@@ -1134,6 +1160,8 @@ def run_local_refine_mesh(
         str(stage_cfg.get("candidate_top_k", 8)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold_stateful")),
+        "--manifold_volume_method",
+        str(stage_cfg.get("manifold_volume_method", "mesh")),
         "--stateful_cache_capacity",
         str(stage_cfg.get("stateful_cache_capacity", 65536)),
         "--tet_clipping_max_boxes",

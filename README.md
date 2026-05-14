@@ -384,7 +384,8 @@ The Rust MCTS runner now also supports two opt-in search experiments:
 `mcts.action_prior_path` plus `mcts.action_prior_weight` biases PNS exploration
 from trace-derived action priors. Both can change search order, so they are
 disabled by default; the pipeline requires
-`mcts.allow_search_order_changes=true` before enabling the transposition table.
+`mcts.allow_search_order_changes=true` before enabling the transposition table
+or a nonzero action-prior weight.
 Trace priors can be produced with:
 
 ```bash
@@ -403,6 +404,11 @@ smart.build_action_prior_from_traces(
     output="runs/bench_exact/priors/airplane_mcts20_prior.json",
 )
 ```
+
+New traces use schema version 2 and record category, bbox/action layout, action
+unit, BVS, volume method, and backend metadata. The count prior builder infers
+`num_action_scale` dynamically, so it can be used for larger action-scale
+experiments without hardcoded two-scale keys.
 
 For same-mesh/search-layout experiments, add `--include-action-logits` to write
 per-action logits, then sweep weights with:
@@ -577,6 +583,13 @@ and identical reported metrics on that same case while reducing stage time to
 `mcts.fused_rollout_step=true` is also wired into the legacy Python MCTS tree;
 on three airplane MCTS20 cases it preserved reported metrics and measured
 `1.013x`, so it remains workload-dependent and opt-in.
+`mcts.manifold_volume_method=properties` is a newer GetProperties volume probe.
+On deterministic residual-volume probes across the 16 processed meshes, it
+matched the current GetMesh signed-volume path within `4.1e-08` and measured
+`1.105x` at the micro-benchmark level. On one actual MCTS20 airplane target it
+kept reported metrics identical and measured `1.069x`, but reward traces differ
+slightly, so it stays a research flag until a larger sweep passes. The packaged
+profile is `configs/properties_volume_experimental.yaml`.
 
 MCTS/RL upgrades are being kept separate from exact acceleration. The current
 trace-derived action-prior sweep
@@ -585,7 +598,11 @@ shows `1.043x` to `1.055x` speedups for prior weights `0.02` to `0.1`, but all
 weights change one table case. MOV improves for that case, while BVS/TOV/vIoU
 worsen, so the generic prior remains a research/quality experiment rather than
 a default. The next useful RL step is category-specific priors trained from
-more SMART traces, not replacing the exact reward.
+more SMART schema-v2 traces. New traces record category, bbox/action layout,
+BVS, action unit, backend, and Manifold volume method; `smart build-prior` and
+`scripts/train_action_prior_from_traces.py` now emit schema-v2 count priors with
+dynamic action-scale metadata. Learned models should guide action order or
+rollout policy, then final outputs are still judged by SMART evaluation metrics.
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS

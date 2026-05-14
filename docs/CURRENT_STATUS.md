@@ -181,6 +181,19 @@ Not promoted to default:
   produced byte-identical bbox OBJ files versus the MCTS100 union-cache result,
   kept reported metric diffs at `0`, and reduced stage time from `73.83s` to
   `15.96s`. This is a search-budget shortcut, not a paper-safe default.
+- `runs/bench_exact/manifold_volume_methods_processed16.json`:
+  `GetMesh()` residual volume versus `GetProperties().volume` on deterministic
+  AABB-derived probes across the 16 currently processed meshes. The maximum
+  absolute difference is `4.064794009717154e-08`, and the latest properties path
+  run is `1.105021890299984x` faster on average at the residual-volume
+  micro-benchmark level.
+- `runs/bench_exact/exact_stateful_properties_mcts20_target1.json`:
+  first actual MCTS target using `mcts.manifold_volume_method=properties`.
+  Reported evaluation metric diffs versus legacy `manifold` are all `0`, the
+  accepted action sequence did not diverge, and stage speed was `1.069x` versus
+  `manifold` (`18.74s -> 17.53s`). Reward traces differ by up to
+  `2.2902652996314998e-04`, so this is promising but still opt-in until tested
+  on a larger category-balanced sweep.
 - `runs/bench_exact/hybrid_probe_local_refine_eval.json`:
   first hybrid MCTS + local-search check on the same 10-box airplane case.
   `local_refine` after MCTS improved `BVS` (`2.722 -> 2.609`), `MOV`
@@ -192,6 +205,12 @@ Not promoted to default:
   `1.043x`, `1.053x`, and `1.055x` versus `exact_union_cache`, but all changed
   the same table case. MOV improved there, while BVS/TOV/vIoU worsened, so the
   current prior remains a search/quality experiment, not a default.
+- Action trace schema is now versioned. New traces include category, bbox/action
+  layout, action unit, BVS, volume sum, backend, and Manifold volume method.
+  `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit
+  schema-v2 count priors with dynamic `num_action_scale` metadata. This is the
+  first concrete data layer for a category-general policy; it still guides action
+  order only and does not replace final SMART evaluation.
 
 ## Next Work
 
@@ -201,11 +220,11 @@ Not promoted to default:
    `stateful_union_cache=true` can become the recommended exact accelerator.
 3. Rework Rust MCTS runner so it preserves the legacy tree trajectory before
    using it in exact profiles.
-4. Train category-specific or leave-one-out action priors from more traces and
-   compare them as quality experiments only; exact reward must remain the
-   evaluator.
-5. Promote only changes that keep bbox outputs and evaluation metrics identical
-   under the paper-safe profile.
+4. Train category-specific or leave-one-out action priors from schema-v2 traces.
+   Research profiles may change search order, but promotion requires aggregate
+   quality to stay equal or improve under final exact SMART evaluation.
+5. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
+   keep faster/learned search profiles behind explicit research flags.
 6. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in
    Rust.
 7. Keep RL/deep-learning work as action-prior or proposal ordering only, with
