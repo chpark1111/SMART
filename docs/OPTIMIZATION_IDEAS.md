@@ -821,6 +821,11 @@ tables are deferred until after exact parity is locked.
      The first tiny CPU smoke
      `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept metric diffs
      at `0` but measured `0.952x`; it verifies wiring, not a speed gain.
+   - Added `mcts.puct_prior_weight`, an opt-in PUCT-style prior bonus for MCTS
+     child selection. The tiny linear-prior PUCT smoke
+     `runs/bench_exact/action_prior_puct_linear_airplane2_mcts2.json` kept metric
+     diffs at `0` and measured `1.055x`; it is promising enough to test at
+     MCTS20/MCTS100, but still too small to recommend.
 
    Next RL/MCTS step: generate more traces from the processed expanded set and
    train category-specific linear and PyTorch MLP priors. A global smoke prior

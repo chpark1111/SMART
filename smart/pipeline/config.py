@@ -120,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allow_search_order_changes": False,
         "action_prior_path": "",
         "action_prior_weight": 0.0,
+        "puct_prior_weight": 0.0,
         "score_cache_size": 4096,
         "candidate_backend": "exact",
         "candidate_top_k": 8,

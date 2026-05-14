@@ -163,6 +163,7 @@ class MCTSTreeSearch:
         )
         self.num_actions = self.num_bbox * (6 * self.num_action_scale + 1)
         self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
+        self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
         self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self._opposite_actions = self._build_opposite_actions()
@@ -199,7 +200,7 @@ class MCTSTreeSearch:
         self._store_transposition(self.root_id)
 
     def _load_action_prior(self, path):
-        if not path or self.action_prior_weight == 0.0:
+        if not path or (self.action_prior_weight == 0.0 and self.puct_prior_weight == 0.0):
             return None
         if not os.path.exists(path):
             warnings.warn("MCTS action_prior_path does not exist: %s" % path)
@@ -237,7 +238,7 @@ class MCTSTreeSearch:
 
     def _action_prior_logits_for(self, actions):
         actions = [int(action) for action in actions]
-        if self.action_prior_weight == 0.0 or self.action_prior is None:
+        if (self.action_prior_weight == 0.0 and self.puct_prior_weight == 0.0) or self.action_prior is None:
             return np.zeros(len(actions), dtype=float)
         try:
             return np.array(
@@ -433,7 +434,7 @@ class MCTSTreeSearch:
         parent_visits = self.id2Node[node_id].num_vis
         child_qs = [self.id2Node[idx].Q for idx in child_ids]
         child_visits = [self.id2Node[idx].num_vis for idx in child_ids]
-        if _using_rust_backend() and len(child_ids) >= _RUST_VECTOR_MIN:
+        if _using_rust_backend() and len(child_ids) >= _RUST_VECTOR_MIN and self.puct_prior_weight == 0.0:
             try:
                 best_positions = smart_rust.ucb_best_indices(
                     parent_visits, child_qs, child_visits, self.exp_weight
@@ -444,6 +445,13 @@ class MCTSTreeSearch:
                 uct_scores = self._python_ucb_scores(parent_visits, child_qs, child_visits)
         else:
             uct_scores = self._python_ucb_scores(parent_visits, child_qs, child_visits)
+        if self.puct_prior_weight != 0.0 and self.action_prior is not None:
+            uct_scores = self._add_puct_prior(
+                uct_scores,
+                parent_visits,
+                child_visits,
+                self.id2Node[node_id].child_actions,
+            )
 
         mx_uct = max(uct_scores)
         mx_id = []
@@ -468,6 +476,20 @@ class MCTSTreeSearch:
             )
         uct_scores[child_visits <= 0] = np.inf
         return uct_scores
+
+    def _add_puct_prior(self, uct_scores, parent_visits, child_visits, child_actions):
+        if len(child_actions) == 0 or parent_visits <= 0:
+            return uct_scores
+        logits = self._action_prior_logits_for(child_actions)
+        logits = logits - np.max(logits)
+        probs = np.exp(logits)
+        total = probs.sum()
+        if total <= 0.0:
+            return uct_scores
+        probs = probs / total
+        child_visits = np.array(child_visits, dtype=float)
+        prior_bonus = self.puct_prior_weight * probs * math.sqrt(float(parent_visits)) / (1.0 + child_visits)
+        return np.array(uct_scores, dtype=float) + prior_bonus
 
     def _simulate(self, path: List[int], rewards: List[float] = []):
         grd_cnt = 0

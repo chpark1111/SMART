@@ -269,6 +269,12 @@ def get_parser() -> ArgumentParser:
         help="weight for optional trace/RL action prior logits during MCTS PNS sampling",
     )
     parser.add_argument(
+        "--puct_prior_weight",
+        type=float,
+        default=0.0,
+        help="optional PUCT-style child-selection prior weight; uses action_prior_path and changes search order",
+    )
+    parser.add_argument(
         "--mcts_exp_tag",
         type=str,
         default="",

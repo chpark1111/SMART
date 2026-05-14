@@ -37,6 +37,7 @@ def main() -> int:
     parser.add_argument("--reward-backend", default="manifold_stateful")
     parser.add_argument("--mcts-backend", default="rust_stateful")
     parser.add_argument("--weights", default="0,0.5,1.0")
+    parser.add_argument("--puct-weight", type=float, default=0.0)
     parser.add_argument("--prior-model", choices=["counts", "linear", "mlp"], default="counts")
     parser.add_argument("--linear-epochs", type=int, default=100, help="Deprecated alias for --prior-epochs")
     parser.add_argument("--prior-epochs", type=int, default=0)
@@ -88,6 +89,7 @@ def main() -> int:
         "reward_backend": args.reward_backend,
         "mcts_backend": args.mcts_backend,
         "weights": weights,
+        "puct_weight": args.puct_weight,
         "prior_model": args.prior_model,
         "transposition_table": args.transposition_table,
         "transposition_table_size": args.transposition_table_size,
@@ -222,9 +224,11 @@ def _run_mcts(
     ]
     if prior_path is not None:
         command.extend(["--set", f"mcts.action_prior_path={prior_path}"])
+    if args.puct_weight != 0.0:
+        command.extend(["--set", f"mcts.puct_prior_weight={args.puct_weight}"])
     if trace_path is not None:
         command.extend(["--set", f"mcts.trace_actions_path={trace_path}"])
-    if args.mcts_backend in {"rust", "rust_stateful"} or weight != 0.0:
+    if args.mcts_backend in {"rust", "rust_stateful"} or weight != 0.0 or args.puct_weight != 0.0:
         command.extend(["--set", "mcts.allow_search_order_changes=true"])
     if args.transposition_table:
         command.extend(

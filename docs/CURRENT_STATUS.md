@@ -224,6 +224,10 @@ Not promoted to default:
   remains JSON weights and still only changes action order. The first tiny
   CPU smoke `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept metric
   diffs at `0` but measured `0.952x`, so it is not promoted.
+- `mcts.puct_prior_weight` now adds a PUCT-style prior bonus during child
+  selection. The tiny linear-prior PUCT smoke
+  `runs/bench_exact/action_prior_puct_linear_airplane2_mcts2.json` kept metric
+  diffs at `0` and measured `1.055x`, but it is not promoted.
 
 ## Next Work
 

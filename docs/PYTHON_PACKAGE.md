@@ -197,10 +197,11 @@ defaults still prefer legacy exact Manifold for paper reproduction.
 
 MCTS learning/search-order experiments are opt-in only. The Rust MCTS runner can
 load `action_prior_path` with `action_prior_weight > 0` to bias PNS exploration
-from trace-derived priors, and it can use `transposition_table=true` as a Rust
-state-memory experiment. These options do not replace the exact Manifold reward,
-but they can change search trajectories, so keep them out of release/default
-configs until quality sweeps pass.
+from trace-derived priors. The Python-tree runner can also use
+`puct_prior_weight > 0` for PUCT-style child selection, and the Rust path can use
+`transposition_table=true` as a state-memory experiment. These options do not
+replace the exact Manifold reward, but they can change search trajectories, so
+keep them out of release/default configs until quality sweeps pass.
 
 Build an action prior from MCTS traces with the packaged CLI:
 

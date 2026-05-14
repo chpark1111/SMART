@@ -970,6 +970,22 @@ def run_mcts_mesh(
                 "mcts.allow_search_order_changes=true for research runs."
             ),
         )
+    if float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0) != 0.0 and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.puct_prior_weight changes MCTS search order. Keep it at "
+                "0 for paper-compatible runs, or set "
+                "mcts.allow_search_order_changes=true for research runs."
+            ),
+        )
     existing = latest_bbox_dir(stage_root(cfg, "mcts", category), mesh_id)
     if existing and not force:
         return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", output_path=existing)
@@ -1057,6 +1073,7 @@ def run_mcts_mesh(
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
+        command.extend(["--puct_prior_weight", str(stage_cfg.get("puct_prior_weight", 0.0))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):

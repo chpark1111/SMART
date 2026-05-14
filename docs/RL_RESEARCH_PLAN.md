@@ -80,5 +80,8 @@ refinement.
   functional but not promoted.
 - The first tiny PyTorch MLP prior check kept reported metric diffs at `0` but
   measured `0.952x` on CPU, so the MLP path is also wired but not promoted.
+- `mcts.puct_prior_weight` is now available for PUCT-style prior-guided child
+  selection. Its first tiny linear-prior check kept metric diffs at `0` and
+  measured `1.055x`; it needs larger MCTS20/MCTS100 validation.
 - The next research step is category-specific trace collection followed by a
   stronger category-general policy that only changes action ordering.

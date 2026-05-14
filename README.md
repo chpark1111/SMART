@@ -646,9 +646,14 @@ at `0` and measured `1.037x` at prior weight `0.1`. This proves the
 training/runtime path is wired, not that it is ready as a default. The PyTorch
 MLP smoke `runs/bench_exact/action_prior_mlp_airplane2_mcts2.json` kept reported
 metric diffs at `0` but measured `0.952x` on a tiny CPU run, so it is also a
-functional research path rather than a speed win yet. The next useful RL step is
-collecting larger category-specific traces, then comparing the linear, MLP, and
-PUCT prior variants while still judging final boxes with SMART evaluation metrics.
+functional research path rather than a speed win yet. `mcts.puct_prior_weight`
+adds an opt-in PUCT-style prior bonus during child selection; the first tiny
+linear-prior PUCT smoke
+`runs/bench_exact/action_prior_puct_linear_airplane2_mcts2.json` kept reported
+metric diffs at `0` and measured `1.055x`, but the sample is too small for a
+recommendation. The next useful RL step is collecting larger category-specific
+traces, then comparing the linear, MLP, and PUCT prior variants while still
+judging final boxes with SMART evaluation metrics.
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS

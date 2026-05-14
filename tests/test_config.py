@@ -198,6 +198,19 @@ def test_action_prior_requires_search_order_opt_in(tmp_path) -> None:
     assert "action_prior_weight" in record.error
 
 
+def test_puct_prior_requires_search_order_opt_in(tmp_path) -> None:
+    cfg = {
+        "workspace": str(tmp_path),
+        "normalization": {"enabled": False},
+        "mcts": {"puct_prior_weight": 0.1},
+    }
+
+    record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
+
+    assert record.status == "blocked"
+    assert "puct_prior_weight" in record.error
+
+
 def test_rust_mcts_backend_requires_search_order_opt_in(tmp_path) -> None:
     cfg = {
         "workspace": str(tmp_path),
