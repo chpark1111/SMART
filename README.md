@@ -182,6 +182,21 @@ python3 scripts/run_quality_guarded_local_refine.py \
   --selection-mode improved
 ```
 
+Use `--from-input-manifest` when you want the script to use every successful
+mesh recorded in the input stage manifest, including meshes that are no longer
+in the current sampled config order:
+
+```
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --input-stage mcts \
+  --from-input-manifest \
+  --categories airplane,chair,table \
+  --per-category-limit 20 \
+  --covered-tolerance 0.001 \
+  --selection-mode improved
+```
+
 The stateful profiles are intentionally separate from `accelerated_exact.yaml`.
 `manifold_stateful` is still opt-in: the latest smoke sweeps preserve paper
 metrics and show a small MCTS speed win after exact reward memoization, but
@@ -988,6 +1003,24 @@ tolerance used for this quality-first run. A strict coverage guard
 (`--covered-tolerance 0`) selected local refine on only `2/21`, so the current
 quality-first setting intentionally permits tiny coverage movement while still
 rejecting clear regressions.
+Using `--from-input-manifest` with `input-stage=mcts` expanded this hybrid check
+to all `52` successful processed MCTS outputs in
+`runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`.
+It selected local refine on `29/52`, selected input on `23/52`, and improved
+`29/52` cases. The selected `local_refine_guarded` stage improved aggregate
+BVS (`1.7546 -> 1.7225`), MOV (`1.2327 -> 1.1410`), TOV
+(`0.7173 -> 0.6913`), and vIoU (`0.6835 -> 0.6970`) versus baseline MCTS,
+while coverage was effectively unchanged (`0.999685 -> 0.999681`).
+For the next learned gate/RL step, export the guard report as supervised rows:
+
+```
+python3 scripts/export_local_refine_gate_dataset.py \
+  runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json \
+  --output runs/bench_exact/local_refine_gate_manifest52.csv
+```
+
+The current export contains `52` rows with `29` positive local-refine
+improvement labels.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

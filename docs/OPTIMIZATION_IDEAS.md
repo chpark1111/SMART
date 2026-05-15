@@ -917,6 +917,15 @@ tables are deferred until after exact parity is locked.
      guard selected local refine on only `2/21`, which shows most quality gains
      trade a very small coverage change for much better tightness.
 
+   - `runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`:
+     after adding `--from-input-manifest`, the same guard ran on all `52`
+     successful processed MCTS outputs (`18` airplane, `17` chair, `17` table).
+     It selected local refine on `29/52`, selected input on `23/52`, and
+     improved all `29` selected cases. Aggregate selected-stage metrics
+     improved BVS (`1.7546 -> 1.7225`), MOV (`1.2327 -> 1.1410`), TOV
+     (`0.7173 -> 0.6913`), and vIoU (`0.6835 -> 0.6970`) versus MCTS, with
+     coverage effectively unchanged (`0.999685 -> 0.999681`).
+
    Next gate: run this over a larger category-balanced set and compare strict
    guard (`covered_tolerance=0`) versus quality-first guard
    (`covered_tolerance=0.001`). Promote only if coverage remains high and the

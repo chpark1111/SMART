@@ -355,6 +355,22 @@ python3 scripts/run_quality_guarded_local_refine.py \
   --selection-mode improved
 ```
 
+Use `--from-input-manifest` to select meshes from the input stage manifest
+instead of the current config mesh order. This is useful after data sampling
+changes or when a run has successful stage outputs for meshes outside the
+current first-N listing:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --input-stage mcts \
+  --from-input-manifest \
+  --categories airplane,chair,table \
+  --per-category-limit 20 \
+  --covered-tolerance 0.001 \
+  --selection-mode improved
+```
+
 It evaluates the input stage, runs `smart local_refine`, evaluates the refined
 output, and copies the selected result into `local_refine_guarded`. The current
 refined21 check
@@ -366,6 +382,23 @@ kept the input output on the remaining `11/21`. The selected
 this as an experimental quality mode; official paper reproduction should still
 use the unguarded paper stages unless the experiment calls for the hybrid
 post-process.
+
+The larger manifest-selected run
+`runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`
+used `input-stage=mcts` over all `52` successful processed MCTS outputs. It
+succeeded on `52/52`, selected local refine on `29/52`, kept input on `23/52`,
+and improved `29/52` cases. Aggregate selected-stage metrics improved BVS
+(`1.7546 -> 1.7225`), MOV (`1.2327 -> 1.1410`), TOV
+(`0.7173 -> 0.6913`), and vIoU (`0.6835 -> 0.6970`) versus MCTS, with nearly
+unchanged coverage (`0.999685 -> 0.999681`).
+
+Export the result for local-refine gate training:
+
+```bash
+python3 scripts/export_local_refine_gate_dataset.py \
+  runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json \
+  --output runs/bench_exact/local_refine_gate_manifest52.csv
+```
 
 ## Command Line Usage
 

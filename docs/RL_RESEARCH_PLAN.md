@@ -253,3 +253,16 @@ refinement.
   current learned prior itself, so the next RL target is to learn when and where
   this fine local search pays off, then use the policy to propose better
   post-MCTS actions.
+- The larger manifest-selected run
+  `runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`
+  used `--from-input-manifest` and `input-stage=mcts` on all `52` successful
+  processed MCTS outputs. It selected local refine on `29/52`, kept input on
+  `23/52`, and improved `29/52` cases. Aggregate BVS/MOV/TOV/vIoU improved
+  with nearly unchanged coverage. This is now the most useful supervised/RL
+  target: predict the local-refine win probability from category, box count,
+  and pre-refine SMART metrics, then run local search only when the gate expects
+  a quality improvement.
+- `scripts/export_local_refine_gate_dataset.py` exports that report to CSV or
+  JSONL. The current manifest52 export has `52` rows and `29` positive
+  improvement labels, which is enough for smoke-testing a gate but not enough
+  for a final learned policy.

@@ -257,6 +257,17 @@ Not promoted to default:
   effectively unchanged (`0.999527 -> 0.999520`). A strict coverage guard
   selected local refine on only `2/21`, so this remains an explicit
   quality-first mode rather than a paper-safe default.
+- `runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`:
+  manifest-selected expansion of the same guarded hybrid local search, using
+  `--from-input-manifest` and `input-stage=mcts` to cover all `52` successful
+  processed MCTS outputs in `configs/expanded_200.yaml` (`18` airplane, `17`
+  chair, `17` table). It ran `52/52` successfully, selected local refine on
+  `29/52`, selected the input on `23/52`, and improved `29/52` cases. Stage
+  evaluation
+  `runs/bench_exact/local_refine_guarded_manifest52_covtol_improved_stage_eval.json`
+  shows aggregate BVS (`1.7546 -> 1.7225`), MOV (`1.2327 -> 1.1410`), TOV
+  (`0.7173 -> 0.6913`), and vIoU (`0.6835 -> 0.6970`) improved versus MCTS,
+  while coverage stayed effectively unchanged (`0.999685 -> 0.999681`).
 - `runs/bench_exact/mcts_accel_profiles_expanded_processed16_iter20_prior_weight_sweep.json`:
   first RL/MCTS action-prior weight sweep on the same 16 meshes with exact
   reward and union cache. Prior weights `0.02`, `0.05`, and `0.1` measured
@@ -404,6 +415,12 @@ Not promoted to default:
   BVS/MOV/TOV/vIoU and near-identical coverage under explicit
   `--covered-tolerance 0.001`. This remains an experimental quality-first
   post-process until larger category-balanced checks are complete.
+- `runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`
+  strengthens that result on `52` processed MCTS outputs: local search was
+  selected on `29/52` and improved all selected cases. This makes local refine
+  gating a better near-term RL target than raw MCTS action ordering: learn when
+  the post-MCTS local search is likely to pay off, then still use exact SMART
+  metrics as the final guard.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit

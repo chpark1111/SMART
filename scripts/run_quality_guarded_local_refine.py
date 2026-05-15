@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-category-limit", type=int, default=None, help="Alias for --mesh-limit in multi-category runs")
     parser.add_argument("--input-stage", default="mcts_guarded", help="Stage to refine and guard against")
     parser.add_argument("--stage", default="local_refine_guarded", help="Guarded output stage name")
+    parser.add_argument(
+        "--from-input-manifest",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Select meshes from the input stage manifest instead of the configured mesh roots.",
+    )
     parser.add_argument("--max-step", type=int, default=100)
     parser.add_argument("--action-unit", type=float, default=0.005)
     parser.add_argument("--reward-backend", default="manifold_stateful")
@@ -84,6 +90,7 @@ def main() -> int:
         "config": args.config,
         "input_stage": args.input_stage,
         "stage": args.stage,
+        "from_input_manifest": args.from_input_manifest,
         "max_step": args.max_step,
         "action_unit": args.action_unit,
         "metric_tolerance": args.metric_tolerance,
@@ -291,6 +298,11 @@ def _select_category_meshes(cfg: dict[str, Any], args: argparse.Namespace) -> di
     allowed = {item.strip() for item in str(args.categories or "").split(",") if item.strip()}
     if args.category:
         allowed.add(args.category)
+    if args.from_input_manifest:
+        out = _select_meshes_from_manifest(cfg, args.input_stage, allowed, args)
+        if not out:
+            raise SystemExit(f"No meshes found in manifest for stage={args.input_stage}")
+        return out
     limit = args.per_category_limit if args.per_category_limit is not None else args.mesh_limit
     out: dict[str, list[str]] = {}
     for category in cfg.get("categories", []):
@@ -311,6 +323,45 @@ def _select_category_meshes(cfg: dict[str, Any], args: argparse.Namespace) -> di
     if not out:
         raise SystemExit("No categories selected")
     return out
+
+
+def _select_meshes_from_manifest(
+    cfg: dict[str, Any],
+    stage: str,
+    allowed: set[str],
+    args: argparse.Namespace,
+) -> dict[str, list[str]]:
+    limit = args.per_category_limit if args.per_category_limit is not None else args.mesh_limit
+    manifest = workspace_path(cfg, "manifests", f"{stage}.jsonl")
+    if not manifest.exists():
+        return {}
+    configured_categories = {str(category["name"]) for category in cfg.get("categories", [])}
+    selected: dict[str, list[str]] = {}
+    seen: set[tuple[str, str]] = set()
+    with manifest.open("r", encoding="utf-8") as file:
+        for line in file:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            category = str(record.get("category") or "")
+            mesh_id = str(record.get("mesh_id") or "")
+            if not category or not mesh_id:
+                continue
+            if allowed and category not in allowed:
+                continue
+            if category not in configured_categories:
+                continue
+            if record.get("status") != "success" or not record.get("output_path"):
+                continue
+            key = (category, mesh_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            meshes = selected.setdefault(category, [])
+            if limit <= 0 or len(meshes) < limit:
+                meshes.append(mesh_id)
+    return selected
 
 
 def _selected_bbox_path(run: dict[str, Any]) -> str | None:
@@ -354,6 +405,7 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "output": str(output),
         "stage": report.get("stage"),
         "input_stage": report.get("input_stage"),
+        "from_input_manifest": report.get("from_input_manifest"),
         "reuse_local_refine": report.get("reuse_local_refine"),
         "selection_mode": report.get("selection_mode"),
         "run_tag": report.get("run_tag"),
