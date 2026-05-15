@@ -1183,6 +1183,11 @@ current held-out offset probe it was safe rather than better: `5/5` guarded
 successes, `0/5` learned selections, no worse candidates, and about `1.11x`
 mean raw-prior speedup. It is therefore a research checkpoint, not the packaged
 default.
+A larger cat10 final-return collection reached `21/21` guarded successes and
+one learned-candidate quality improvement, but the label distribution is still
+sparse (`59` positive rows out of `2228`, all from table), so the next useful
+RL step is more positive final-return coverage rather than promoting the
+value-only checkpoint.
 The latest gated post-MCTS local-refine probe on four held-out policy-value
 outputs selected one improved local-refine result and kept three inputs. With
 `smart/assets/gates/local_refine_gate_manifest52.json` at threshold `0.5`, it

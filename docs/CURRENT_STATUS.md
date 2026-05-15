@@ -549,6 +549,18 @@ Not promoted to default:
   measured about `1.11x` mean raw-prior speedup. Increasing
   `action_value_weight` to `0.08` stayed safe but still selected baseline on
   all held-out cases.
+- A larger cat10 collection
+  `runs/bench_exact/policy_value_final_return_train_cat10.json` ran `84` total
+  MCTS launches over `21` successful processed meshes. It kept guarded success
+  at `21/21`, selected the learned policy-value candidate on `1/21`, and
+  measured `1.066x` mean raw-prior speedup. The trace
+  `runs/bench_exact/policy_value_final_return_train_cat10.jsonl` has `2228`
+  final-return rows, but positive labels are still concentrated in table:
+  `59` positive, `108` negative, and `2061` zero rows. This confirms the current
+  limitation is sparse final-quality positives, not the absence of a trainer.
+  A cat10 value-only checkpoint was trained, but an offset-10 held-out attempt
+  found no existing processed refine outputs; the guarded runner now errors
+  clearly when `--mesh-offset` skips every eligible mesh.
 - A post-policy-value hybrid probe
   `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json` ran
   local search after the guarded policy-value output on four held-out cases. It

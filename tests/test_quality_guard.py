@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from argparse import Namespace
+
 import smart
 from scripts.run_quality_guarded_mcts import (
     _adaptive_stop_reason,
     _aggregate_records,
+    _candidate_meshes,
     _final_return_quality_score,
+    _select_category_meshes,
 )
 from smart.quality import compare_quality, quality_gain_score, select_quality_guarded_run
 
@@ -255,3 +259,39 @@ def test_guard_aggregate_counts_skipped_candidate_runs() -> None:
     assert aggregate["executed_total_mcts_runs"] == 6
     assert aggregate["possible_total_mcts_runs"] == 8
     assert aggregate["skipped_candidate_labels"] == 2
+
+
+def test_candidate_meshes_support_offset(tmp_path) -> None:
+    root = tmp_path / "data" / "shapenet_table"
+    for mesh_id in ("a", "b", "c"):
+        mesh_dir = root / mesh_id
+        mesh_dir.mkdir(parents=True)
+        (mesh_dir / "model.obj").write_text("o mesh\n", encoding="utf-8")
+    cfg = {"workspace": str(tmp_path / "runs")}
+    category = {"name": "table", "mesh_root": str(root)}
+
+    assert _candidate_meshes(cfg, category, 2, False, offset=1) == ["b", "c"]
+
+
+def test_select_category_meshes_errors_when_offset_skips_all(tmp_path) -> None:
+    root = tmp_path / "data" / "shapenet_table"
+    mesh_dir = root / "a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text("o mesh\n", encoding="utf-8")
+    cfg = {"workspace": str(tmp_path / "runs"), "categories": [{"name": "table", "mesh_root": str(root)}]}
+    args = Namespace(
+        mesh=None,
+        category=None,
+        categories="table",
+        per_category_limit=None,
+        mesh_limit=1,
+        only_existing_refine=False,
+        mesh_offset=5,
+    )
+
+    try:
+        _select_category_meshes(cfg, args)
+    except SystemExit as exc:
+        assert "No meshes selected" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit")

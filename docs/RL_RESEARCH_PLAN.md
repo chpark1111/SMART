@@ -356,6 +356,15 @@ refinement.
   every case. Raising `action_value_weight` to `0.08` did not change that. This
   means the value head is learning a useful local signal, but it does not yet
   generalize strongly enough to improve unseen meshes.
+- Expanding the collection to cat10 produced
+  `runs/bench_exact/policy_value_final_return_train_cat10.jsonl` with `2228`
+  rows from `21` successful processed meshes. The guarded run selected the
+  learned policy-value candidate on `1/21`, with no raw worse candidates and
+  `1.066x` mean raw-prior speedup. The label distribution is still the blocker:
+  only `59` positive final-return rows, all from table, versus `2061` zero rows.
+  The next collection should either process more table-like positives and
+  harder airplane/chair cases, or increase search budget enough to expose
+  nonzero final gains for those categories.
 - Hybrid local search remains the stronger quality-improvement mechanism after
   learned MCTS. On four held-out policy-value outputs,
   `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json`

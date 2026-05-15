@@ -480,9 +480,10 @@ def _select_category_meshes(cfg: dict[str, Any], args: argparse.Namespace) -> di
             meshes = list(args.mesh)
         else:
             meshes = _candidate_meshes(cfg, category, limit, args.only_existing_refine, args.mesh_offset)
-        out[name] = meshes
+        if meshes:
+            out[name] = meshes
     if not out:
-        raise SystemExit("No categories selected")
+        raise SystemExit("No meshes selected; check --categories, --mesh-offset, and --only-existing-refine")
     return out
 
 
