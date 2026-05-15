@@ -989,6 +989,14 @@ tables are deferred until after exact parity is locked.
    coverage. This proves the policy/value hook works; it does not yet produce
    enough improvement rate to become a default.
 
+   Final-return trace export is now implemented through
+   `scripts/run_quality_guarded_mcts.py --final-return-trace-output`. It labels
+   accepted actions with final exact SMART quality gain instead of only local
+   action reward, and it forces guard-failing candidates negative. The first
+   tiny fine-tune from `300` final-return rows was worse than the packaged
+   policy-value prior, so the optimization is not model architecture yet; it is
+   collecting enough final-return rows from 20-50 meshes per category.
+
 3. Opt-in tet-clipping reward backend
 
    Wire the verified Rust tet-clipping kernel into greedy/MCTS reward

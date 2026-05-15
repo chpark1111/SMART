@@ -1142,6 +1142,26 @@ The latest 9-mesh smoke selected a learned policy/value candidate on `1/9`
 cases, kept baseline on `8/9`, and improved aggregate BVS/MOV/TOV/vIoU with no
 coverage drift. This is still research-only; exact SMART evaluation remains the
 acceptance layer.
+For final-return training data, add `--final-return-trace-output` to the same
+runner. This stores accepted action traces annotated with the final exact SMART
+quality gain:
+
+```bash
+PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/expanded_200.yaml \
+  --category table \
+  --mesh 1040cd764facf6981190e285a2cbc9c \
+  --prior-path smart/assets/priors/category_general_policy_value_agent_prior.json \
+  --prior-weights 0.05,0.1,0.2 \
+  --puct-prior-weight 0.02 \
+  --action-value-weight 0.02 \
+  --selection-objective quality_score \
+  --final-return-trace-output runs/bench_exact/policy_value_final_return.jsonl
+```
+
+Rows with `record_type=mcts_final_return` keep the immediate action reward as
+`action_reward` and set `reward` to the final quality label. Guard-failing
+candidates are forced negative even if one scalar metric improves.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

@@ -516,6 +516,21 @@ Not promoted to default:
   `-0.001451`, MOV `-0.020312`, TOV `-0.000678`, Covered `0`, and vIoU
   `+0.000589`. This is now wired and measurable, but still too weak to promote
   without larger final-return/value training.
+- Final-return trace export is now implemented in
+  `scripts/run_quality_guarded_mcts.py --final-return-trace-output`. It writes
+  `record_type=mcts_final_return` rows where `reward` is the final exact SMART
+  quality gain and `action_reward` preserves the immediate environment reward.
+  Guard-failing candidates are forced negative. Current smoke files:
+  `runs/bench_exact/policy_value_final_return_trace_smoke.jsonl` (`115` rows)
+  and `runs/bench_exact/policy_value_final_return_table_known.jsonl` (`185`
+  rows).
+- A first final-return fine-tune
+  `runs/bench_exact/priors/category_general_policy_value_final_return_smoke_prior.json`
+  was trained and tested in
+  `runs/bench_exact/policy_value_final_return_prior_table_known.json`. It did
+  not beat the packaged policy-value prior: all three candidates were rejected
+  by the guard and baseline was selected. Keep the packaged prior unchanged
+  until final-return traces cover a much larger category-balanced set.
 
 ## Next Work
 
@@ -530,10 +545,9 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Improve the policy-value objective before collecting another large dataset:
-   the first value head is wired and can improve a table case, but the hit rate
-   is only `1/9` on the cat3 smoke. Next labels should target final-return
-   quality, not only local candidate reward.
+5. Collect final-return traces on a larger 20-50 mesh/category sweep. The
+   trace/export/training path is now wired, but the first tiny fine-tune was
+   worse than the packaged policy-value prior.
 6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we

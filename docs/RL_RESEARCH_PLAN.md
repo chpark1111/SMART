@@ -316,3 +316,25 @@ refinement.
   `+0.000589` with no coverage drift. This is a real quality path, but still a
   weak one; it needs final-return labels or a stronger policy/value objective
   before promotion.
+- Guarded MCTS can now export final-return action traces with
+  `--final-return-trace-output`. These rows use
+  `record_type=mcts_final_return`, preserve the per-step reward as
+  `action_reward`, and set `reward` to the final exact SMART quality gain
+  against the baseline. If a candidate fails the per-metric guard, its label is
+  forced negative even when the scalar score is positive, so the policy does
+  not learn unsafe metric tradeoffs.
+- Smoke trace exports:
+  `runs/bench_exact/policy_value_final_return_trace_smoke.jsonl` contains `115`
+  rows from a 3-mesh MCTS5 run, and
+  `runs/bench_exact/policy_value_final_return_table_known.jsonl` contains `185`
+  rows from the known table improvement case. The table labels separate
+  baseline/identical runs at `0`, the rejected candidate at `-0.0184465`, and
+  the improved candidate at `+0.0655957`.
+- A first final-return fine-tune
+  `runs/bench_exact/priors/category_general_policy_value_final_return_smoke_prior.json`
+  was trained from those rows plus existing traces. It is not promoted:
+  `runs/bench_exact/policy_value_final_return_prior_table_known.json` rejected
+  all three learned candidates on the known table case and kept baseline. The
+  final-return objective is now wired, but the dataset is far too small; collect
+  20-50 meshes/category with final-return traces before replacing the packaged
+  policy-value prior.

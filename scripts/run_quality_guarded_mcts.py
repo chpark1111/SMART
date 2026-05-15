@@ -101,6 +101,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-tag", default="")
     parser.add_argument("--output", default="runs/bench_exact/quality_guarded_mcts.json")
     parser.add_argument(
+        "--trace-actions-dir",
+        default="",
+        help=(
+            "Optional directory for per-run accepted-action traces. If "
+            "--final-return-trace-output is set and this is empty, a sibling "
+            "trace directory is created automatically."
+        ),
+    )
+    parser.add_argument(
+        "--final-return-trace-output",
+        default="",
+        help=(
+            "Optional JSONL output that annotates accepted action traces with "
+            "final exact SMART quality gain for policy/value training."
+        ),
+    )
+    parser.add_argument(
         "--only-existing-refine",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -121,6 +138,14 @@ def main() -> int:
     run_tag = args.run_tag or time.strftime("quality_guard_%Y%m%d_%H%M%S")
     output = _repo_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    final_trace_output = _repo_path(args.final_return_trace_output) if args.final_return_trace_output else None
+    if final_trace_output is not None:
+        final_trace_output.parent.mkdir(parents=True, exist_ok=True)
+        final_trace_output.write_text("", encoding="utf-8")
+    trace_actions_dir = _trace_actions_dir(args, output, final_trace_output)
+    if trace_actions_dir is not None:
+        trace_actions_dir.mkdir(parents=True, exist_ok=True)
+    args._trace_actions_dir = trace_actions_dir
 
     report: dict[str, Any] = {
         "config": args.config,
@@ -140,6 +165,8 @@ def main() -> int:
         "stage": args.stage,
         "selection_objective": args.selection_objective,
         "quality_weights": quality_weights,
+        "trace_actions_dir": str(trace_actions_dir) if trace_actions_dir is not None else "",
+        "final_return_trace_output": str(final_trace_output) if final_trace_output is not None else "",
         "run_tag": run_tag,
         "records": {},
     }
@@ -192,6 +219,15 @@ def main() -> int:
                 selection_objective=args.selection_objective,
                 quality_score_weights=quality_weights,
             )
+            final_trace_rows = _append_final_return_trace_rows(
+                final_trace_output,
+                category=category_name,
+                mesh_id=mesh_id,
+                runs=runs,
+                selection=selection.to_dict(),
+                candidate_labels=candidate_labels,
+                quality_weights=quality_weights,
+            )
             selected_run = runs.get(selection.selected_label, {})
             selected_bbox = _selected_bbox_path(selected_run)
             guarded_output = None
@@ -232,6 +268,7 @@ def main() -> int:
                         label: quality_gain_score(selection.comparisons.get(label), weights=quality_weights)
                         for label in candidate_labels
                     },
+                    "final_return_trace_rows": final_trace_rows,
                     "skipped_candidate_labels": skipped_candidate_labels,
                     "adaptive_stop_reason": adaptive_stop_reason,
                 },
@@ -283,6 +320,14 @@ def _run_mcts(
     prior_weight: float | None = None,
 ) -> dict[str, Any]:
     weight = float(args.prior_weight if prior_weight is None else prior_weight)
+    trace_path = None
+    trace_dir = getattr(args, "_trace_actions_dir", None)
+    if trace_dir is not None:
+        trace_path = Path(trace_dir) / f"{_safe_tag(exp_tag)}.jsonl"
+        try:
+            trace_path.unlink()
+        except FileNotFoundError:
+            pass
     command = [
         args.python,
         "-m",
@@ -308,6 +353,8 @@ def _run_mcts(
         "--set",
         f"mcts.action_value_weight={args.action_value_weight if prior else 0.0}",
     ]
+    if trace_path is not None:
+        command.extend(["--set", f"mcts.trace_actions_path={trace_path}"])
     if prior:
         command.extend(
             [
@@ -330,6 +377,7 @@ def _run_mcts(
     except subprocess.TimeoutExpired as exc:
         return {
             "command": command,
+            "trace_actions_path": str(trace_path) if trace_path is not None else "",
             "elapsed_sec": time.perf_counter() - started,
             "returncode": 124,
             "stdout_tail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
@@ -338,6 +386,7 @@ def _run_mcts(
         }
     return {
         "command": command,
+        "trace_actions_path": str(trace_path) if trace_path is not None else "",
         "elapsed_sec": time.perf_counter() - started,
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-2000:],
@@ -474,9 +523,118 @@ def _copy_bbox_dir(source: Path, destination: Path, *, force: bool) -> None:
     shutil.copytree(source, destination)
 
 
+def _trace_actions_dir(
+    args: argparse.Namespace,
+    output: Path,
+    final_trace_output: Path | None,
+) -> Path | None:
+    if str(args.trace_actions_dir or "").strip():
+        return _repo_path(args.trace_actions_dir)
+    if final_trace_output is None:
+        return None
+    return output.with_name(f"{output.stem}_action_traces")
+
+
+def _append_final_return_trace_rows(
+    output: Path | None,
+    *,
+    category: str,
+    mesh_id: str,
+    runs: dict[str, dict[str, Any]],
+    selection: dict[str, Any],
+    candidate_labels: list[str],
+    quality_weights: dict[str, float],
+) -> int:
+    if output is None:
+        return 0
+    labels = ["baseline"] + list(candidate_labels)
+    comparisons = selection.get("comparisons", {})
+    selected_label = str(selection.get("selected_label", ""))
+    rows_written = 0
+    with output.open("a", encoding="utf-8") as out_file:
+        for label in labels:
+            run = runs.get(label, {})
+            trace_path = str(run.get("trace_actions_path", "") or "")
+            if not trace_path:
+                continue
+            path = Path(trace_path)
+            if not path.exists():
+                continue
+            comparison = comparisons.get(label)
+            if label == "baseline":
+                quality_score = 0.0
+                final_not_worse = True
+                final_improved = False
+                final_deltas = {}
+                final_worse_metrics = []
+                final_improved_metrics = []
+            else:
+                final_not_worse = bool((comparison or {}).get("not_worse", False))
+                final_improved = bool((comparison or {}).get("improved", False))
+                final_deltas = dict((comparison or {}).get("deltas", {}))
+                final_worse_metrics = list((comparison or {}).get("worse_metrics", []))
+                final_improved_metrics = list((comparison or {}).get("improved_metrics", []))
+                quality_score = _final_return_quality_score(
+                    comparison or {},
+                    weights=quality_weights,
+                    not_worse=final_not_worse,
+                    worse_metrics=final_worse_metrics,
+                )
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                action_reward = float(row.get("reward", 0.0) or 0.0)
+                row.update(
+                    {
+                        "schema_version": 4,
+                        "record_type": "mcts_final_return",
+                        "original_record_type": str(row.get("record_type", "")),
+                        "category": str(row.get("category", category) or category),
+                        "mesh": str(row.get("mesh", mesh_id) or mesh_id),
+                        "run_label": str(label),
+                        "selected_run": bool(label == selected_label),
+                        "selection_label": selected_label,
+                        "selection_reason": str(selection.get("reason", "")),
+                        "action_reward": action_reward,
+                        "reward": float(quality_score),
+                        "final_quality_score": float(quality_score),
+                        "final_not_worse": final_not_worse,
+                        "final_improved": final_improved,
+                        "final_deltas": final_deltas,
+                        "final_worse_metrics": final_worse_metrics,
+                        "final_improved_metrics": final_improved_metrics,
+                    }
+                )
+                out_file.write(json.dumps(row, sort_keys=True) + "\n")
+                rows_written += 1
+    return rows_written
+
+
+def _final_return_quality_score(
+    comparison: dict[str, Any],
+    *,
+    weights: dict[str, float],
+    not_worse: bool,
+    worse_metrics: list[str],
+) -> float:
+    score = quality_gain_score(comparison, weights=weights)
+    if not_worse:
+        return float(score)
+    deltas = comparison.get("deltas", {})
+    violation = 0.0
+    for metric in worse_metrics:
+        violation += abs(float(deltas.get(metric, 0.0))) * float(weights.get(metric, 1.0))
+    return -max(abs(float(score)), violation, 1.0e-9)
+
+
 def _repo_path(path: str | Path) -> Path:
     out = Path(path)
     return out if out.is_absolute() else REPO_ROOT / out
+
+
+def _safe_tag(text: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(text))
 
 
 def _parse_prior_weights(args: argparse.Namespace) -> list[float]:

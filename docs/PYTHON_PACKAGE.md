@@ -282,6 +282,10 @@ The current packaged policy-value research prior is
 `smart/assets/priors/category_general_policy_value_agent_prior.json`. Use it
 only with `allow_search_order_changes=true` or the guarded runner, because it
 changes MCTS search order.
+To collect final-return training rows for this model, run guarded MCTS with
+`--final-return-trace-output`. The output JSONL can be passed back to
+`smart build-prior --model-type policy-value`; each row keeps the immediate
+step reward as `action_reward` and uses `reward` for final exact quality gain.
 
 The same function is available from Python:
 

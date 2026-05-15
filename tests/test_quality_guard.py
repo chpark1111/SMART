@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import smart
-from scripts.run_quality_guarded_mcts import _adaptive_stop_reason, _aggregate_records
+from scripts.run_quality_guarded_mcts import (
+    _adaptive_stop_reason,
+    _aggregate_records,
+    _final_return_quality_score,
+)
 from smart.quality import compare_quality, quality_gain_score, select_quality_guarded_run
 
 
@@ -147,6 +151,22 @@ def test_quality_score_objective_prefers_larger_metric_gain() -> None:
     assert selection.reason == "candidate_quality_score_improved"
     assert quality_gain_score(selection.comparisons["large_gain"]) > quality_gain_score(selection.comparisons["small_gain"])
     assert smart.quality_gain_score is quality_gain_score
+
+
+def test_final_return_score_penalizes_guard_failure() -> None:
+    comparison = compare_quality(
+        _summary(Avg_BVS=2.1, Avg_MOV=0.7),
+        _summary(),
+    ).to_dict()
+
+    assert quality_gain_score(comparison) > 0
+    assert comparison["not_worse"] is False
+    assert _final_return_quality_score(
+        comparison,
+        weights={},
+        not_worse=False,
+        worse_metrics=comparison["worse_metrics"],
+    ) < 0
 
 
 def test_adaptive_guard_stops_only_after_quality_improvement() -> None:
