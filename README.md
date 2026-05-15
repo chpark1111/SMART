@@ -1043,6 +1043,22 @@ outputs or deltas. On the current `52`-row manifest dataset, leave-one-out
 validation gives accuracy `0.75`, F1 `0.780`, and ROC-AUC `0.784` versus the
 majority baseline accuracy `0.558`. This is not a final policy, but it is a
 real learned signal for deciding when the extra local search is worth running.
+The guarded local-refine runner can use the gate to skip local search below a
+probability threshold:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --input-stage mcts \
+  --from-input-manifest \
+  --gate-path smart/assets/gates/local_refine_gate_manifest52.json \
+  --gate-threshold 0.5 \
+  --output runs/bench_exact/local_refine_gate_run.json
+```
+
+A forced skip smoke with `--gate-threshold 1.0` scored one airplane case,
+skipped local refine, selected the input bbox, and wrote a successful guarded
+output.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

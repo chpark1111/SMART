@@ -940,7 +940,10 @@ tables are deferred until after exact parity is locked.
    `52`-row manifest export. Leave-one-out validation measured accuracy
    `0.75`, F1 `0.780`, and ROC-AUC `0.784`, compared with a majority baseline
    accuracy of `0.558`. This does not replace exact SMART evaluation; it is a
-   decision model for when to spend the extra local-refine time.
+   decision model for when to spend the extra local-refine time. The guarded
+   runner now accepts `--gate-path` and `--gate-threshold`; a forced skip smoke
+   confirmed that low-probability cases can bypass the local-refine subprocess
+   and still produce a guarded bbox output.
 
 1. Optional MCTS transposition table
 

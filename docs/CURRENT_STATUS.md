@@ -427,6 +427,11 @@ Not promoted to default:
   baseline accuracy `0.558`. This makes local-refine gating a better near-term
   RL target than raw MCTS action ordering: learn when the post-MCTS local search
   is likely to pay off, then still use exact SMART metrics as the final guard.
+  `scripts/run_quality_guarded_local_refine.py --gate-path ... --gate-threshold`
+  can now skip local refinement below the threshold; a forced skip smoke
+  (`runs/bench_exact/local_refine_gate_skip_smoke.json`) scored one airplane
+  case, skipped local refine, selected input, and wrote a successful guarded
+  output.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit

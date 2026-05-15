@@ -415,6 +415,18 @@ The packaged research gate is
 `smart/assets/gates/local_refine_gate_manifest52.json`. It uses only category
 and pre-local-refine SMART metrics, and its current leave-one-out validation on
 the `52`-row dataset is accuracy `0.75`, F1 `0.780`, and ROC-AUC `0.784`.
+Use it in the guarded runner to skip expensive local refinement when the model
+predicts a low improvement probability:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --input-stage mcts \
+  --from-input-manifest \
+  --gate-path smart/assets/gates/local_refine_gate_manifest52.json \
+  --gate-threshold 0.5 \
+  --output runs/bench_exact/local_refine_gate_run.json
+```
 
 ## Command Line Usage
 

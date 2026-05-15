@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from smart.pipeline.config import load_config, workspace_path  # noqa: E402
 from smart.pipeline.manifest import ManifestWriter, StageRecord  # noqa: E402
 from smart.pipeline.stages import bbox_dir_for_render, list_mesh_ids  # noqa: E402
+from smart.local_refine_gate import load_local_refine_gate, score_local_refine_gate  # noqa: E402
 from smart.quality import GuardedSelection, select_quality_guarded_run  # noqa: E402
 
 
@@ -72,6 +73,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Reuse the latest local_refine output instead of rerunning the local_refine stage.",
     )
+    parser.add_argument("--gate-path", default="", help="Optional local-refine gate JSON; skips local refine below threshold")
+    parser.add_argument("--gate-threshold", type=float, default=0.5)
     parser.add_argument("--print-full-report", action="store_true", help="Print the full JSON report instead of a compact summary")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--python", default=sys.executable)
@@ -82,6 +85,7 @@ def main() -> int:
     args = parse_args()
     cfg = load_config(args.config)
     category_meshes = _select_category_meshes(cfg, args)
+    gate_payload = load_local_refine_gate(_repo_path(args.gate_path)) if args.gate_path else None
     run_tag = args.run_tag or time.strftime("local_refine_guard_%Y%m%d_%H%M%S")
     output = _repo_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +103,8 @@ def main() -> int:
         "reward_backend": args.reward_backend,
         "backend": args.backend,
         "reuse_local_refine": args.reuse_local_refine,
+        "gate_path": args.gate_path,
+        "gate_threshold": args.gate_threshold,
         "run_tag": run_tag,
         "categories": sorted(category_meshes),
         "meshes": category_meshes,
@@ -109,16 +115,27 @@ def main() -> int:
         for index, mesh_id in enumerate(mesh_ids, start=1):
             mesh_tag = f"{run_tag}_{category_name}_{index:03d}"
             baseline = _run_eval(args, category=category_name, mesh_id=mesh_id, stage=args.input_stage, exp_tag=f"{mesh_tag}_input")
-            if args.reuse_local_refine:
+            gate_decision = _gate_decision(gate_payload, args, category_name, mesh_id, baseline)
+            if gate_decision.get("skip_local_refine"):
+                refined = {
+                    "command": None,
+                    "elapsed_sec": 0.0,
+                    "returncode": 0,
+                    "skipped_by_gate": True,
+                    "gate": gate_decision,
+                }
+            elif args.reuse_local_refine:
                 refined = {
                     "command": None,
                     "elapsed_sec": 0.0,
                     "returncode": 0,
                     "reused": True,
+                    "gate": gate_decision,
                 }
             else:
                 refined = _run_local_refine(args, category=category_name, mesh_id=mesh_id, exp_tag=mesh_tag)
-            if refined.get("returncode") == 0:
+                refined["gate"] = gate_decision
+            if refined.get("returncode") == 0 and not refined.get("skipped_by_gate"):
                 refined.update(_run_eval(args, category=category_name, mesh_id=mesh_id, stage="local_refine", exp_tag=f"{mesh_tag}_local_refine"))
             runs = {"input": baseline, "local_refine": refined}
             selection = _select_local_refine(args, runs)
@@ -152,6 +169,8 @@ def main() -> int:
                     "local_refine_summary": refined.get("summary"),
                     "local_refine_elapsed_sec": refined.get("elapsed_sec"),
                     "local_refine_reused": bool(refined.get("reused")),
+                    "local_refine_skipped_by_gate": bool(refined.get("skipped_by_gate")),
+                    "gate": gate_decision,
                 },
                 error=error,
             )
@@ -407,6 +426,8 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "input_stage": report.get("input_stage"),
         "from_input_manifest": report.get("from_input_manifest"),
         "reuse_local_refine": report.get("reuse_local_refine"),
+        "gate_path": report.get("gate_path"),
+        "gate_threshold": report.get("gate_threshold"),
         "selection_mode": report.get("selection_mode"),
         "run_tag": report.get("run_tag"),
         "aggregate": report.get("aggregate", {}),
@@ -448,6 +469,46 @@ def _select_local_refine(args: argparse.Namespace, runs: dict[str, dict[str, Any
     )
 
 
+def _gate_decision(
+    gate_payload: dict[str, Any] | None,
+    args: argparse.Namespace,
+    category: str,
+    mesh_id: str,
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    if gate_payload is None:
+        return {"enabled": False, "skip_local_refine": False}
+    summary = baseline.get("summary")
+    if not isinstance(summary, dict):
+        return {
+            "enabled": True,
+            "skip_local_refine": False,
+            "reason": "missing_input_summary",
+            "threshold": float(args.gate_threshold),
+        }
+    row = {
+        "category": category,
+        "mesh_id": mesh_id,
+        "input_Avg_num_box": summary.get("Avg_num_box", 0.0),
+        "input_Avg_BVS": summary.get("Avg_BVS", 0.0),
+        "input_Avg_MOV": summary.get("Avg_MOV", 0.0),
+        "input_Avg_TOV": summary.get("Avg_TOV", 0.0),
+        "input_Avg_Covered": summary.get("Avg_Covered", 0.0),
+        "input_Avg_vIoU": summary.get("Avg_vIoU", 0.0),
+        "input_Avg_cub_CD": summary.get("Avg_cub_CD", 0.0),
+    }
+    probability = score_local_refine_gate(gate_payload, row)
+    threshold = float(args.gate_threshold)
+    skip = probability < threshold
+    return {
+        "enabled": True,
+        "skip_local_refine": skip,
+        "probability": probability,
+        "threshold": threshold,
+        "reason": "below_threshold" if skip else "above_threshold",
+    }
+
+
 def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
     total = len(records)
     status_counts: dict[str, int] = {}
@@ -459,6 +520,9 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
     local_times: list[float] = []
     local_deltas: list[dict[str, float]] = []
     selected_local_deltas: list[dict[str, float]] = []
+    gate_scored = 0
+    gate_skipped = 0
+    gate_probabilities: list[float] = []
     categories: dict[str, dict[str, int]] = {}
     for record in records.values():
         guarded = record.get("guarded_record", {})
@@ -495,6 +559,13 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
         local_time = float(record.get("runs", {}).get("local_refine", {}).get("elapsed_sec", 0.0) or 0.0)
         if local_time > 0.0:
             local_times.append(local_time)
+        gate = record.get("runs", {}).get("local_refine", {}).get("gate")
+        if isinstance(gate, dict) and gate.get("enabled"):
+            gate_scored += 1
+            if gate.get("skip_local_refine"):
+                gate_skipped += 1
+            if gate.get("probability") is not None:
+                gate_probabilities.append(float(gate["probability"]))
     return {
         "total": total,
         "status_counts": status_counts,
@@ -504,6 +575,9 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
         "local_improved": local_improved,
         "local_worse": local_worse,
         "mean_local_refine_elapsed_sec": sum(local_times) / len(local_times) if local_times else None,
+        "gate_scored": gate_scored,
+        "gate_skipped": gate_skipped,
+        "mean_gate_probability": sum(gate_probabilities) / len(gate_probabilities) if gate_probabilities else None,
         "mean_local_deltas": _mean_deltas(local_deltas),
         "mean_selected_local_deltas": _mean_deltas(selected_local_deltas),
         "categories": categories,
