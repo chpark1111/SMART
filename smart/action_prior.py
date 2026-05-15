@@ -1004,6 +1004,126 @@ def build_policy_gradient_action_prior_from_traces(
     return payload
 
 
+def build_policy_value_action_prior_from_traces(
+    traces: Iterable[str | Path],
+    *,
+    output: str | Path,
+    min_reward: float = -1.0e18,
+    smoothing: float = 1.0,
+    num_action_scale: int | None = None,
+    epochs: int = 120,
+    learning_rate: float = 0.005,
+    l2: float = 1e-4,
+    hidden_size: int = 48,
+    device: str = "auto",
+    advantage_baseline: str = "category",
+    advantage_clip: float = 5.0,
+    entropy_coef: float = 0.005,
+    max_logit_abs: float = 6.0,
+    accepted_weight: float = 1.0,
+    candidate_weight: float = 1.0,
+    selected_candidate_weight: float = 1.0,
+    category_balance: bool = False,
+    value_epochs: int | None = None,
+    value_learning_rate: float | None = None,
+    value_clip: float = 5.0,
+) -> dict[str, Any]:
+    """Train an action-level policy prior plus an action-value head.
+
+    The policy head guides action ordering; the value head predicts normalized
+    exact-reward advantage for a concrete action. Both are opt-in search biases:
+    SMART's exact geometric reward still decides accepted rollouts and final
+    evaluation.
+    """
+
+    trace_paths = [Path(path) for path in traces]
+    policy_tmp = Path(output).with_suffix(".policy.tmp.json")
+    payload = build_policy_gradient_action_prior_from_traces(
+        trace_paths,
+        output=policy_tmp,
+        min_reward=min_reward,
+        smoothing=smoothing,
+        num_action_scale=num_action_scale,
+        epochs=epochs,
+        learning_rate=learning_rate,
+        l2=l2,
+        hidden_size=hidden_size,
+        device=device,
+        advantage_baseline=advantage_baseline,
+        advantage_clip=advantage_clip,
+        entropy_coef=entropy_coef,
+        max_logit_abs=max_logit_abs,
+        accepted_weight=accepted_weight,
+        candidate_weight=candidate_weight,
+        selected_candidate_weight=selected_candidate_weight,
+        category_balance=category_balance,
+    )
+    try:
+        policy_tmp.unlink()
+    except OSError:
+        pass
+
+    examples = _action_value_examples(
+        trace_paths,
+        min_reward=min_reward,
+        num_action_scale=int(payload["num_action_scale"]),
+        categories=[str(item) for item in payload.get("categories", [])],
+        advantage_baseline=advantage_baseline,
+        advantage_clip=value_clip,
+        accepted_weight=accepted_weight,
+        candidate_weight=candidate_weight,
+        selected_candidate_weight=selected_candidate_weight,
+        category_balance=category_balance,
+    )
+    if not examples["features"]:
+        raise ValueError("no trainable action-value examples found")
+
+    torch = _import_torch()
+    torch_device = _select_torch_device(torch, device)
+    features = torch.tensor(examples["features"], dtype=torch.float32, device=torch_device)
+    targets = torch.tensor(examples["targets"], dtype=torch.float32, device=torch_device)
+    weights = torch.tensor(examples["weights"], dtype=torch.float32, device=torch_device)
+    weight_sum = torch.clamp(weights.sum(), min=1.0e-12)
+    input_w = torch.tensor(payload["action_input_weights"], dtype=torch.float32, device=torch_device)
+    hidden_b = torch.tensor(payload["action_hidden_bias"], dtype=torch.float32, device=torch_device)
+    hidden_size = max(int(payload.get("hidden_size", hidden_size) or hidden_size), 1)
+    value_w = torch.zeros(hidden_size, dtype=torch.float32, device=torch_device, requires_grad=True)
+    value_b = torch.tensor(0.0, dtype=torch.float32, device=torch_device, requires_grad=True)
+    optimizer = torch.optim.Adam(
+        [value_w, value_b],
+        lr=float(value_learning_rate if value_learning_rate is not None else learning_rate),
+    )
+    for _ in range(max(int(value_epochs if value_epochs is not None else epochs), 0)):
+        hidden = torch.tanh(features.matmul(input_w) + hidden_b)
+        values = hidden.matmul(value_w) + value_b
+        loss = ((values - targets).square() * weights).sum() / weight_sum + float(l2) * value_w.square().mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    payload["policy_type"] = "action_policy_value_prior"
+    payload["action_value_output_weights"] = value_w.detach().cpu().tolist()
+    payload["action_value_output_bias"] = float(value_b.detach().cpu().item())
+    payload["metadata"].update(
+        {
+            "source": "smart.action_prior.build_policy_value_action_prior_from_traces",
+            "model_type": "policy_value_agent",
+            "value_records_used": int(examples["records_used"]),
+            "value_candidate_records_used": int(examples["candidate_records_used"]),
+            "value_epochs": int(value_epochs if value_epochs is not None else epochs),
+            "value_learning_rate": float(value_learning_rate if value_learning_rate is not None else learning_rate),
+            "value_clip": float(value_clip),
+            "value_target_mean": float(examples["target_mean"]),
+            "value_target_std": float(examples["target_std"]),
+        }
+    )
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
 def coord_scale_keys(num_action_scale: int) -> list[str]:
     """Return SMART coord/scale prior keys for the legacy action order."""
 
@@ -1060,6 +1180,10 @@ class LoadedActionPrior:
         self.action_hidden_bias = [float(value) for value in payload.get("action_hidden_bias", [])]
         self.action_output_weights = [float(value) for value in payload.get("action_output_weights", [])]
         self.action_output_bias = float(payload.get("action_output_bias", 0.0) or 0.0)
+        self.action_value_output_weights = [
+            float(value) for value in payload.get("action_value_output_weights", [])
+        ]
+        self.action_value_output_bias = float(payload.get("action_value_output_bias", 0.0) or 0.0)
         self.model_num_action_scale = int(payload.get("num_action_scale", 0) or 0)
 
     def action_logits_for(
@@ -1070,7 +1194,7 @@ class LoadedActionPrior:
         context: dict[str, Any] | None = None,
     ) -> list[float]:
         actions = [int(action) for action in actions]
-        if self.policy_type == "action_mlp_prior":
+        if self.policy_type in {"action_mlp_prior", "action_policy_value_prior"}:
             return self._action_mlp_logits_for(
                 actions,
                 num_action_scale=int(num_action_scale),
@@ -1089,6 +1213,33 @@ class LoadedActionPrior:
             else:
                 key = "%d:%d" % (local // int(num_action_scale), local % int(num_action_scale))
             out.append(float(class_logits.get(key, self.default_logit)))
+        return out
+
+    def action_values_for(
+        self,
+        actions: Iterable[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any] | None = None,
+    ) -> list[float]:
+        actions = [int(action) for action in actions]
+        if not self.action_value_output_weights:
+            return [0.0 for _ in actions]
+        model_num_action_scale = max(self.model_num_action_scale, int(num_action_scale), 1)
+        out = []
+        for action in actions:
+            hidden = self._action_mlp_hidden_for(
+                int(action),
+                num_action_scale=int(num_action_scale),
+                model_num_action_scale=model_num_action_scale,
+                context=context or {},
+            )
+            value = self.action_value_output_bias
+            for hidden_idx, hidden_value in enumerate(hidden):
+                if hidden_idx >= len(self.action_value_output_weights):
+                    break
+                value += hidden_value * self.action_value_output_weights[hidden_idx]
+            out.append(float(value))
         return out
 
     def _class_logits(self, context: dict[str, Any]) -> dict[str, float]:
@@ -1159,14 +1310,12 @@ class LoadedActionPrior:
         model_num_action_scale = max(self.model_num_action_scale, int(num_action_scale), 1)
         out = []
         for action in actions:
-            features = action_features(
-                context,
+            hidden = self._action_mlp_hidden_for(
                 int(action),
-                action_num_action_scale=int(num_action_scale),
+                num_action_scale=int(num_action_scale),
                 model_num_action_scale=model_num_action_scale,
-                categories=self.categories,
+                context=context,
             )
-            _, hidden = _mlp_hidden(features, self.action_input_weights, self.action_hidden_bias)
             logit = self.action_output_bias
             for hidden_idx, value in enumerate(hidden):
                 if hidden_idx >= len(self.action_output_weights):
@@ -1174,6 +1323,24 @@ class LoadedActionPrior:
                 logit += value * self.action_output_weights[hidden_idx]
             out.append(float(logit))
         return out
+
+    def _action_mlp_hidden_for(
+        self,
+        action: int,
+        *,
+        num_action_scale: int,
+        model_num_action_scale: int,
+        context: dict[str, Any],
+    ) -> list[float]:
+        features = action_features(
+            context,
+            int(action),
+            action_num_action_scale=int(num_action_scale),
+            model_num_action_scale=int(model_num_action_scale),
+            categories=self.categories,
+        )
+        _, hidden = _mlp_hidden(features, self.action_input_weights, self.action_hidden_bias)
+        return hidden
 
 
 def linear_feature_names(categories: list[str]) -> list[str]:
@@ -1314,6 +1481,149 @@ def _candidate_group_key(record: dict[str, Any]) -> str:
             str(record.get("node_id", "")),
         ]
     )
+
+
+def _action_value_examples(
+    trace_paths: list[Path],
+    *,
+    min_reward: float,
+    num_action_scale: int,
+    categories: list[str],
+    advantage_baseline: str,
+    advantage_clip: float,
+    accepted_weight: float,
+    candidate_weight: float,
+    selected_candidate_weight: float,
+    category_balance: bool,
+) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    for trace_path in trace_paths:
+        with trace_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                reward = float(record.get("reward", 0.0))
+                if reward < min_reward:
+                    continue
+                records.append(record)
+
+    rewards_by_key: dict[str, list[float]] = defaultdict(list)
+    global_rewards: list[float] = []
+    for record in records:
+        reward = float(record.get("reward", 0.0))
+        global_rewards.append(reward)
+        if advantage_baseline == "mesh":
+            key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            key = "__zero__"
+        elif advantage_baseline == "global":
+            key = "__global__"
+        else:
+            key = str(record.get("category", ""))
+        rewards_by_key[key].append(reward)
+    global_baseline = sum(global_rewards) / max(len(global_rewards), 1)
+    baseline_map = {
+        key: (0.0 if advantage_baseline == "none" else sum(values) / len(values))
+        for key, values in rewards_by_key.items()
+    }
+
+    candidate_rewards_by_group: dict[str, list[float]] = defaultdict(list)
+    for record in records:
+        if str(record.get("record_type", "")) == "mcts_candidate":
+            candidate_rewards_by_group[_candidate_group_key(record)].append(float(record.get("reward", 0.0)))
+    candidate_baseline_by_group = {
+        key: sum(values) / len(values)
+        for key, values in candidate_rewards_by_group.items()
+        if len(values) > 1
+    }
+
+    features: list[list[float]] = []
+    raw_targets: list[float] = []
+    weights: list[float] = []
+    example_categories: list[str] = []
+    candidate_records_used = 0
+    for record in records:
+        action = int(record.get("action", -1))
+        if action < 0:
+            continue
+        action_num_action_scale = max(int(record.get("num_action_scale", 0) or num_action_scale), 1)
+        per_bbox = 6 * action_num_action_scale + 1
+        selected_bbox = action // per_bbox
+        num_bbox = max(int(record.get("num_bbox", 0) or 0), selected_bbox + 1)
+        if action >= num_bbox * per_bbox:
+            continue
+        if advantage_baseline == "mesh":
+            baseline_key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            baseline_key = "__zero__"
+        elif advantage_baseline == "global":
+            baseline_key = "__global__"
+        else:
+            baseline_key = str(record.get("category", ""))
+        reward = float(record.get("reward", 0.0))
+        if str(record.get("record_type", "")) == "mcts_candidate":
+            target = reward - candidate_baseline_by_group.get(_candidate_group_key(record), global_baseline)
+            weight = float(candidate_weight)
+            if bool(record.get("selected", False)):
+                weight *= float(selected_candidate_weight)
+            candidate_records_used += 1
+        else:
+            target = reward - baseline_map.get(baseline_key, global_baseline)
+            weight = float(accepted_weight)
+        feature_record = dict(record)
+        feature_record["num_bbox"] = num_bbox
+        features.append(
+            action_features(
+                feature_record,
+                action,
+                action_num_action_scale=action_num_action_scale,
+                model_num_action_scale=num_action_scale,
+                categories=categories,
+            )
+        )
+        raw_targets.append(target)
+        weights.append(max(weight, 0.0))
+        example_categories.append(str(record.get("category", "")))
+
+    if not raw_targets:
+        return {
+            "features": [],
+            "targets": [],
+            "weights": [],
+            "records_used": 0,
+            "candidate_records_used": 0,
+            "target_mean": 0.0,
+            "target_std": 1.0,
+        }
+
+    target_mean = sum(raw_targets) / len(raw_targets)
+    variance = sum((value - target_mean) ** 2 for value in raw_targets) / max(len(raw_targets), 1)
+    target_std = max(math.sqrt(variance), 1.0e-12)
+    clipped_targets = [
+        max(-float(advantage_clip), min(float(advantage_clip), (value - target_mean) / target_std))
+        for value in raw_targets
+    ]
+    if category_balance and weights:
+        category_counts = Counter(example_categories)
+        category_count = max(len(category_counts), 1)
+        total_examples = max(len(weights), 1)
+        weights = [
+            weight * total_examples / max(category_count * category_counts.get(category, 1), 1)
+            for weight, category in zip(weights, example_categories)
+        ]
+    mean_weight = sum(weights) / max(len(weights), 1)
+    if mean_weight > 0.0:
+        weights = [weight / mean_weight for weight in weights]
+    return {
+        "features": features,
+        "targets": clipped_targets,
+        "weights": weights,
+        "records_used": len(features),
+        "candidate_records_used": candidate_records_used,
+        "target_mean": target_mean,
+        "target_std": target_std,
+    }
 
 
 def _linear_logits(features: list[float], weights: list[list[float]], bias: list[float]) -> list[float]:

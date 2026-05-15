@@ -10,6 +10,7 @@ from smart.action_prior import (
     build_linear_action_prior_from_traces,
     build_mlp_action_prior_from_traces,
     build_policy_gradient_action_prior_from_traces,
+    build_policy_value_action_prior_from_traces,
     build_rl_mlp_action_prior_from_traces,
     load_action_prior,
 )
@@ -63,6 +64,7 @@ def test_build_action_prior_from_trace_records(tmp_path) -> None:
     assert smart.build_linear_action_prior_from_traces is build_linear_action_prior_from_traces
     assert smart.build_mlp_action_prior_from_traces is build_mlp_action_prior_from_traces
     assert smart.build_policy_gradient_action_prior_from_traces is build_policy_gradient_action_prior_from_traces
+    assert smart.build_policy_value_action_prior_from_traces is build_policy_value_action_prior_from_traces
     assert smart.build_rl_mlp_action_prior_from_traces is build_rl_mlp_action_prior_from_traces
     assert smart.load_action_prior is load_action_prior
 
@@ -462,6 +464,106 @@ def test_policy_gradient_action_prior_uses_candidate_records(tmp_path) -> None:
     assert all(isinstance(value, float) for value in logits)
 
 
+def test_policy_value_action_prior_scores_concrete_actions(tmp_path) -> None:
+    pytest.importorskip("torch")
+    trace = tmp_path / "candidate_trace.jsonl"
+    rows = [
+        {
+            "record_type": "mcts_candidate",
+            "category": "airplane",
+            "mesh": "a",
+            "mcts_iter": 1,
+            "rollout_step": 1,
+            "node_id": 0,
+            "coord_idx": 0,
+            "scale_idx": 0,
+            "num_action_scale": 2,
+            "action": 0,
+            "reward": 2.0,
+            "selected": True,
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+        {
+            "record_type": "mcts_candidate",
+            "category": "airplane",
+            "mesh": "a",
+            "mcts_iter": 1,
+            "rollout_step": 1,
+            "node_id": 0,
+            "coord_idx": 3,
+            "scale_idx": 1,
+            "num_action_scale": 2,
+            "action": 7,
+            "reward": -2.0,
+            "selected": False,
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+        {
+            "category": "chair",
+            "mesh": "b",
+            "coord_idx": 1,
+            "scale_idx": 0,
+            "num_action_scale": 2,
+            "action": 2,
+            "reward": 1.0,
+            "num_bbox": 2,
+            "bvs": 1.1,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+    ]
+    trace.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    output = tmp_path / "policy_value.json"
+
+    payload = build_policy_value_action_prior_from_traces(
+        [trace],
+        output=output,
+        epochs=2,
+        value_epochs=2,
+        learning_rate=0.01,
+        hidden_size=4,
+        device="cpu",
+    )
+    prior = load_action_prior(output)
+    logits = prior.action_logits_for(
+        [0, 7],
+        num_action_scale=2,
+        context={
+            "category": "airplane",
+            "mesh": "a",
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+    )
+    values = prior.action_values_for(
+        [0, 7],
+        num_action_scale=2,
+        context={
+            "category": "airplane",
+            "mesh": "a",
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+    )
+
+    assert payload["policy_type"] == "action_policy_value_prior"
+    assert payload["metadata"]["model_type"] == "policy_value_agent"
+    assert payload["metadata"]["value_records_used"] == 3
+    assert len(logits) == 2
+    assert len(values) == 2
+    assert all(isinstance(value, float) for value in values)
+
+
 def test_cli_build_prior(tmp_path, capsys) -> None:
     trace = tmp_path / "trace.jsonl"
     trace.write_text(
@@ -662,4 +764,70 @@ def test_cli_build_policy_gradient_agent_prior(tmp_path, capsys) -> None:
     printed = json.loads(capsys.readouterr().out)
     assert payload["policy_type"] == "action_mlp_prior"
     assert printed["model_type"] == "policy_gradient_agent"
+    assert printed["trainer_backend"] == "torch"
+
+
+def test_cli_build_policy_value_agent_prior(tmp_path, capsys) -> None:
+    pytest.importorskip("torch")
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "category": "airplane",
+                        "coord_idx": 0,
+                        "scale_idx": 0,
+                        "num_action_scale": 2,
+                        "action": 0,
+                        "num_bbox": 2,
+                        "reward": 1.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "category": "airplane",
+                        "coord_idx": 3,
+                        "scale_idx": 1,
+                        "num_action_scale": 2,
+                        "action": 7,
+                        "num_bbox": 2,
+                        "reward": -1.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "policy_value_prior.json"
+
+    rc = main(
+        [
+            "--config",
+            "configs/smoke_5.yaml",
+            "build-prior",
+            str(trace),
+            "--output",
+            str(output),
+            "--model-type",
+            "policy-value",
+            "--min-reward",
+            "-1000",
+            "--epochs",
+            "2",
+            "--value-epochs",
+            "2",
+            "--hidden-size",
+            "4",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    printed = json.loads(capsys.readouterr().out)
+    assert payload["policy_type"] == "action_policy_value_prior"
+    assert printed["model_type"] == "policy_value_agent"
     assert printed["trainer_backend"] == "torch"

@@ -212,10 +212,13 @@ defaults still prefer legacy exact Manifold for paper reproduction.
 MCTS learning/search-order experiments are opt-in only. The Rust MCTS runner can
 load `action_prior_path` with `action_prior_weight > 0` to bias PNS exploration
 from trace-derived priors. The Python-tree runner can also use
-`puct_prior_weight > 0` for PUCT-style child selection, and the Rust path can use
-`transposition_table=true` as a state-memory experiment. These options do not
-replace the exact Manifold reward, but they can change search trajectories, so
-keep them out of release/default configs until quality sweeps pass.
+`puct_prior_weight > 0` for PUCT-style child selection. Policy-value priors add
+`action_value_weight > 0`, which biases MCTS with a learned estimate of
+normalized exact-reward advantage for each concrete action. The Rust path can
+also use `transposition_table=true` as a state-memory experiment. These options
+do not replace the exact Manifold reward, but they can change search
+trajectories, so keep them out of release/default configs until quality sweeps
+pass.
 For research runs that must not regress final metrics, use
 `scripts/run_quality_guarded_mcts.py`. It writes selected outputs into
 `mcts_guarded`, and package consumers can evaluate or render that stage:
@@ -237,7 +240,8 @@ smart --config configs/smoke_5.yaml build-prior \
 ```
 
 For learned action-prior experiments, add `--model-type linear`, `--model-type
-mlp`, or `--model-type rl-mlp`:
+mlp`, `--model-type rl-mlp`, `--model-type pg-agent`, or
+`--model-type policy-value`:
 
 ```bash
 smart --config configs/smoke_5.yaml build-prior \
@@ -261,10 +265,23 @@ smart --config configs/smoke_5.yaml build-prior \
   --epochs 200 \
   --hidden-size 32 \
   --device auto
+
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_policy_value_prior.json \
+  --model-type policy-value \
+  --epochs 120 \
+  --value-epochs 120 \
+  --hidden-size 48 \
+  --device auto
 ```
 
 The MLP trainer uses PyTorch. `--device auto` probes Apple Silicon MPS first,
 then CUDA, then CPU; install the `pipeline` extra to get `torch`.
+The current packaged policy-value research prior is
+`smart/assets/priors/category_general_policy_value_agent_prior.json`. Use it
+only with `allow_search_order_changes=true` or the guarded runner, because it
+changes MCTS search order.
 
 The same function is available from Python:
 

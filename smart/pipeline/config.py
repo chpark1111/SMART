@@ -142,6 +142,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "action_prior_path": "",
         "action_prior_weight": 0.0,
         "puct_prior_weight": 0.0,
+        "action_value_weight": 0.0,
         "candidate_trace_path": "",
         "candidate_trace_top_k": 0,
         "score_cache_size": 4096,

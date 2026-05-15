@@ -275,6 +275,15 @@ def get_parser() -> ArgumentParser:
         help="optional PUCT-style child-selection prior weight; uses action_prior_path and changes search order",
     )
     parser.add_argument(
+        "--action_value_weight",
+        type=float,
+        default=0.0,
+        help=(
+            "optional action-value prior weight for policy-value models; "
+            "uses action_prior_path and changes search order"
+        ),
+    )
+    parser.add_argument(
         "--mcts_exp_tag",
         type=str,
         default="",

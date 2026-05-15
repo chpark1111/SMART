@@ -39,6 +39,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prior-path", required=True)
     parser.add_argument("--prior-weight", type=float, default=0.1)
     parser.add_argument(
+        "--puct-prior-weight",
+        type=float,
+        default=0.0,
+        help="Optional PUCT policy-prior weight for the learned MCTS candidate.",
+    )
+    parser.add_argument(
+        "--action-value-weight",
+        type=float,
+        default=0.0,
+        help="Optional policy-value action-value weight for the learned MCTS candidate.",
+    )
+    parser.add_argument(
         "--prior-weights",
         default="",
         help="Comma-separated learned-prior weights. When set, all weights are run as separate guarded candidates.",
@@ -116,6 +128,8 @@ def main() -> int:
         "meshes": category_meshes,
         "prior_path": args.prior_path,
         "prior_weight": args.prior_weight,
+        "puct_prior_weight": args.puct_prior_weight,
+        "action_value_weight": args.action_value_weight,
         "prior_weights": prior_weights,
         "adaptive_prior_weights": args.adaptive_prior_weights,
         "adaptive_stop_mode": args.adaptive_stop_mode,
@@ -289,6 +303,10 @@ def _run_mcts(
         f"mcts.exp_tag={exp_tag}",
         "--set",
         f"mcts.action_prior_weight={weight if prior else 0.0}",
+        "--set",
+        f"mcts.puct_prior_weight={args.puct_prior_weight if prior else 0.0}",
+        "--set",
+        f"mcts.action_value_weight={args.action_value_weight if prior else 0.0}",
     ]
     if prior:
         command.extend(

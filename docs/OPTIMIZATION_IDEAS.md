@@ -979,6 +979,16 @@ tables are deferred until after exact parity is locked.
    next optimization is not more threshold tuning; it is richer final-return
    training data for the policy.
 
+   The policy/value version is now implemented. `--model-type policy-value`
+   trains the existing action-level policy and a scalar action-value head over
+   concrete SMART actions, and MCTS accepts `mcts.action_value_weight` as an
+   opt-in bias. The first guarded policy-value run,
+   `runs/bench_exact/policy_value_quality_guard_cat3_mcts10.json`, kept `9/9`
+   guarded successes, selected the learned candidate on `1/9`, rejected `2`
+   worse candidates, and improved aggregate BVS/MOV/TOV/vIoU with unchanged
+   coverage. This proves the policy/value hook works; it does not yet produce
+   enough improvement rate to become a default.
+
 3. Opt-in tet-clipping reward backend
 
    Wire the verified Rust tet-clipping kernel into greedy/MCTS reward

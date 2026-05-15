@@ -497,6 +497,25 @@ Not promoted to default:
   `59/60` meshes and improved `1/60`; weight `0.1` was not worse on `57/60`
   and improved `1/60`. This confirms the current MLP prior is mostly safe but
   not yet useful enough as a quality-improving policy.
+- Action policy/value MCTS is now implemented as a real quality-first research
+  path. `smart build-prior --model-type policy-value` and
+  `smart.build_policy_value_action_prior_from_traces` train an action-level
+  policy plus a scalar value head over concrete SMART action ids. The value
+  head is consumed only when `mcts.action_value_weight > 0`, and PUCT policy
+  bias is exposed through `mcts.puct_prior_weight`.
+- The current packaged trained model
+  `smart/assets/priors/category_general_policy_value_agent_prior.json` used
+  `13,439` accepted/candidate records from `119` airplane/chair/table meshes.
+  The first guarded table known-case check improved BVS `1.0960 -> 1.0829`,
+  MOV `1.0834 -> 0.9006`, TOV `0.0759 -> 0.0698`, and vIoU
+  `0.9294 -> 0.9347`.
+- The category-balanced smoke
+  `runs/bench_exact/policy_value_quality_guard_cat3_mcts10.json` kept `9/9`
+  guarded successes, selected the learned candidate on `1/9`, kept baseline on
+  `8/9`, and rejected `2` worse candidates. Aggregate selected deltas were BVS
+  `-0.001451`, MOV `-0.020312`, TOV `-0.000678`, Covered `0`, and vIoU
+  `+0.000589`. This is now wired and measurable, but still too weak to promote
+  without larger final-return/value training.
 
 ## Next Work
 
@@ -511,10 +530,10 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Fix the candidate-aware PG-agent objective before collecting more data:
-   simple candidate-row scaling and first loss weighting did not improve final
-   quality. Try final-return labels or value targets before another large
-   collection.
+5. Improve the policy-value objective before collecting another large dataset:
+   the first value head is wired and can improve a table case, but the hit rate
+   is only `1/9` on the cat3 smoke. Next labels should target final-return
+   quality, not only local candidate reward.
 6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we

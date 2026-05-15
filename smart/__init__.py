@@ -10,6 +10,7 @@ __all__ = [
     "build_linear_action_prior_from_traces",
     "build_mlp_action_prior_from_traces",
     "build_policy_gradient_action_prior_from_traces",
+    "build_policy_value_action_prior_from_traces",
     "build_rl_mlp_action_prior_from_traces",
     "check_data",
     "compare_quality",
@@ -32,6 +33,7 @@ _API_EXPORTS = {
     "build_linear_action_prior_from_traces",
     "build_mlp_action_prior_from_traces",
     "build_policy_gradient_action_prior_from_traces",
+    "build_policy_value_action_prior_from_traces",
     "build_rl_mlp_action_prior_from_traces",
     "check_data",
     "compare_quality",
@@ -70,6 +72,11 @@ def __getattr__(name: str):
 
         globals()[name] = build_policy_gradient_action_prior_from_traces
         return build_policy_gradient_action_prior_from_traces
+    if name == "build_policy_value_action_prior_from_traces":
+        from .action_prior import build_policy_value_action_prior_from_traces
+
+        globals()[name] = build_policy_value_action_prior_from_traces
+        return build_policy_value_action_prior_from_traces
     if name == "build_rl_mlp_action_prior_from_traces":
         from .action_prior import build_rl_mlp_action_prior_from_traces
 

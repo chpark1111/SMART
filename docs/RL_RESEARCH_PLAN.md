@@ -293,3 +293,26 @@ refinement.
   small; the next research target is collecting more candidate traces and
   training the action policy on final-return quality, not just local candidate
   rewards.
+- `smart build-prior --model-type policy-value`,
+  `scripts/train_action_prior_from_traces.py --model-type policy-value`, and
+  `smart.build_policy_value_action_prior_from_traces` now train an action-level
+  policy plus a scalar action-value head. The value head predicts normalized
+  exact-reward advantage for a concrete SMART action; it is used only as an
+  opt-in MCTS search bias through `mcts.action_value_weight`.
+- `scripts/run_quality_guarded_mcts.py` now supports
+  `--puct-prior-weight` and `--action-value-weight`, so the quality guard can
+  test policy logits, PUCT child-selection bias, and action-value bias together.
+  The packaged model
+  `smart/assets/priors/category_general_policy_value_agent_prior.json` was
+  trained from `13,439` accepted/candidate records over `119` meshes, including
+  `2,937` candidate rows and `1,219,439` concrete action candidates.
+- The first policy-value smoke
+  `runs/bench_exact/policy_value_quality_guard_cat3_mcts10.json` used three
+  meshes per category, MCTS10/max-step10, prior weights `0.05,0.1,0.2`,
+  `puct_prior_weight=0.02`, and `action_value_weight=0.02`. It kept `9/9`
+  guarded successes, selected the learned candidate on `1/9`, kept baseline on
+  `8/9`, rejected `2` worse candidates, and improved aggregate BVS by
+  `-0.001451`, MOV by `-0.020312`, TOV by `-0.000678`, and vIoU by
+  `+0.000589` with no coverage drift. This is a real quality path, but still a
+  weak one; it needs final-return labels or a stronger policy/value objective
+  before promotion.

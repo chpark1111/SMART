@@ -12,6 +12,7 @@ from smart.action_prior import (
     build_linear_action_prior_from_traces,
     build_mlp_action_prior_from_traces,
     build_policy_gradient_action_prior_from_traces,
+    build_policy_value_action_prior_from_traces,
 )
 
 
@@ -27,7 +28,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, help="output prior JSON path")
     parser.add_argument(
         "--model-type",
-        choices=["counts", "linear", "mlp", "rl-mlp", "pg-agent"],
+        choices=["counts", "linear", "mlp", "rl-mlp", "pg-agent", "policy-value"],
         default="counts",
         help="Policy family. learned models only guide action ordering.",
     )
@@ -73,6 +74,14 @@ def main() -> int:
     parser.add_argument("--advantage-clip", type=float, default=5.0, help="normalized advantage clip for --model-type rl-mlp")
     parser.add_argument("--entropy-coef", type=float, default=0.01, help="entropy bonus for --model-type rl-mlp")
     parser.add_argument("--max-logit-abs", type=float, default=8.0, help="calibrate RL prior logits to this max absolute value")
+    parser.add_argument("--value-epochs", type=int, default=0, help="policy-value value-head epochs; default reuses --epochs")
+    parser.add_argument(
+        "--value-learning-rate",
+        type=float,
+        default=0.0,
+        help="policy-value value-head learning rate; default reuses --learning-rate",
+    )
+    parser.add_argument("--value-clip", type=float, default=5.0, help="policy-value normalized action-value target clip")
     parser.add_argument("--accepted-weight", type=float, default=1.0, help="pg-agent loss weight for accepted SMART trace records")
     parser.add_argument("--candidate-weight", type=float, default=1.0, help="pg-agent loss weight for mcts_candidate records")
     parser.add_argument(
@@ -153,6 +162,30 @@ def main() -> int:
             candidate_weight=args.candidate_weight,
             selected_candidate_weight=args.selected_candidate_weight,
             category_balance=args.category_balance,
+        )
+    elif args.model_type == "policy-value":
+        payload = build_policy_value_action_prior_from_traces(
+            args.traces,
+            output=args.output,
+            min_reward=args.min_reward,
+            smoothing=args.alpha,
+            num_action_scale=args.num_action_scale or None,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            l2=args.l2,
+            hidden_size=args.hidden_size,
+            device=args.device,
+            advantage_baseline=args.advantage_baseline,
+            advantage_clip=args.advantage_clip,
+            entropy_coef=args.entropy_coef,
+            max_logit_abs=args.max_logit_abs,
+            accepted_weight=args.accepted_weight,
+            candidate_weight=args.candidate_weight,
+            selected_candidate_weight=args.selected_candidate_weight,
+            category_balance=args.category_balance,
+            value_epochs=args.value_epochs or None,
+            value_learning_rate=args.value_learning_rate or None,
+            value_clip=args.value_clip,
         )
     else:
         payload = build_action_prior_from_traces(

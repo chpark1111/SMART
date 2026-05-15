@@ -164,6 +164,7 @@ class MCTSTreeSearch:
         self.num_actions = self.num_bbox * (6 * self.num_action_scale + 1)
         self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
         self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
+        self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
         self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self._opposite_actions = self._build_opposite_actions()
@@ -206,7 +207,11 @@ class MCTSTreeSearch:
         self._store_transposition(self.root_id)
 
     def _load_action_prior(self, path):
-        if not path or (self.action_prior_weight == 0.0 and self.puct_prior_weight == 0.0):
+        if not path or (
+            self.action_prior_weight == 0.0
+            and self.puct_prior_weight == 0.0
+            and self.action_value_weight == 0.0
+        ):
             return None
         if not os.path.exists(path):
             warnings.warn("MCTS action_prior_path does not exist: %s" % path)
@@ -244,7 +249,11 @@ class MCTSTreeSearch:
 
     def _action_prior_logits_for(self, actions):
         actions = [int(action) for action in actions]
-        if (self.action_prior_weight == 0.0 and self.puct_prior_weight == 0.0) or self.action_prior is None:
+        if (
+            self.action_prior_weight == 0.0
+            and self.puct_prior_weight == 0.0
+            and self.action_value_weight == 0.0
+        ) or self.action_prior is None:
             return np.zeros(len(actions), dtype=float)
         try:
             return np.array(
@@ -257,6 +266,25 @@ class MCTSTreeSearch:
             )
         except Exception as exc:
             warnings.warn("failed to evaluate MCTS action prior: %s" % exc)
+            return np.zeros(len(actions), dtype=float)
+
+    def _action_values_for(self, actions):
+        actions = [int(action) for action in actions]
+        if self.action_value_weight == 0.0 or self.action_prior is None:
+            return np.zeros(len(actions), dtype=float)
+        if not hasattr(self.action_prior, "action_values_for"):
+            return np.zeros(len(actions), dtype=float)
+        try:
+            return np.array(
+                self.action_prior.action_values_for(
+                    actions,
+                    num_action_scale=self.num_action_scale,
+                    context=self._prior_context(),
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            warnings.warn("failed to evaluate MCTS action-value prior: %s" % exc)
             return np.zeros(len(actions), dtype=float)
 
     def _state_key(self):
@@ -351,10 +379,16 @@ class MCTSTreeSearch:
     def get_exp_prob(self, actions, scale=100):
         if _using_rust_backend() and len(actions) >= _RUST_VECTOR_MIN:
             try:
+                value_logits = self._action_values_for(actions)
                 values = [
                     float(self.exp_action_reward[int(action)] * scale)
                     + self.action_prior_weight * float(prior_logit)
-                    for action, prior_logit in zip(actions, self._action_prior_logits_for(actions))
+                    + self.action_value_weight * float(value_logit)
+                    for action, prior_logit, value_logit in zip(
+                        actions,
+                        self._action_prior_logits_for(actions),
+                        value_logits,
+                    )
                 ]
                 return np.array(smart_rust.softmax_scaled(values, 1.0), dtype=float)
             except Exception:
@@ -362,6 +396,8 @@ class MCTSTreeSearch:
         x = self.exp_action_reward[actions] * scale
         if self.action_prior_weight != 0.0:
             x = x + self.action_prior_weight * self._action_prior_logits_for(actions)
+        if self.action_value_weight != 0.0:
+            x = x + self.action_value_weight * self._action_values_for(actions)
         x = x - np.max(x)
         exp_x = np.exp(x)
         total = exp_x.sum()
@@ -440,7 +476,12 @@ class MCTSTreeSearch:
         parent_visits = self.id2Node[node_id].num_vis
         child_qs = [self.id2Node[idx].Q for idx in child_ids]
         child_visits = [self.id2Node[idx].num_vis for idx in child_ids]
-        if _using_rust_backend() and len(child_ids) >= _RUST_VECTOR_MIN and self.puct_prior_weight == 0.0:
+        if (
+            _using_rust_backend()
+            and len(child_ids) >= _RUST_VECTOR_MIN
+            and self.puct_prior_weight == 0.0
+            and self.action_value_weight == 0.0
+        ):
             try:
                 best_positions = smart_rust.ucb_best_indices(
                     parent_visits, child_qs, child_visits, self.exp_weight
@@ -458,6 +499,8 @@ class MCTSTreeSearch:
                 child_visits,
                 self.id2Node[node_id].child_actions,
             )
+        if self.action_value_weight != 0.0 and self.action_prior is not None:
+            uct_scores = self._add_action_value_prior(uct_scores, self.id2Node[node_id].child_actions)
 
         mx_uct = max(uct_scores)
         mx_id = []
@@ -496,6 +539,12 @@ class MCTSTreeSearch:
         child_visits = np.array(child_visits, dtype=float)
         prior_bonus = self.puct_prior_weight * probs * math.sqrt(float(parent_visits)) / (1.0 + child_visits)
         return np.array(uct_scores, dtype=float) + prior_bonus
+
+    def _add_action_value_prior(self, uct_scores, child_actions):
+        if len(child_actions) == 0:
+            return uct_scores
+        values = self._action_values_for(child_actions)
+        return np.array(uct_scores, dtype=float) + self.action_value_weight * values
 
     def _action_trace_fields(self, action):
         action = int(action)

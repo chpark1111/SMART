@@ -78,9 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--output", required=True, help="Path to write the prior JSON")
     prior.add_argument(
         "--model-type",
-        choices=["counts", "linear", "mlp", "rl-mlp", "pg-agent"],
+        choices=["counts", "linear", "mlp", "rl-mlp", "pg-agent", "policy-value"],
         default="counts",
-        help="Prior model to train: count logits, linear logits, supervised MLP, coord/scale RL MLP, or action-level policy-gradient agent",
+        help="Prior model to train: count logits, linear logits, supervised MLP, coord/scale RL MLP, action policy, or action policy-value agent",
     )
     prior.add_argument("--min-reward", type=float, default=0.0, help="Only actions at or above this reward contribute")
     prior.add_argument("--smoothing", type=float, default=1.0, help="Additive count smoothing")
@@ -101,6 +101,14 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--advantage-clip", type=float, default=5.0, help="Normalized advantage clip for --model-type rl-mlp")
     prior.add_argument("--entropy-coef", type=float, default=0.01, help="Entropy bonus for --model-type rl-mlp")
     prior.add_argument("--max-logit-abs", type=float, default=8.0, help="Calibrate RL prior logits to this max absolute value")
+    prior.add_argument("--value-epochs", type=int, default=0, help="Policy-value value-head epochs; default reuses --epochs")
+    prior.add_argument(
+        "--value-learning-rate",
+        type=float,
+        default=0.0,
+        help="Policy-value value-head learning rate; default reuses --learning-rate",
+    )
+    prior.add_argument("--value-clip", type=float, default=5.0, help="Policy-value normalized action-value target clip")
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -266,6 +274,28 @@ def main(argv: list[str] | None = None) -> int:
                 advantage_clip=args.advantage_clip,
                 entropy_coef=args.entropy_coef,
                 max_logit_abs=args.max_logit_abs,
+            )
+        elif args.model_type == "policy-value":
+            from .action_prior import build_policy_value_action_prior_from_traces
+
+            prior_payload = build_policy_value_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                num_action_scale=args.num_action_scale or None,
+                epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                l2=args.l2,
+                hidden_size=args.hidden_size,
+                device=args.device,
+                advantage_baseline=args.advantage_baseline,
+                advantage_clip=args.advantage_clip,
+                entropy_coef=args.entropy_coef,
+                max_logit_abs=args.max_logit_abs,
+                value_epochs=args.value_epochs or None,
+                value_learning_rate=args.value_learning_rate or None,
+                value_clip=args.value_clip,
             )
         else:
             from .action_prior import build_action_prior_from_traces
