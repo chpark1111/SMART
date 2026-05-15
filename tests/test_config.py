@@ -32,7 +32,7 @@ def test_accelerated_search_profile_is_opt_in() -> None:
     assert cfg["mcts"]["backend"] == "rust_stateful"
     assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
     assert cfg["mcts"]["action_prior_weight"] == 0.1
-    assert cfg["mcts"]["action_prior_path"] == "smart/assets/priors/smoke5_coord_scale_prior.json"
+    assert cfg["mcts"]["action_prior_path"] == "smart/assets/priors/category_general_expanded_full_mlp_prior.json"
     assert cfg["mcts"]["allow_search_order_changes"] is True
 
 

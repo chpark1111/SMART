@@ -20,6 +20,13 @@ maturin develop --release --extras pipeline
 
 If you prefer pip editable installs, install the Python `maturin` build backend
 first and then run `python -m pip install -e ".[pipeline]"`.
+On Apple Silicon with Homebrew Rust and a universal Python, pip/maturin may
+select the missing x86_64 target. For local arm64 development, set the target
+explicitly:
+
+```bash
+CARGO_BUILD_TARGET=aarch64-apple-darwin python -m pip install -e ".[pipeline]"
+```
 
 After the package is published to PyPI:
 
@@ -184,6 +191,13 @@ keeps all reported metrics identical and measures `1.047x`.
 MCTS action-prior profiles are exposed as experiments only; the 16-mesh
 `prior_weight_sweep` changed one table result for all tested prior weights, so
 the prior path is not promoted.
+The packaged all-trace offline-RL MLP prior lives at
+`smart/assets/priors/category_general_all_available_offline_rl_mlp_prior.json`
+and is exposed through `configs/rl_search_experimental.yaml`. On the current
+15-mesh MCTS20/max-step20 sweep, prior weight `0.1` measured `1.057x` mean
+stage speedup with `14/15` quality-not-worse cases and `1/15` improved case.
+Because it also had `1/15` worse case, it remains a research flag and should be
+used with final SMART evaluation or a quality guard before reporting results.
 The latest wrapper also constructs exact `union_except_i` entries lazily. The
 checked 100-iteration airplane smoke at `max_step=20` measured `18.48s` and
 kept the same evaluation metrics while recording `9682` leave-one-out union
@@ -202,6 +216,17 @@ from trace-derived priors. The Python-tree runner can also use
 `transposition_table=true` as a state-memory experiment. These options do not
 replace the exact Manifold reward, but they can change search trajectories, so
 keep them out of release/default configs until quality sweeps pass.
+For research runs that must not regress final metrics, use
+`scripts/run_quality_guarded_mcts.py`. It writes selected outputs into
+`mcts_guarded`, and package consumers can evaluate or render that stage:
+
+```bash
+smart --config configs/rl_search_experimental.yaml evaluate \
+  --stage mcts_guarded \
+  --category airplane \
+  --mesh 1026dd1b26120799107f68a9cb8e3c \
+  --chamfer-points 0
+```
 
 Build an action prior from MCTS traces with the packaged CLI:
 
@@ -211,8 +236,8 @@ smart --config configs/smoke_5.yaml build-prior \
   --output runs/bench_exact/priors/airplane_mcts20_prior.json
 ```
 
-For learned action-prior experiments, add `--model-type linear` or
-`--model-type mlp`:
+For learned action-prior experiments, add `--model-type linear`, `--model-type
+mlp`, or `--model-type rl-mlp`:
 
 ```bash
 smart --config configs/smoke_5.yaml build-prior \
@@ -220,6 +245,14 @@ smart --config configs/smoke_5.yaml build-prior \
   --output runs/bench_exact/priors/airplane_linear_prior.json \
   --model-type linear \
   --epochs 80
+
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_rl_prior.json \
+  --model-type rl-mlp \
+  --advantage-baseline category \
+  --epochs 300 \
+  --device auto
 
 smart --config configs/smoke_5.yaml build-prior \
   runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
@@ -260,6 +293,79 @@ experimental prior at `smart/assets/priors/smoke5_coord_scale_prior.json`.
 `configs/accelerated_search_experimental.yaml` uses that asset with
 `action_prior_weight=0.1`; keep it as an experiment because it changes MCTS
 action ordering.
+
+The package also includes the current candidate-aware policy-gradient research
+prior at
+`smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json`.
+This prior was trained from MCTS candidate traces, so it scores concrete SMART
+action ids rather than only coordinate/scale classes. Use it through the
+quality guard, not as a paper default:
+
+```bash
+python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/rl_multiweight_guard_experimental.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 5 \
+  --prior-path smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json \
+  --prior-weights 0.05,0.1,0.2 \
+  --mcts-iter 10 \
+  --max-step 10
+```
+
+The guard runs baseline MCTS plus each prior-weight candidate, evaluates the
+outputs with exact SMART metrics, and copies the selected non-worse result into
+`mcts_guarded`. The current cat5 check
+`runs/bench_exact/candidate_pg_multiweight_guard_cat5_mcts10.json` succeeded on
+`15/15`, selected a prior candidate on `13/15`, improved `2/15`, and selected
+baseline on `2/15`; it also caught one table mesh where all prior candidates
+were worse. This is the current quality-first learned-search workflow. It costs
+more wall-clock time because it launches multiple MCTS searches, so it stays in
+`configs/rl_multiweight_guard_experimental.yaml` instead of the official
+single-trajectory pipeline configs.
+Add `--adaptive-prior-weights` to run weights sequentially and stop after the
+first candidate that exact SMART metrics judge as quality-improved. That mode is
+cheaper than full multi-weight guard, but it can miss a later weight with a
+larger improvement.
+For faster exploratory sweeps, add
+`--adaptive-stop-mode not_worse`; it can stop after a faster non-worse candidate
+instead of waiting for a strict quality improvement.
+The first cat3 fast adaptive check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_cat3_mcts10.json` kept
+`9/9` guarded successes and skipped `12/27` candidate MCTS runs.
+The follow-up refined cat5 check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_cat5_mcts10.json` kept
+`14/14` guarded successes and reduced total MCTS launches from `56` to `32`.
+The full currently refined subset check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_refined21_mcts10.json`
+kept `21/21` guarded successes and reduced total MCTS launches from `84` to
+`61`.
+
+For quality-first post-processing after guarded MCTS, run the guarded hybrid
+local-search script:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 20 \
+  --input-stage mcts_guarded \
+  --max-step 100 \
+  --action-unit 0.005 \
+  --covered-tolerance 0.001 \
+  --selection-mode improved
+```
+
+It evaluates the input stage, runs `smart local_refine`, evaluates the refined
+output, and copies the selected result into `local_refine_guarded`. The current
+refined21 check
+`runs/bench_exact/local_refine_guarded_refined21_covtol_improved_reuse_mcts_guarded.json`
+succeeded on `21/21`, selected local refine on `10/21`, improved `10/21`, and
+kept the input output on the remaining `11/21`. The selected
+`local_refine_guarded` stage improved aggregate BVS/MOV/TOV/vIoU versus
+`mcts_guarded`, with a tiny coverage change under the explicit tolerance. Keep
+this as an experimental quality mode; official paper reproduction should still
+use the unguarded paper stages unless the experiment calls for the hybrid
+post-process.
 
 ## Command Line Usage
 

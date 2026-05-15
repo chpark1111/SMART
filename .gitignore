@@ -9,6 +9,7 @@ smart/_rust*.so
 .venv/
 build/
 dist/
+dist_local_test/
 *.egg-info/
 target/
 runs/

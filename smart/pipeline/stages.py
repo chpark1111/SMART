@@ -34,6 +34,25 @@ STAGE_ORDER = [
 ]
 
 
+def _command_failure_summary(tool: str, result: Any) -> str:
+    if getattr(result, "timed_out", False):
+        return f"{tool} timed out after {result.elapsed_sec:.1f}s"
+    if result.returncode < 0:
+        signal = -int(result.returncode)
+        signal_names = {9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+        name = signal_names.get(signal, f"signal {signal}")
+        if signal == 11:
+            return f"{tool} crashed with {name}; likely invalid or degenerate mesh input"
+        if signal in {9, 15}:
+            return f"{tool} was killed by {name}; likely external stop or timeout wrapper"
+        return f"{tool} stopped by {name}"
+    if result.returncode == 124:
+        return f"{tool} timed out or was killed by timeout wrapper rc=124"
+    if result.returncode == 127:
+        return f"{tool} executable not found rc=127"
+    return f"{tool} failed rc={result.returncode}"
+
+
 def run_pipeline(
     cfg: dict[str, Any],
     *,
@@ -110,6 +129,8 @@ def list_mesh_ids(category: dict[str, Any], explicit: list[str] | None = None) -
     configured = category.get("meshes")
     if configured:
         return [str(mesh) for mesh in configured if (root / str(mesh) / "model.obj").exists()]
+    if not root.exists():
+        return []
     mesh_ids = sorted(path.name for path in root.iterdir() if (path / "model.obj").exists())
     limit = category.get("limit")
     if limit:
@@ -461,22 +482,41 @@ def run_tetra_mesh(
             error=f"missing source mesh: {source_mesh}",
         )
 
-    attempts = [(epsilon, edge_length, bool(stage_cfg.get("coarsen", False)), "primary")]
+    attempts: list[dict[str, Any]] = [
+        {
+            "epsilon": epsilon,
+            "edge_length": edge_length,
+            "coarsen": bool(stage_cfg.get("coarsen", False)),
+            "name": "primary",
+        }
+    ]
     retry = stage_cfg.get("retry", {})
     if retry.get("enabled", True):
         attempts.append(
-            (
-                epsilon * float(retry.get("epsilon_scale", 2.0)),
-                edge_length * float(retry.get("edge_length_scale", 2.0)),
-                bool(retry.get("coarsen", True)),
-                "retry",
-            )
+            {
+                "epsilon": epsilon * float(retry.get("epsilon_scale", 2.0)),
+                "edge_length": edge_length * float(retry.get("edge_length_scale", 2.0)),
+                "coarsen": bool(retry.get("coarsen", True)),
+                "name": "retry",
+            }
         )
+        for idx, extra in enumerate(retry.get("extra_attempts", []) or []):
+            attempt = dict(extra)
+            attempt["epsilon"] = epsilon * float(extra.get("epsilon_scale", 4.0))
+            attempt["edge_length"] = edge_length * float(extra.get("edge_length_scale", 3.0))
+            attempt["coarsen"] = bool(extra.get("coarsen", True))
+            attempt["name"] = str(extra.get("name", f"extra_retry_{idx + 1}"))
+            attempts.append(attempt)
 
     errors: list[str] = []
+    attempt_metadata: list[dict[str, Any]] = []
     last_command: list[str] | None = None
     last_log: Path | None = None
-    for eps, length, coarsen, attempt_name in attempts:
+    for attempt in attempts:
+        eps = float(attempt["epsilon"])
+        length = float(attempt["edge_length"])
+        coarsen = bool(attempt.get("coarsen", False))
+        attempt_name = str(attempt["name"])
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -493,7 +533,21 @@ def run_tetra_mesh(
         last_command = manifold_cmd
         last_log = manifold_log
         if not result.ok:
-            errors.append(f"{attempt_name}: ManifoldPlus failed rc={result.returncode}")
+            failure = _command_failure_summary("ManifoldPlus", result)
+            errors.append(f"{attempt_name}: {failure}")
+            attempt_metadata.append(
+                {
+                    "attempt": attempt_name,
+                    "tool": "ManifoldPlus",
+                    "epsilon": eps,
+                    "edge_length": length,
+                    "coarsen": coarsen,
+                    "returncode": result.returncode,
+                    "elapsed_sec": result.elapsed_sec,
+                    "timed_out": result.timed_out,
+                    "failure": failure,
+                }
+            )
             continue
 
         ftetwild_cmd = [
@@ -511,24 +565,47 @@ def run_tetra_mesh(
             str(out_dir / "log.txt"),
             "--level",
             str(int(stage_cfg.get("ftetwild_level", 2))),
-            "--use-floodfill",
-            "--manifold-surface",
             "--no-binary",
         ]
+        if attempt.get("use_floodfill", stage_cfg.get("use_floodfill", True)):
+            ftetwild_cmd.append("--use-floodfill")
+        if attempt.get("use_general_wn", stage_cfg.get("use_general_wn", False)):
+            ftetwild_cmd.append("--use-general-wn")
+        if attempt.get("use_input_for_wn", stage_cfg.get("use_input_for_wn", False)):
+            ftetwild_cmd.append("--use-input-for-wn")
+        if attempt.get("manifold_surface", stage_cfg.get("manifold_surface", True)):
+            ftetwild_cmd.append("--manifold-surface")
+        if attempt.get("skip_simplify", stage_cfg.get("skip_simplify", False)):
+            ftetwild_cmd.append("--skip-simplify")
         if stage_cfg.get("ftetwild_threads") is not None and _executable_supports_option(ftetwild_bin, "--max-threads"):
             ftetwild_cmd.extend(["--max-threads", str(int(stage_cfg.get("ftetwild_threads", 8)))])
         if coarsen:
             ftetwild_cmd.append("--coarsen")
         result = run_command(
             ftetwild_cmd,
-            timeout=stage_cfg.get("ftetwild_timeout_sec"),
+            timeout=attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
             log_path=ftetwild_log,
             dry_run=dry_run,
         )
         last_command = ftetwild_cmd
         last_log = ftetwild_log
         if not result.ok:
-            errors.append(f"{attempt_name}: fTetWild failed rc={result.returncode}")
+            failure = _command_failure_summary("fTetWild", result)
+            errors.append(f"{attempt_name}: {failure}")
+            attempt_metadata.append(
+                {
+                    "attempt": attempt_name,
+                    "tool": "fTetWild",
+                    "epsilon": eps,
+                    "edge_length": length,
+                    "coarsen": coarsen,
+                    "returncode": result.returncode,
+                    "elapsed_sec": result.elapsed_sec,
+                    "timed_out": result.timed_out,
+                    "timeout_sec": attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
+                    "failure": failure,
+                }
+            )
             continue
         if dry_run:
             return _base_record(
@@ -548,15 +625,29 @@ def run_tetra_mesh(
             validation_error, validation_metadata = inspect_tetra_output(
                 out_dir,
                 require_single_component=bool(stage_cfg.get("require_single_component", False)),
+                min_tetra_count=int(stage_cfg.get("min_tetra_count", 20)),
+                min_surface_faces=int(stage_cfg.get("min_surface_faces", 20)),
             )
         if validation_error:
             errors.append(f"{attempt_name}: validation failed: {validation_error}")
+            attempt_metadata.append(
+                {
+                    "attempt": attempt_name,
+                    "tool": "validation",
+                    "epsilon": eps,
+                    "edge_length": length,
+                    "coarsen": coarsen,
+                    "failure": validation_error,
+                    "metadata": validation_metadata,
+                }
+            )
             continue
         metadata = {
             "epsilon": eps,
             "edge_length": length,
             "coarsen": coarsen,
             "attempt": attempt_name,
+            "previous_attempts": attempt_metadata,
         }
         if validation_metadata:
             metadata["validation"] = validation_metadata
@@ -585,6 +676,7 @@ def run_tetra_mesh(
         log_path=last_log,
         command=last_command,
         error="; ".join(errors) if errors else "unknown tetrahedralization failure",
+        metadata={"attempts": attempt_metadata},
     )
 
 
@@ -628,11 +720,39 @@ def validate_tetra_output(out_dir: Path, *, require_single_component: bool = Tru
     return error
 
 
-def inspect_tetra_output(out_dir: Path, *, require_single_component: bool = False) -> tuple[str | None, dict[str, Any]]:
+def _inspect_ascii_msh_counts(path: Path) -> dict[str, int | None]:
+    counts: dict[str, int | None] = {"nodes": None, "elements": None}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:  # noqa: BLE001
+        return counts
+    for idx, line in enumerate(lines):
+        if line.strip() == "$Nodes" and idx + 1 < len(lines):
+            try:
+                counts["nodes"] = int(lines[idx + 1].strip())
+            except ValueError:
+                pass
+        if line.strip() == "$Elements" and idx + 1 < len(lines):
+            try:
+                counts["elements"] = int(lines[idx + 1].strip())
+            except ValueError:
+                pass
+    return counts
+
+
+def inspect_tetra_output(
+    out_dir: Path,
+    *,
+    require_single_component: bool = False,
+    min_tetra_count: int = 20,
+    min_surface_faces: int = 20,
+) -> tuple[str | None, dict[str, Any]]:
     tetmesh = out_dir / "tetra.msh"
     surface = out_dir / "tetra.msh__sf.obj"
     metadata: dict[str, Any] = {
         "require_single_component": require_single_component,
+        "min_tetra_count": min_tetra_count,
+        "min_surface_faces": min_surface_faces,
         "tetra_exists": tetmesh.exists(),
         "surface_exists": surface.exists(),
     }
@@ -640,6 +760,15 @@ def inspect_tetra_output(out_dir: Path, *, require_single_component: bool = Fals
         return "missing tetra.msh", metadata
     if not surface.exists():
         return "missing tetra.msh__sf.obj", metadata
+    msh_counts = _inspect_ascii_msh_counts(tetmesh)
+    metadata.update(
+        {
+            "tetra_nodes": msh_counts.get("nodes"),
+            "tetra_elements": msh_counts.get("elements"),
+        }
+    )
+    if msh_counts.get("elements") is not None and int(msh_counts["elements"] or 0) < min_tetra_count:
+        return f"tetra element count below minimum: {msh_counts['elements']} < {min_tetra_count}", metadata
     try:
         import trimesh  # type: ignore
     except ModuleNotFoundError:
@@ -656,6 +785,8 @@ def inspect_tetra_output(out_dir: Path, *, require_single_component: bool = Fals
                 "largest_surface_component_faces": int(max((len(component.faces) for component in components), default=0)),
             }
         )
+        if len(mesh.faces) < min_surface_faces:
+            return f"surface face count below minimum: {len(mesh.faces)} < {min_surface_faces}", metadata
         if not mesh.is_watertight:
             return "surface is not watertight", metadata
         if require_single_component and len(components) > 1:
@@ -788,8 +919,20 @@ def run_merge_mesh(
         dry_run=dry_run,
     )
     status = "dry_run" if dry_run else "success" if result.ok and expected.exists() else "failed"
-    error = None if status in {"success", "dry_run"} else f"merge failed rc={result.returncode}; expected {expected}"
-    return _base_record(cfg, category, mesh_id, "merge", started, status=status, output_path=expected, log_path=log_path, command=command, error=error)
+    error = None if status in {"success", "dry_run"} else f"{_command_failure_summary('merge', result)}; expected {expected}"
+    return _base_record(
+        cfg,
+        category,
+        mesh_id,
+        "merge",
+        started,
+        status=status,
+        output_path=expected,
+        log_path=log_path,
+        command=command,
+        error=error,
+        metadata={"timeout_sec": stage_cfg.get("timeout_sec"), "elapsed_sec": result.elapsed_sec},
+    )
 
 
 def greedy_segment_path(tet_dir: Path, stage_cfg: dict[str, Any]) -> Path:
@@ -887,6 +1030,15 @@ def run_refine_mesh(
         command.append("--mcts_fused_rollout_step")
     if stage_cfg.get("trace_actions_path"):
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
+    if stage_cfg.get("candidate_trace_path"):
+        command.extend(
+            [
+                "--candidate_trace_path",
+                str(repo_path(stage_cfg["candidate_trace_path"])),
+                "--candidate_trace_top_k",
+                str(stage_cfg.get("candidate_trace_top_k", 0)),
+            ]
+        )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
@@ -906,8 +1058,20 @@ def run_refine_mesh(
     )
     output = latest_bbox_dir(result_root, mesh_id, since=started)
     status = "dry_run" if dry_run else "success" if result.ok and output else "failed"
-    error = None if status in {"success", "dry_run"} else f"refine failed rc={result.returncode}"
-    return _base_record(cfg, category, mesh_id, "refine", started, status=status, output_path=output, log_path=log_path, command=command, error=error)
+    error = None if status in {"success", "dry_run"} else _command_failure_summary("refine", result)
+    return _base_record(
+        cfg,
+        category,
+        mesh_id,
+        "refine",
+        started,
+        status=status,
+        output_path=output,
+        log_path=log_path,
+        command=command,
+        error=error,
+        metadata={"timeout_sec": stage_cfg.get("timeout_sec"), "elapsed_sec": result.elapsed_sec},
+    )
 
 
 def run_mcts_mesh(
@@ -1070,6 +1234,15 @@ def run_mcts_mesh(
         command.append("--mcts_fused_rollout_step")
     if stage_cfg.get("trace_actions_path"):
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
+    if stage_cfg.get("candidate_trace_path"):
+        command.extend(
+            [
+                "--candidate_trace_path",
+                str(repo_path(stage_cfg["candidate_trace_path"])),
+                "--candidate_trace_top_k",
+                str(stage_cfg.get("candidate_trace_top_k", 0)),
+            ]
+        )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
@@ -1101,9 +1274,39 @@ def run_mcts_mesh(
         dry_run=dry_run,
     )
     output = latest_bbox_dir(result_root, mesh_id, since=started)
-    status = "dry_run" if dry_run else "success" if result.ok and output else "failed"
-    error = None if status in {"success", "dry_run"} else f"mcts failed rc={result.returncode}"
-    return _base_record(cfg, category, mesh_id, "mcts", started, status=status, output_path=output, log_path=log_path, command=command, error=error)
+    timeout_output = bool(
+        not dry_run
+        and result.timed_out
+        and output
+        and stage_cfg.get("accept_timeout_output", True)
+    )
+    status = (
+        "dry_run"
+        if dry_run
+        else "success"
+        if result.ok and output
+        else "success_timeout_output"
+        if timeout_output
+        else "failed"
+    )
+    error = None if status in {"success", "dry_run", "success_timeout_output"} else _command_failure_summary("mcts", result)
+    return _base_record(
+        cfg,
+        category,
+        mesh_id,
+        "mcts",
+        started,
+        status=status,
+        output_path=output,
+        log_path=log_path,
+        command=command,
+        error=error,
+        metadata={
+            "timeout_sec": stage_cfg.get("timeout_sec"),
+            "elapsed_sec": result.elapsed_sec,
+            "timeout_output_accepted": timeout_output,
+        },
+    )
 
 
 def run_local_refine_mesh(
@@ -1228,7 +1431,7 @@ def run_local_refine_mesh(
     )
     output = latest_bbox_dir(result_root, mesh_id, since=started)
     status = "dry_run" if dry_run else "success" if result.ok and output else "failed"
-    error = None if status in {"success", "dry_run"} else f"local_refine failed rc={result.returncode}"
+    error = None if status in {"success", "dry_run"} else _command_failure_summary("local_refine", result)
     return _base_record(
         cfg,
         category,
@@ -1240,6 +1443,7 @@ def run_local_refine_mesh(
         log_path=log_path,
         command=command,
         error=error,
+        metadata={"timeout_sec": stage_cfg.get("timeout_sec"), "elapsed_sec": result.elapsed_sec},
     )
 
 
@@ -1770,7 +1974,7 @@ def latest_exp_dir_for_bbox(root: Path, mesh_id: str) -> Path | None:
 
 
 def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: str, input_stage: str) -> Path | None:
-    if input_stage in {"mcts", "refine", "local_refine"}:
+    if input_stage in {"mcts", "mcts_guarded", "refine", "local_refine", "local_refine_guarded"}:
         manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
         if manifest_bbox is not None:
             return manifest_bbox
@@ -1825,7 +2029,8 @@ def data_status(cfg: dict[str, Any]) -> dict[str, Any]:
             "model_obj_count": len(mesh_ids),
             "sample_bbox_diagonal": _sample_bbox_diagonal(root / mesh_ids[0] / "model.obj") if mesh_ids else None,
         }
-    manifest = repo_path("data/shapenet_samples_manifest.json")
+    data_root = repo_path(str(cfg.get("data_root", "data")))
+    manifest = data_root / "shapenet_samples_manifest.json" if data_root else None
     if manifest and manifest.exists():
         rows = json.loads(manifest.read_text(encoding="utf-8"))
         by_category: dict[str, int] = {}

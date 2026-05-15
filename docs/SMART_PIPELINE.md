@@ -36,12 +36,23 @@ normalize -> tetra -> preseg -> merge -> refine -> mcts -> local_refine -> rende
 : Wraps the Mesh2Tet path used by the paper: ManifoldPlus watertight repair
   followed by fTetWild tetrahedral meshing. Failures are per mesh: timeout or
   tool errors are written to manifests, retried with coarser settings when
-  configured, and skipped downstream. ShapeNet meshes often produce watertight
-  but disconnected fTetWild surfaces; these are accepted by default because the
-  downstream SMART stages can handle them. Set `tetra.require_single_component:
-  true` for strict debugging. This follows fTetWild's intended use on imperfect
-  triangle soup inputs rather than treating disconnected-but-valid surface
-  extraction as a fatal meshing failure.
+  configured, and skipped downstream. Failure records classify timeout,
+  SIGSEGV crash, external kill, missing executable, and validation failures.
+  The default retry chain tries primary category parameters, a coarser retry,
+  a bounded coarse retry, and a general-winding-number fallback for difficult
+  open meshes. ShapeNet meshes often produce watertight but disconnected
+  fTetWild surfaces; these are accepted by default because the downstream SMART
+  stages can handle them. Set `tetra.require_single_component: true` for strict
+  debugging. This follows fTetWild's intended use on imperfect triangle soup
+  inputs rather than treating disconnected-but-valid surface extraction as a
+  fatal meshing failure.
+  The official pipeline also validates that `tetra.msh` contains a minimum
+  number of elements and that `tetra.msh__sf.obj` contains a minimum number of
+  faces (`tetra.min_tetra_count`, `tetra.min_surface_faces`). This prevents
+  fTetWild fallback attempts that exit successfully but leave an empty or tiny
+  mesh from reaching CoACD/SMART merge. Local fTetWild source guards are applied
+  only around crash-prone diagnostics and empty tracked-surface handling; the
+  fixed SMART Manifold boolean library is not modified.
 
   fTetWild parameter notes: `epsilon` is an envelope/fidelity setting, where a
   smaller value preserves features better but costs more runtime. `edge_length`

@@ -16,6 +16,7 @@ from .runner import find_executable, run_command
 
 MANIFOLDPLUS_REPO = "https://github.com/hjwdzh/ManifoldPlus.git"
 FTETWILD_REPO = "https://github.com/wildmeshing/fTetWild.git"
+FTETWILD_SMART_PATCH = REPO_ROOT / "patches" / "ftetwild_smart_crash_guards.patch"
 
 
 def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -285,6 +286,15 @@ def build_tools(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
         )
         messages.append(_line("fTetWild clone", result.returncode, dry_run))
     messages.extend(
+        _apply_patch_once(
+            ftetwild,
+            FTETWILD_SMART_PATCH,
+            log_root,
+            "fTetWild SMART crash guards",
+            dry_run=dry_run,
+        )
+    )
+    messages.extend(
         _cmake_build(
             ftetwild,
             log_root,
@@ -516,6 +526,47 @@ def _cmake_build(
         )
         messages.append(_line(f"{name} build", build_result.returncode, dry_run))
     return messages
+
+
+def _apply_patch_once(
+    source: Path,
+    patch_path: Path,
+    log_root: Path,
+    label: str,
+    *,
+    dry_run: bool = False,
+) -> list[str]:
+    if dry_run:
+        return [f"{label}: dry-run"]
+    if not _source_ready(source):
+        return [f"{label}: skipped; source missing"]
+    if not patch_path.exists():
+        return [f"{label}: skipped; missing patch {patch_path}"]
+
+    check = run_command(
+        ["git", "apply", "--check", str(patch_path)],
+        cwd=source,
+        timeout=120,
+        log_path=log_root / "ftetwild-smart-patch-check.log",
+    )
+    if check.ok:
+        applied = run_command(
+            ["git", "apply", str(patch_path)],
+            cwd=source,
+            timeout=120,
+            log_path=log_root / "ftetwild-smart-patch-apply.log",
+        )
+        return [_line(label, applied.returncode, dry_run)]
+
+    reverse_check = run_command(
+        ["git", "apply", "--reverse", "--check", str(patch_path)],
+        cwd=source,
+        timeout=120,
+        log_path=log_root / "ftetwild-smart-patch-reverse-check.log",
+    )
+    if reverse_check.ok:
+        return [f"{label}: already applied"]
+    return [f"{label}: failed rc={check.returncode}; see {check.log_path}"]
 
 
 def _line(label: str, returncode: int, dry_run: bool) -> str:

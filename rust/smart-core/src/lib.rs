@@ -5085,3 +5085,62 @@ fn encode_action(
 ) -> usize {
     bbox_idx * (6 * num_action_scale + 1) + coord_idx * num_action_scale + scale_idx
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_scales_match_legacy_order() {
+        assert_eq!(build_action_scales(2).unwrap(), vec![-1.0, 1.0]);
+        assert_eq!(build_action_scales(4).unwrap(), vec![-2.0, -1.0, 1.0, 2.0]);
+        assert!(build_action_scales(0).is_err());
+        assert!(build_action_scales(3).is_err());
+    }
+
+    #[test]
+    fn action_encoding_round_trips() {
+        let num_action_scale = 4;
+        assert_eq!(action_count(3, num_action_scale), 75);
+        for bbox_idx in 0..3 {
+            for coord_idx in 0..6 {
+                for scale_idx in 0..num_action_scale {
+                    let action = encode_action(bbox_idx, coord_idx, scale_idx, num_action_scale);
+                    assert_eq!(
+                        decode_action(action, num_action_scale),
+                        (bbox_idx, coord_idx, scale_idx)
+                    );
+                }
+            }
+            let recenter = bbox_idx * (6 * num_action_scale + 1) + 6 * num_action_scale;
+            assert_eq!(decode_action(recenter, num_action_scale), (bbox_idx, 6, 0));
+        }
+    }
+
+    #[test]
+    fn tetra_volume_unit_simplex() {
+        let points = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        assert!((tet_volume(&points) - (1.0 / 6.0)).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn tetra_surface_faces_remove_shared_faces() {
+        let faces = tetra_surface_faces_from_voxels(&vec![vec![0, 1, 2, 3], vec![0, 1, 2, 4]])
+            .unwrap();
+        let face_keys: BTreeSet<Vec<usize>> = faces
+            .iter()
+            .map(|face| {
+                let mut key = face.clone();
+                key.sort_unstable();
+                key
+            })
+            .collect();
+        assert_eq!(faces.len(), 6);
+        assert!(!face_keys.contains(&vec![0, 1, 2]));
+    }
+}

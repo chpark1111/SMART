@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
 from smart.pipeline.config import load_config
+from smart.pipeline.stages import list_mesh_ids
 
 
 METRIC_KEYS = (
@@ -39,6 +43,7 @@ def main() -> int:
     parser.add_argument("--weights", default="0,0.5,1.0")
     parser.add_argument("--puct-weight", type=float, default=0.0)
     parser.add_argument("--prior-model", choices=["counts", "linear", "mlp"], default="counts")
+    parser.add_argument("--min-reward", type=float, default=0.0, help="Trace reward threshold for prior training")
     parser.add_argument("--linear-epochs", type=int, default=100, help="Deprecated alias for --prior-epochs")
     parser.add_argument("--prior-epochs", type=int, default=0)
     parser.add_argument("--hidden-size", type=int, default=16)
@@ -187,7 +192,7 @@ def _targets(cfg: dict[str, Any], categories: str, limit: int) -> list[dict[str,
         name = str(category["name"])
         if allowed and name not in allowed:
             continue
-        for mesh in category.get("meshes", []):
+        for mesh in list_mesh_ids(category):
             out.append({"category": name, "mesh": str(mesh)})
             if limit > 0 and len(out) >= limit:
                 return out
@@ -381,6 +386,8 @@ def _build_prior(
             args.prior_model,
             "--epochs",
             str(args.prior_epochs),
+            "--min-reward",
+            str(args.min_reward),
         ]
         if args.prior_model == "mlp":
             command.extend(["--hidden-size", str(args.hidden_size), "--device", str(args.device)])
@@ -392,7 +399,7 @@ def _build_prior(
             "--output",
             str(output),
             "--min-reward",
-            "0.0",
+            str(args.min_reward),
         ]
     if include_action_logits and args.prior_model == "counts":
         command.append("--include-action-logits")

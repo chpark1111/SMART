@@ -9,6 +9,24 @@ import trimesh.repair
 from pymanifold import Manifold
 
 
+EPS = 1e-9
+
+
+def _finite_points(pts):
+    pts = np.asarray(pts, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        return None
+    pts = pts[np.all(np.isfinite(pts), axis=1)]
+    if len(pts) == 0:
+        return None
+    return pts
+
+
+def _safe_lengths(lengths):
+    lengths = np.asarray(lengths, dtype=float)
+    return np.maximum(lengths, EPS)
+
+
 def pts2box_mesh(x, y, z, lx, ly, lz, rot, pym=False):
     vertices = []
     faces = [
@@ -43,9 +61,12 @@ def pts2box_mesh(x, y, z, lx, ly, lz, rot, pym=False):
 
 
 def axis_bbox(pts, manifold=False, pym=False):
+    pts = _finite_points(pts)
+    if pts is None:
+        pts = np.zeros((1, 3), dtype=float)
     mn = np.min(pts, axis=0)
     mx = np.max(pts, axis=0)
-    lengths = mx - mn
+    lengths = _safe_lengths(mx - mn)
     base = mn
 
     box_mesh = pts2box_mesh(
@@ -62,10 +83,16 @@ def axis_bbox(pts, manifold=False, pym=False):
 
 
 def oriented_bbox(pts, rot, manifold=False, pym=False):
+    pts = _finite_points(pts)
+    rot = np.asarray(rot, dtype=float)
+    if pts is None or not np.all(np.isfinite(rot)):
+        return axis_bbox(np.zeros((1, 3), dtype=float) if pts is None else pts, manifold=manifold, pym=pym)
     mn = np.min(pts, axis=0)
     mx = np.max(pts, axis=0)
-    lengths = mx - mn
+    lengths = _safe_lengths(mx - mn)
     base = np.matmul(mn, rot)
+    if not np.all(np.isfinite(base)):
+        return axis_bbox(pts, manifold=manifold, pym=pym)
 
     box_mesh = pts2box_mesh(
         base[0], base[1], base[2], lengths[0], lengths[1], lengths[2], rot, pym
@@ -84,16 +111,28 @@ def oriented_bbox(pts, rot, manifold=False, pym=False):
 
 
 def tilted_bbox(pts, angle_digits=3, manifold=False, pym=False):
-    to_origin, extents = trimesh.bounds.oriented_bounds(pts, angle_digits=angle_digits)
+    pts = _finite_points(pts)
+    if pts is None or len(pts) < 4 or np.linalg.matrix_rank(pts - pts.mean(axis=0)) < 2:
+        return axis_bbox(np.zeros((1, 3), dtype=float) if pts is None else pts, manifold=manifold, pym=pym)
+    try:
+        to_origin, extents = trimesh.bounds.oriented_bounds(pts, angle_digits=angle_digits)
+    except Exception:
+        return axis_bbox(pts, manifold=manifold, pym=pym)
     rot_mat = to_origin[:3, :3]
     trans = to_origin[:3, 3:].squeeze()
+    if not np.all(np.isfinite(rot_mat)) or not np.all(np.isfinite(trans)):
+        return axis_bbox(pts, manifold=manifold, pym=pym)
 
     nw_pts = np.matmul(pts, np.transpose(rot_mat)) + trans
+    if not np.all(np.isfinite(nw_pts)):
+        return axis_bbox(pts, manifold=manifold, pym=pym)
 
     mn = np.min(nw_pts, axis=0)
     mx = np.max(nw_pts, axis=0)
-    lengths = mx - mn
+    lengths = _safe_lengths(mx - mn)
     base = np.matmul(mn - trans, rot_mat)
+    if not np.all(np.isfinite(base)) or not np.all(np.isfinite(lengths)):
+        return axis_bbox(pts, manifold=manifold, pym=pym)
 
     box_mesh = pts2box_mesh(
         base[0],

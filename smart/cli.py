@@ -60,10 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument(
         "--stage",
         default="mcts",
-        choices=["merge", "refine", "mcts", "local_refine"],
+        choices=["merge", "refine", "mcts", "mcts_guarded", "local_refine", "local_refine_guarded"],
         help="BBox output stage to evaluate",
     )
-    evaluate.add_argument("--category", choices=["airplane", "chair", "table"], help="Limit to one category")
+    evaluate.add_argument("--category", help="Limit to one configured category")
     evaluate.add_argument("--mesh", action="append", help="Limit to one mesh id; repeat for multiple meshes")
     evaluate.add_argument("--chamfer-points", type=int, default=2048, help="Surface samples for cub_CD")
     evaluate.add_argument("--output", help="Path to write evaluation JSON")
@@ -74,9 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--output", required=True, help="Path to write the prior JSON")
     prior.add_argument(
         "--model-type",
-        choices=["counts", "linear", "mlp"],
+        choices=["counts", "linear", "mlp", "rl-mlp", "pg-agent"],
         default="counts",
-        help="Prior model to train: portable count logits, state-aware linear logits, or a small MLP",
+        help="Prior model to train: count logits, linear logits, supervised MLP, coord/scale RL MLP, or action-level policy-gradient agent",
     )
     prior.add_argument("--min-reward", type=float, default=0.0, help="Only actions at or above this reward contribute")
     prior.add_argument("--smoothing", type=float, default=1.0, help="Additive count smoothing")
@@ -88,6 +88,15 @@ def main(argv: list[str] | None = None) -> int:
     prior.add_argument("--l2", type=float, default=1.0e-4, help="L2 regularization for learned priors")
     prior.add_argument("--hidden-size", type=int, default=16, help="Hidden units for --model-type mlp")
     prior.add_argument("--device", default="auto", help="PyTorch device for --model-type mlp: auto, mps, cuda, or cpu")
+    prior.add_argument(
+        "--advantage-baseline",
+        choices=["category", "mesh", "global", "none"],
+        default="category",
+        help="Reward baseline for --model-type rl-mlp",
+    )
+    prior.add_argument("--advantage-clip", type=float, default=5.0, help="Normalized advantage clip for --model-type rl-mlp")
+    prior.add_argument("--entropy-coef", type=float, default=0.01, help="Entropy bonus for --model-type rl-mlp")
+    prior.add_argument("--max-logit-abs", type=float, default=8.0, help="Calibrate RL prior logits to this max absolute value")
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -215,6 +224,44 @@ def main(argv: list[str] | None = None) -> int:
                 hidden_size=args.hidden_size,
                 device=args.device,
             )
+        elif args.model_type == "rl-mlp":
+            from .action_prior import build_rl_mlp_action_prior_from_traces
+
+            prior_payload = build_rl_mlp_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                num_action_scale=args.num_action_scale or None,
+                epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                l2=args.l2,
+                hidden_size=args.hidden_size,
+                device=args.device,
+                advantage_baseline=args.advantage_baseline,
+                advantage_clip=args.advantage_clip,
+                entropy_coef=args.entropy_coef,
+                max_logit_abs=args.max_logit_abs,
+            )
+        elif args.model_type == "pg-agent":
+            from .action_prior import build_policy_gradient_action_prior_from_traces
+
+            prior_payload = build_policy_gradient_action_prior_from_traces(
+                args.traces,
+                output=args.output,
+                min_reward=args.min_reward,
+                smoothing=args.smoothing,
+                num_action_scale=args.num_action_scale or None,
+                epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                l2=args.l2,
+                hidden_size=args.hidden_size,
+                device=args.device,
+                advantage_baseline=args.advantage_baseline,
+                advantage_clip=args.advantage_clip,
+                entropy_coef=args.entropy_coef,
+                max_logit_abs=args.max_logit_abs,
+            )
         else:
             from .action_prior import build_action_prior_from_traces
 
@@ -246,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _stage_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--category", choices=["airplane", "chair", "table"], help="Limit to one category")
+    parser.add_argument("--category", help="Limit to one configured category")
     parser.add_argument("--mesh", action="append", help="Limit to one mesh id; repeat for multiple meshes")
     parser.add_argument("--force", action="store_true", help="Re-run even when expected output exists")
     parser.add_argument("--dry-run", action="store_true", help="Manifest intended work without executing external tools")

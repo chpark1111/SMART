@@ -168,6 +168,12 @@ class MCTSTreeSearch:
         self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self._opposite_actions = self._build_opposite_actions()
         self.skip_summary_metrics = bool(getattr(args, "skip_summary_metrics", False))
+        self.candidate_trace_path = str(getattr(args, "candidate_trace_path", "") or "")
+        self.candidate_trace_top_k = max(0, int(getattr(args, "candidate_trace_top_k", 0) or 0))
+        self._mcts_iter_index = 0
+        self._rollout_step_index = 0
+        if self.candidate_trace_path:
+            os.makedirs(os.path.dirname(self.candidate_trace_path) or ".", exist_ok=True)
 
         if self.skip_summary_metrics:
             self.init_occ = 0.0
@@ -491,6 +497,75 @@ class MCTSTreeSearch:
         prior_bonus = self.puct_prior_weight * probs * math.sqrt(float(parent_visits)) / (1.0 + child_visits)
         return np.array(uct_scores, dtype=float) + prior_bonus
 
+    def _action_trace_fields(self, action):
+        action = int(action)
+        per_bbox = 6 * int(self.num_action_scale) + 1
+        bbox_idx = action // per_bbox
+        local = action % per_bbox
+        if local == per_bbox - 1:
+            coord_idx = 6
+            scale_idx = 0
+        else:
+            coord_idx = local // int(self.num_action_scale)
+            scale_idx = local % int(self.num_action_scale)
+        return bbox_idx, coord_idx, scale_idx
+
+    def _trace_rollout_candidates(self, candidates, selected_action, node_id):
+        if not self.candidate_trace_path or not candidates:
+            return
+        ordered = sorted(
+            (
+                (int(bbox_idx), int(action), float(reward))
+                for bbox_idx, action, reward in candidates
+                if action is not None and int(action) >= 0 and np.isfinite(float(reward))
+            ),
+            key=lambda item: item[2],
+            reverse=True,
+        )
+        if self.candidate_trace_top_k > 0:
+            ordered = ordered[: self.candidate_trace_top_k]
+        if not ordered:
+            return
+        context = self._prior_context()
+        rows = []
+        for rank, (bbox_idx, action, reward) in enumerate(ordered):
+            decoded_bbox_idx, coord_idx, scale_idx = self._action_trace_fields(action)
+            rows.append(
+                {
+                    "schema_version": 3,
+                    "record_type": "mcts_candidate",
+                    "source": "mcts_rollout_bbox_best",
+                    "category": str(context.get("category", "")),
+                    "mesh": str(context.get("mesh", "")),
+                    "reward_backend": str(context.get("reward_backend", "")),
+                    "manifold_volume_method": str(context.get("manifold_volume_method", "")),
+                    "mcts_iter": int(self._mcts_iter_index),
+                    "rollout_step": int(self._rollout_step_index),
+                    "node_id": int(node_id),
+                    "rank": int(rank),
+                    "action": int(action),
+                    "bbox_idx": int(decoded_bbox_idx),
+                    "candidate_bbox_idx": int(bbox_idx),
+                    "coord_idx": int(coord_idx),
+                    "scale_idx": int(scale_idx),
+                    "num_bbox": int(self.num_bbox),
+                    "num_action_scale": int(self.num_action_scale),
+                    "actions_per_bbox": int(6 * self.num_action_scale + 1),
+                    "action_unit": float(context.get("action_unit", 0.0) or 0.0),
+                    "reward": float(reward),
+                    "selected": bool(int(action) == int(selected_action)),
+                    "bvs": float(context.get("bvs", 1.0) or 1.0),
+                    "volume_sum": float(context.get("volume_sum", 0.0) or 0.0),
+                    "cover_penalty": float(context.get("cover_penalty", 100.0) or 100.0),
+                    "pen_rate": float(context.get("pen_rate", 1.0) or 1.0),
+                    "max_step": int(context.get("max_step", 0) or 0),
+                    "step": int(context.get("step", 0) or 0),
+                }
+            )
+        with open(self.candidate_trace_path, "a", encoding="utf-8") as file:
+            for row in rows:
+                file.write(json.dumps(row, sort_keys=True) + "\n")
+
     def _simulate(self, path: List[int], rewards: List[float] = []):
         grd_cnt = 0
         mask_bbox = [1 for _ in range(self.num_bbox)]
@@ -500,6 +575,7 @@ class MCTSTreeSearch:
             and hasattr(self.env, "_bridge_mcts_greedy_rollout_step")
         )
         while not self.env.done:
+            self._rollout_step_index += 1
             if fused_rollout_step:
                 fused = self.env._bridge_mcts_greedy_rollout_step(mask_bbox)
                 if fused is not None:
@@ -520,15 +596,18 @@ class MCTSTreeSearch:
 
             mx_ac = None
             mx_reward = -sys.float_info.max
+            candidate_rows = []
             for idx in range(self.num_bbox):
                 if mask_bbox[idx]:
                     ith_grd_action, ith_reward = self.env.ith_bbox_greedy_sample(idx)
+                    candidate_rows.append((idx, ith_grd_action, ith_reward))
                     if mx_reward < ith_reward:
                         mx_reward = ith_reward
                         mx_ac = ith_grd_action
                     if ith_reward < 0:
                         mask_bbox[idx] = 0
 
+            self._trace_rollout_candidates(candidate_rows, mx_ac if mx_ac is not None else -1, node_id)
             if mx_reward <= 0:
                 break
             r, obs, done = self.env.step(mx_ac, apply=1)
@@ -630,6 +709,8 @@ class MCTSTreeSearch:
         self.start_time = time.time()
         self.env.reset()
         for ith in tqdm(range(num_iter)):
+            self._mcts_iter_index = ith + 1
+            self._rollout_step_index = 0
             path, rewards = self._select(self.root_id)
             assert len(path) - 1 == len(rewards)
 

@@ -123,12 +123,12 @@ def parse_args() -> argparse.Namespace:
         "--normalize",
         choices=["preserve", "bbox-diagonal", "unit-sphere"],
         default="preserve",
-        help="Whether to rewrite OBJ vertices. Preserve is recommended for ShapeNetCore v1.",
+        help="Whether to rewrite OBJ vertices. Preserve is recommended for ShapeNetCore normalized archives.",
     )
     parser.add_argument(
         "--require-normalized",
         action="store_true",
-        help="Fail when output meshes are not close to ShapeNetCore v1 bbox-diagonal normalization.",
+        help="Fail when output meshes are not close to SMART/ShapeNet bbox-diagonal normalization.",
     )
     parser.add_argument(
         "--overwrite",
@@ -310,7 +310,7 @@ def write_sample(
         )
         if not ok:
             raise RuntimeError(
-                f"{category}/{model_id} is not close to SMART/ShapeNetCore-v1 normalization: "
+                f"{category}/{model_id} is not close to SMART/ShapeNet normalization: "
                 f"{stats.detected_normalization}"
             )
 

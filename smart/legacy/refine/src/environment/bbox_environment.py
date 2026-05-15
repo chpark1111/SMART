@@ -19,6 +19,64 @@ except ImportError:
     smart_rust = None
 
 _RUST_ACTION_HELPER_MIN = 128
+_FINITE_EPS = 1e-9
+
+
+def _safe_rotation(rot):
+    rot = np.asarray(rot, dtype=float)
+    if rot.shape != (3, 3) or not np.all(np.isfinite(rot)):
+        return np.eye(3, dtype=float)
+    return rot
+
+
+def _finite_points(points):
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3:
+        return None
+    points = points[np.all(np.isfinite(points), axis=1)]
+    if len(points) == 0:
+        return None
+    return points
+
+
+def _safe_recenter_box(box, rot, points):
+    box = np.asarray(box, dtype=float)
+    rot = _safe_rotation(rot)
+    if box.shape != (6,) or not np.all(np.isfinite(box)):
+        if box.size == 6:
+            box = np.nan_to_num(box, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            box = np.array([0.0, 0.0, 0.0, _FINITE_EPS, _FINITE_EPS, _FINITE_EPS])
+        return box.tolist(), rot
+
+    points = _finite_points(points)
+    if points is None or len(points) < 4:
+        return box.tolist(), rot
+    if np.count_nonzero(np.ptp(points, axis=0) > _FINITE_EPS) < 2:
+        return box.tolist(), rot
+
+    try:
+        to_origin, _ = trimesh.bounds.oriented_bounds(points, angle_digits=3)
+        rot_mat = np.asarray(to_origin[:3, :3], dtype=float)
+        if not np.all(np.isfinite(rot_mat)):
+            return box.tolist(), rot
+
+        rot_pts = np.matmul(points, np.transpose(rot_mat))
+        if not np.all(np.isfinite(rot_pts)):
+            return box.tolist(), rot
+
+        mn = np.min(rot_pts, axis=0)
+        mx = np.max(rot_pts, axis=0)
+        cen = (mn + mx) / 2
+        cur_cen = (box[:3] + box[3:]) / 2
+        new_box = np.concatenate([box[:3] + cen - cur_cen, box[3:] + cen - cur_cen])
+        if not np.all(np.isfinite(new_box)):
+            return box.tolist(), rot
+        if np.any(new_box[3:] - new_box[:3] <= _FINITE_EPS):
+            return box.tolist(), rot
+        return new_box.tolist(), rot_mat
+    except Exception:
+        return box.tolist(), rot
 
 
 class BBox:
@@ -37,6 +95,11 @@ class BBox:
     def valid_bbox(self) -> bool:
         assert len(self.box) == 6, "BBox must have length 6 list"
 
+        if not np.all(np.isfinite(np.asarray(self.box, dtype=float))):
+            return False
+        rot = np.asarray(self.rot, dtype=float)
+        if rot.shape != (3, 3) or not np.all(np.isfinite(rot)):
+            return False
         if self.box[0] >= self.box[3]:
             return False
         if self.box[1] >= self.box[4]:
@@ -1122,7 +1185,7 @@ class MeshBBoxEnv:
     def _bridge_recenter_bbox_params(self, bbox_idx):
         bbox = self.bbox_list[bbox_idx]
         box = np.asarray(bbox.box, dtype=float)
-        rot = np.asarray(bbox.rot, dtype=float)
+        rot = _safe_rotation(bbox.rot)
 
         if not bool(self.args.tilted):
             return box.tolist(), np.eye(3, dtype=float).reshape(-1).tolist()
@@ -1140,8 +1203,12 @@ class MeshBBoxEnv:
                 cached_box, cached_rotation = cached
                 return list(cached_box), list(cached_rotation)
 
-        pts = self.centroid
+        pts = np.asarray(self.centroid, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 3 or not np.all(np.isfinite(pts)):
+            return list(map(float, box)), rot.reshape(-1).tolist()
         rot_pts = np.matmul(pts, np.transpose(rot))
+        if not np.all(np.isfinite(rot_pts)):
+            return list(map(float, box)), rot.reshape(-1).tolist()
 
         min_x, min_y, min_z = box[:3]
         max_x, max_y, max_z = box[3:]
@@ -1155,23 +1222,8 @@ class MeshBBoxEnv:
         if len(masked_voxels) == 0:
             return list(map(float, box)), np.asarray(rot, dtype=float).reshape(-1).tolist()
         nw_pts = self.tetmsh.vertices[np.asarray(masked_voxels, dtype=int).reshape(-1)]
-        try:
-            to_origin, _ = trimesh.bounds.oriented_bounds(nw_pts, angle_digits=3)
-            rot_mat = to_origin[:3, :3]
-
-            rot_pts = np.matmul(nw_pts, np.transpose(rot_mat))
-
-            mn = np.min(rot_pts, axis=0)
-            mx = np.max(rot_pts, axis=0)
-
-            cen = (mn + mx) / 2
-            cur_cen = (box[:3] + box[3:]) / 2
-
-            new_box = list(box[:3] + cen - cur_cen) + list(box[3:] + cen - cur_cen)
-        except:
-            rot_mat = rot
-            new_box = list(box)
-        result_box = list(map(float, new_box))
+        result_box, rot_mat = _safe_recenter_box(box, rot, nw_pts)
+        result_box = list(map(float, result_box))
         result_rotation = np.asarray(rot_mat, dtype=float).reshape(-1).tolist()
         if cache_key is not None:
             self._cache_set(
@@ -1680,8 +1732,13 @@ class MeshBBoxEnv:
                 self._rust_bbox_state = None
                 if self.args.tilted:
 
-                    pts = np.copy(self.centroid)
+                    pts = np.asarray(self.centroid, dtype=float)
+                    self.bbox_list[i].rot = _safe_rotation(self.bbox_list[i].rot)
+                    if pts.ndim != 2 or pts.shape[1] != 3 or not np.all(np.isfinite(pts)):
+                        pts = np.zeros((0, 3), dtype=float)
                     rot_pts = np.matmul(pts, np.transpose(self.bbox_list[i].rot))
+                    if not np.all(np.isfinite(rot_pts)):
+                        rot_pts = np.zeros_like(pts)
 
                     min_x, min_y, min_z = self.bbox_list[i].box[:3]
                     max_x, max_y, max_z = self.bbox_list[i].box[3:]
@@ -1696,30 +1753,12 @@ class MeshBBoxEnv:
                     for j in range(len(masked_voxels)):
                         for k in range(4):
                             nw_pts.append(self.tetmsh.vertices[masked_voxels[j][k]])
-                    try:
-                        to_origin, _ = trimesh.bounds.oriented_bounds(
-                            nw_pts, angle_digits=3
-                        )
-                        rot_mat = to_origin[:3, :3]
-
-                        rot_pts = np.matmul(nw_pts, np.transpose(rot_mat))
-
-                        mn = np.min(rot_pts, axis=0)
-                        mx = np.max(rot_pts, axis=0)
-
-                        cen = (mn + mx) / 2
-                        cur_cen = (
-                            np.array(self.bbox_list[i].box[:3])
-                            + np.array(self.bbox_list[i].box[3:])
-                        ) / 2
-
-                        nw_bbox = np.array(self.bbox_list[i].box)
-
-                        self.bbox_list[i].box = list(nw_bbox[:3] + cen - cur_cen) + list(
-                            nw_bbox[3:] + cen - cur_cen
-                        )
-                    except:
-                        rot_mat = self.bbox_list[i].rot
+                    new_box, rot_mat = _safe_recenter_box(
+                        self.bbox_list[i].box,
+                        self.bbox_list[i].rot,
+                        nw_pts,
+                    )
+                    self.bbox_list[i].box = list(map(float, new_box))
                     self.bbox_list[i].rot = rot_mat
                 else:
                     self.bbox_list[i].rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])

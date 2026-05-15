@@ -48,11 +48,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ftetwild_level": 2,
         "validate": True,
         "require_single_component": False,
+        "min_tetra_count": 20,
+        "min_surface_faces": 20,
         "retry": {
             "enabled": True,
             "epsilon_scale": 2.0,
             "edge_length_scale": 2.0,
             "coarsen": True,
+            "extra_attempts": [
+                {
+                    "name": "coarse_retry",
+                    "epsilon_scale": 4.0,
+                    "edge_length_scale": 3.0,
+                    "coarsen": True,
+                    "timeout_sec": 300,
+                },
+                {
+                    "name": "robust_wn_retry",
+                    "epsilon_scale": 4.0,
+                    "edge_length_scale": 3.0,
+                    "coarsen": True,
+                    "use_floodfill": False,
+                    "use_general_wn": True,
+                    "manifold_surface": False,
+                    "timeout_sec": 300,
+                }
+            ],
         },
     },
     "preseg": {
@@ -121,6 +142,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "action_prior_path": "",
         "action_prior_weight": 0.0,
         "puct_prior_weight": 0.0,
+        "candidate_trace_path": "",
+        "candidate_trace_top_k": 0,
         "score_cache_size": 4096,
         "candidate_backend": "exact",
         "candidate_top_k": 8,
@@ -132,6 +155,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "render_partition": False,
         "summary_metrics": False,
         "timeout_sec": 21600,
+        "accept_timeout_output": True,
         "worker": 0,
     },
     "local_refine": {

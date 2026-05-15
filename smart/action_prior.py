@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -446,6 +446,564 @@ def build_mlp_action_prior_from_traces(
     return payload
 
 
+def build_rl_mlp_action_prior_from_traces(
+    traces: Iterable[str | Path],
+    *,
+    output: str | Path,
+    min_reward: float = -1.0e18,
+    smoothing: float = 1.0,
+    num_action_scale: int | None = None,
+    epochs: int = 300,
+    learning_rate: float = 0.01,
+    l2: float = 1e-4,
+    hidden_size: int = 32,
+    device: str = "auto",
+    advantage_baseline: str = "category",
+    advantage_clip: float = 5.0,
+    entropy_coef: float = 0.01,
+    max_logit_abs: float = 8.0,
+) -> dict[str, Any]:
+    """Train an offline policy-gradient action prior from exact SMART rewards.
+
+    This is intentionally an opt-in research model. It does not replace SMART's
+    exact geometric reward; it only exports logits used to order MCTS actions.
+    """
+
+    records: list[dict[str, Any]] = []
+    categories: set[str] = set()
+    meshes: set[str] = set()
+    max_scale_idx = -1
+    max_trace_num_action_scale = 0
+    trace_paths = [Path(path) for path in traces]
+    seen = 0
+
+    for trace_path in trace_paths:
+        with trace_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                seen += 1
+                record = json.loads(line)
+                reward = float(record.get("reward", 0.0))
+                if reward < min_reward:
+                    continue
+                coord_idx = int(record.get("coord_idx", 6))
+                scale_idx = int(record.get("scale_idx", 0))
+                if coord_idx != 6:
+                    max_scale_idx = max(max_scale_idx, scale_idx)
+                max_trace_num_action_scale = max(
+                    max_trace_num_action_scale,
+                    int(record.get("num_action_scale", 0) or 0),
+                )
+                if record.get("category"):
+                    categories.add(str(record["category"]))
+                if record.get("mesh"):
+                    meshes.add(str(record["mesh"]))
+                records.append(record)
+
+    inferred_num_action_scale = max(max_scale_idx + 1, max_trace_num_action_scale, 2)
+    if num_action_scale is None:
+        num_action_scale = inferred_num_action_scale
+    num_action_scale = max(int(num_action_scale), inferred_num_action_scale, 1)
+    classes = coord_scale_keys(num_action_scale)
+    class_to_idx = {key: idx for idx, key in enumerate(classes)}
+    category_list = sorted(categories)
+    feature_names = linear_feature_names(category_list)
+
+    if not records:
+        raise ValueError("no trace records passed the RL prior training filter")
+
+    baseline_map: dict[str, float] = {}
+    rewards_by_key: dict[str, list[float]] = defaultdict(list)
+    global_rewards: list[float] = []
+    for record in records:
+        reward = float(record.get("reward", 0.0))
+        global_rewards.append(reward)
+        if advantage_baseline == "mesh":
+            key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            key = "__zero__"
+        elif advantage_baseline == "global":
+            key = "__global__"
+        else:
+            key = str(record.get("category", ""))
+        rewards_by_key[key].append(reward)
+    global_baseline = sum(global_rewards) / max(len(global_rewards), 1)
+    for key, values in rewards_by_key.items():
+        baseline_map[key] = 0.0 if advantage_baseline == "none" else sum(values) / len(values)
+
+    examples = []
+    raw_advantages = []
+    for record in records:
+        action_key = _record_coord_scale_key(record)
+        if action_key not in class_to_idx:
+            continue
+        if advantage_baseline == "mesh":
+            baseline_key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            baseline_key = "__zero__"
+        elif advantage_baseline == "global":
+            baseline_key = "__global__"
+        else:
+            baseline_key = str(record.get("category", ""))
+        reward = float(record.get("reward", 0.0))
+        advantage = reward - baseline_map.get(baseline_key, global_baseline)
+        examples.append((linear_features(record, category_list), class_to_idx[action_key]))
+        raw_advantages.append(advantage)
+
+    if not examples:
+        raise ValueError("no trainable coord/scale examples found")
+
+    mean_advantage = sum(raw_advantages) / len(raw_advantages)
+    variance = sum((value - mean_advantage) ** 2 for value in raw_advantages) / max(len(raw_advantages), 1)
+    std_advantage = max(math.sqrt(variance), 1e-12)
+    clipped_advantages = [
+        max(-float(advantage_clip), min(float(advantage_clip), (value - mean_advantage) / std_advantage))
+        for value in raw_advantages
+    ]
+
+    hidden_size = max(int(hidden_size), 1)
+    input_dim = len(feature_names)
+    output_dim = len(classes)
+    init_input_weights = [
+        [0.01 * math.sin((feat_idx + 1) * (hidden_idx + 1)) for hidden_idx in range(hidden_size)]
+        for feat_idx in range(input_dim)
+    ]
+    init_hidden_bias = [0.0 for _ in range(hidden_size)]
+    init_output_weights = [
+        [0.01 * math.cos((hidden_idx + 1) * (class_idx + 1)) for class_idx in range(output_dim)]
+        for hidden_idx in range(hidden_size)
+    ]
+    init_output_bias = [math.log(1.0 / output_dim) for _ in range(output_dim)]
+
+    torch = _import_torch()
+    torch_device = _select_torch_device(torch, device)
+    x = torch.tensor([features for features, _ in examples], dtype=torch.float32, device=torch_device)
+    y = torch.tensor([label for _, label in examples], dtype=torch.long, device=torch_device)
+    advantages = torch.tensor(clipped_advantages, dtype=torch.float32, device=torch_device)
+    input_w = torch.tensor(init_input_weights, dtype=torch.float32, device=torch_device, requires_grad=True)
+    hidden_b = torch.tensor(init_hidden_bias, dtype=torch.float32, device=torch_device, requires_grad=True)
+    output_w = torch.tensor(init_output_weights, dtype=torch.float32, device=torch_device, requires_grad=True)
+    output_b = torch.tensor(init_output_bias, dtype=torch.float32, device=torch_device, requires_grad=True)
+    optimizer = torch.optim.Adam([input_w, hidden_b, output_w, output_b], lr=float(learning_rate))
+    for _ in range(max(int(epochs), 0)):
+        hidden = torch.tanh(x.matmul(input_w) + hidden_b)
+        logits = hidden.matmul(output_w) + output_b
+        log_probs = torch.nn.functional.log_softmax(logits, dim=1)
+        selected_log_probs = log_probs.gather(1, y.view(-1, 1)).squeeze(1)
+        probs = log_probs.exp()
+        entropy = -(probs * log_probs).sum(dim=1).mean()
+        penalty = input_w.square().mean() + output_w.square().mean()
+        loss = -(advantages * selected_log_probs).mean() - float(entropy_coef) * entropy + float(l2) * penalty
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    logit_scale = 1.0
+    with torch.no_grad():
+        hidden = torch.tanh(x.matmul(input_w) + hidden_b)
+        logits = hidden.matmul(output_w) + output_b
+        max_abs_logit = float(logits.abs().max().detach().cpu().item()) if logits.numel() else 0.0
+        if max_logit_abs > 0.0 and max_abs_logit > max_logit_abs:
+            logit_scale = float(max_logit_abs) / max_abs_logit
+            output_w.mul_(logit_scale)
+            output_b.mul_(logit_scale)
+
+    input_weights = input_w.detach().cpu().tolist()
+    hidden_bias = hidden_b.detach().cpu().tolist()
+    output_weights = output_w.detach().cpu().tolist()
+    output_bias = output_b.detach().cpu().tolist()
+
+    fallback_min_reward = max(float(min_reward), 0.0)
+    count_payload = build_action_prior_from_traces(
+        trace_paths,
+        output=Path(output).with_suffix(".counts.tmp.json"),
+        min_reward=fallback_min_reward,
+        smoothing=smoothing,
+        reward_power=0.0,
+        include_action_logits=False,
+        num_action_scale=num_action_scale,
+    )
+    try:
+        Path(output).with_suffix(".counts.tmp.json").unlink()
+    except OSError:
+        pass
+
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "policy_type": "coord_scale_mlp_prior",
+        "classes": classes,
+        "num_action_scale": num_action_scale,
+        "feature_names": feature_names,
+        "categories": category_list,
+        "hidden_size": hidden_size,
+        "activation": "tanh",
+        "input_weights": input_weights,
+        "hidden_bias": hidden_bias,
+        "output_weights": output_weights,
+        "output_bias": output_bias,
+        "fallback_coord_scale_logits": count_payload["coord_scale_logits"],
+        "default_logit": count_payload["default_logit"],
+        "metadata": {
+            "source": "smart.action_prior.build_rl_mlp_action_prior_from_traces",
+            "model_type": "offline_rl_mlp",
+            "trace_files": [str(path) for path in trace_paths],
+            "records_seen": seen,
+            "records_used": len(examples),
+            "categories": category_list,
+            "num_meshes": len(meshes),
+            "meshes": sorted(meshes),
+            "min_reward": min_reward,
+            "fallback_min_reward": fallback_min_reward,
+            "smoothing": smoothing,
+            "epochs": int(epochs),
+            "learning_rate": learning_rate,
+            "l2": l2,
+            "hidden_size": hidden_size,
+            "trainer_backend": "torch",
+            "torch_version": str(torch.__version__),
+            "device": str(torch_device),
+            "advantage_baseline": advantage_baseline,
+            "advantage_clip": advantage_clip,
+            "entropy_coef": entropy_coef,
+            "max_logit_abs": max_logit_abs,
+            "logit_scale": logit_scale,
+            "pre_scale_max_abs_logit": max_abs_logit,
+            "reward_mean": global_baseline,
+            "advantage_mean": mean_advantage,
+            "advantage_std": std_advantage,
+        },
+    }
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def build_policy_gradient_action_prior_from_traces(
+    traces: Iterable[str | Path],
+    *,
+    output: str | Path,
+    min_reward: float = -1.0e18,
+    smoothing: float = 1.0,
+    num_action_scale: int | None = None,
+    epochs: int = 120,
+    learning_rate: float = 0.005,
+    l2: float = 1e-4,
+    hidden_size: int = 48,
+    device: str = "auto",
+    advantage_baseline: str = "category",
+    advantage_clip: float = 5.0,
+    entropy_coef: float = 0.005,
+    max_logit_abs: float = 6.0,
+    accepted_weight: float = 1.0,
+    candidate_weight: float = 1.0,
+    selected_candidate_weight: float = 1.0,
+    category_balance: bool = False,
+) -> dict[str, Any]:
+    """Train an action-level offline policy-gradient prior.
+
+    Unlike the coord/scale prior, this model scores concrete SMART action ids.
+    It sees the bbox index and local action layout, so it can guide MCTS toward
+    different boxes without replacing the exact geometric reward.
+    """
+
+    records: list[dict[str, Any]] = []
+    categories: set[str] = set()
+    meshes: set[str] = set()
+    max_scale_idx = -1
+    max_trace_num_action_scale = 0
+    trace_paths = [Path(path) for path in traces]
+    seen = 0
+
+    for trace_path in trace_paths:
+        with trace_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                seen += 1
+                record = json.loads(line)
+                reward = float(record.get("reward", 0.0))
+                if reward < min_reward:
+                    continue
+                coord_idx = int(record.get("coord_idx", 6))
+                scale_idx = int(record.get("scale_idx", 0))
+                if coord_idx != 6:
+                    max_scale_idx = max(max_scale_idx, scale_idx)
+                max_trace_num_action_scale = max(
+                    max_trace_num_action_scale,
+                    int(record.get("num_action_scale", 0) or 0),
+                )
+                if record.get("category"):
+                    categories.add(str(record["category"]))
+                if record.get("mesh"):
+                    meshes.add(str(record["mesh"]))
+                records.append(record)
+
+    inferred_num_action_scale = max(max_scale_idx + 1, max_trace_num_action_scale, 2)
+    if num_action_scale is None:
+        num_action_scale = inferred_num_action_scale
+    num_action_scale = max(int(num_action_scale), inferred_num_action_scale, 1)
+    category_list = sorted(categories)
+    feature_names = action_feature_names(category_list, num_action_scale)
+
+    if not records:
+        raise ValueError("no trace records passed the policy-gradient prior training filter")
+
+    rewards_by_key: dict[str, list[float]] = defaultdict(list)
+    global_rewards: list[float] = []
+    for record in records:
+        reward = float(record.get("reward", 0.0))
+        global_rewards.append(reward)
+        if advantage_baseline == "mesh":
+            key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            key = "__zero__"
+        elif advantage_baseline == "global":
+            key = "__global__"
+        else:
+            key = str(record.get("category", ""))
+        rewards_by_key[key].append(reward)
+    global_baseline = sum(global_rewards) / max(len(global_rewards), 1)
+    baseline_map = {
+        key: (0.0 if advantage_baseline == "none" else sum(values) / len(values))
+        for key, values in rewards_by_key.items()
+    }
+    candidate_rewards_by_group: dict[str, list[float]] = defaultdict(list)
+    for record in records:
+        if str(record.get("record_type", "")) != "mcts_candidate":
+            continue
+        candidate_rewards_by_group[_candidate_group_key(record)].append(float(record.get("reward", 0.0)))
+    candidate_baseline_by_group = {
+        key: sum(values) / len(values)
+        for key, values in candidate_rewards_by_group.items()
+        if len(values) > 1
+    }
+
+    flat_features: list[list[float]] = []
+    segment_starts: list[int] = []
+    segment_lengths: list[int] = []
+    selected_offsets: list[int] = []
+    raw_advantages: list[float] = []
+    example_weights: list[float] = []
+    example_categories: list[str] = []
+    used_records = 0
+    candidate_records_used = 0
+
+    for record in records:
+        trace_num_action_scale = max(
+            int(record.get("num_action_scale", 0) or num_action_scale),
+            1,
+        )
+        per_bbox = 6 * trace_num_action_scale + 1
+        selected_action = int(record.get("action", -1))
+        if selected_action < 0:
+            continue
+        selected_bbox = selected_action // per_bbox
+        num_bbox = max(int(record.get("num_bbox", 0) or 0), selected_bbox + 1)
+        num_actions = num_bbox * per_bbox
+        if selected_action >= num_actions:
+            continue
+
+        start = len(flat_features)
+        for action in range(num_actions):
+            flat_features.append(
+                action_features(
+                    record,
+                    action,
+                    action_num_action_scale=trace_num_action_scale,
+                    model_num_action_scale=num_action_scale,
+                    categories=category_list,
+                )
+            )
+        segment_starts.append(start)
+        segment_lengths.append(num_actions)
+        selected_offsets.append(selected_action)
+
+        if advantage_baseline == "mesh":
+            baseline_key = str(record.get("mesh", ""))
+        elif advantage_baseline == "none":
+            baseline_key = "__zero__"
+        elif advantage_baseline == "global":
+            baseline_key = "__global__"
+        else:
+            baseline_key = str(record.get("category", ""))
+        reward = float(record.get("reward", 0.0))
+        if str(record.get("record_type", "")) == "mcts_candidate":
+            group_key = _candidate_group_key(record)
+            raw_advantages.append(reward - candidate_baseline_by_group.get(group_key, global_baseline))
+            weight = float(candidate_weight)
+            if bool(record.get("selected", False)):
+                weight *= float(selected_candidate_weight)
+            candidate_records_used += 1
+        else:
+            raw_advantages.append(reward - baseline_map.get(baseline_key, global_baseline))
+            weight = float(accepted_weight)
+        example_weights.append(max(weight, 0.0))
+        example_categories.append(str(record.get("category", "")))
+        used_records += 1
+
+    if not flat_features or not used_records:
+        raise ValueError("no trainable action-level policy-gradient examples found")
+
+    mean_advantage = sum(raw_advantages) / len(raw_advantages)
+    variance = sum((value - mean_advantage) ** 2 for value in raw_advantages) / max(len(raw_advantages), 1)
+    std_advantage = max(math.sqrt(variance), 1e-12)
+    clipped_advantages = [
+        max(-float(advantage_clip), min(float(advantage_clip), (value - mean_advantage) / std_advantage))
+        for value in raw_advantages
+    ]
+    if category_balance and example_weights:
+        category_counts = Counter(example_categories)
+        category_count = max(len(category_counts), 1)
+        total_examples = max(len(example_weights), 1)
+        example_weights = [
+            weight * total_examples / max(category_count * category_counts.get(category, 1), 1)
+            for weight, category in zip(example_weights, example_categories)
+        ]
+    mean_example_weight = sum(example_weights) / max(len(example_weights), 1)
+    if mean_example_weight > 0.0:
+        example_weights = [weight / mean_example_weight for weight in example_weights]
+
+    hidden_size = max(int(hidden_size), 1)
+    input_dim = len(feature_names)
+    init_input_weights = [
+        [0.01 * math.sin((feat_idx + 1) * (hidden_idx + 1)) for hidden_idx in range(hidden_size)]
+        for feat_idx in range(input_dim)
+    ]
+    init_hidden_bias = [0.0 for _ in range(hidden_size)]
+    init_output_weights = [0.01 * math.cos(hidden_idx + 1) for hidden_idx in range(hidden_size)]
+    init_output_bias = 0.0
+
+    torch = _import_torch()
+    torch_device = _select_torch_device(torch, device)
+    x = torch.tensor(flat_features, dtype=torch.float32, device=torch_device)
+    starts = [int(value) for value in segment_starts]
+    lengths = [int(value) for value in segment_lengths]
+    selected = [int(value) for value in selected_offsets]
+    max_segment_length = max(lengths)
+    row_ids: list[int] = []
+    col_ids: list[int] = []
+    for row_idx, length in enumerate(lengths):
+        row_ids.extend([row_idx] * length)
+        col_ids.extend(range(length))
+    row_index = torch.tensor(row_ids, dtype=torch.long, device=torch_device)
+    col_index = torch.tensor(col_ids, dtype=torch.long, device=torch_device)
+    selected_index = torch.tensor(selected, dtype=torch.long, device=torch_device).view(-1, 1)
+    advantages = torch.tensor(clipped_advantages, dtype=torch.float32, device=torch_device)
+    weights = torch.tensor(example_weights, dtype=torch.float32, device=torch_device)
+    weight_sum = torch.clamp(weights.sum(), min=1.0e-12)
+    input_w = torch.tensor(init_input_weights, dtype=torch.float32, device=torch_device, requires_grad=True)
+    hidden_b = torch.tensor(init_hidden_bias, dtype=torch.float32, device=torch_device, requires_grad=True)
+    output_w = torch.tensor(init_output_weights, dtype=torch.float32, device=torch_device, requires_grad=True)
+    output_b = torch.tensor(init_output_bias, dtype=torch.float32, device=torch_device, requires_grad=True)
+    optimizer = torch.optim.Adam([input_w, hidden_b, output_w, output_b], lr=float(learning_rate))
+
+    for _ in range(max(int(epochs), 0)):
+        hidden = torch.tanh(x.matmul(input_w) + hidden_b)
+        logits = hidden.matmul(output_w) + output_b
+        padded_logits = torch.full(
+            (len(lengths), max_segment_length),
+            -torch.inf,
+            dtype=logits.dtype,
+            device=torch_device,
+        )
+        padded_logits[row_index, col_index] = logits
+        log_probs = torch.nn.functional.log_softmax(padded_logits, dim=1)
+        selected_log_probs = log_probs.gather(1, selected_index).squeeze(1)
+        policy_term = -((weights * advantages * selected_log_probs).sum() / weight_sum)
+        probs = log_probs.exp()
+        finite_log_probs = torch.where(torch.isfinite(log_probs), log_probs, torch.zeros_like(log_probs))
+        entropy_per_example = -(probs * finite_log_probs).sum(dim=1)
+        entropy = (weights * entropy_per_example).sum() / weight_sum
+        penalty = input_w.square().mean() + output_w.square().mean()
+        loss = policy_term - float(entropy_coef) * entropy + float(l2) * penalty
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    logit_scale = 1.0
+    with torch.no_grad():
+        hidden = torch.tanh(x.matmul(input_w) + hidden_b)
+        logits = hidden.matmul(output_w) + output_b
+        max_abs_logit = float(logits.abs().max().detach().cpu().item()) if logits.numel() else 0.0
+        if max_logit_abs > 0.0 and max_abs_logit > max_logit_abs:
+            logit_scale = float(max_logit_abs) / max_abs_logit
+            output_w.mul_(logit_scale)
+            output_b.mul_(logit_scale)
+
+    fallback_min_reward = max(float(min_reward), 0.0)
+    count_payload = build_action_prior_from_traces(
+        trace_paths,
+        output=Path(output).with_suffix(".counts.tmp.json"),
+        min_reward=fallback_min_reward,
+        smoothing=smoothing,
+        reward_power=0.0,
+        include_action_logits=False,
+        num_action_scale=num_action_scale,
+    )
+    try:
+        Path(output).with_suffix(".counts.tmp.json").unlink()
+    except OSError:
+        pass
+
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "policy_type": "action_mlp_prior",
+        "num_action_scale": num_action_scale,
+        "feature_names": feature_names,
+        "categories": category_list,
+        "hidden_size": hidden_size,
+        "activation": "tanh",
+        "action_input_weights": input_w.detach().cpu().tolist(),
+        "action_hidden_bias": hidden_b.detach().cpu().tolist(),
+        "action_output_weights": output_w.detach().cpu().tolist(),
+        "action_output_bias": float(output_b.detach().cpu().item()),
+        "fallback_coord_scale_logits": count_payload["coord_scale_logits"],
+        "default_logit": count_payload["default_logit"],
+        "metadata": {
+            "source": "smart.action_prior.build_policy_gradient_action_prior_from_traces",
+            "model_type": "policy_gradient_agent",
+            "trace_files": [str(path) for path in trace_paths],
+            "records_seen": seen,
+            "records_used": used_records,
+            "candidate_records_used": candidate_records_used,
+            "candidate_actions_seen": len(flat_features),
+            "categories": category_list,
+            "num_meshes": len(meshes),
+            "meshes": sorted(meshes),
+            "min_reward": min_reward,
+            "fallback_min_reward": fallback_min_reward,
+            "smoothing": smoothing,
+            "epochs": int(epochs),
+            "learning_rate": learning_rate,
+            "l2": l2,
+            "hidden_size": hidden_size,
+            "trainer_backend": "torch",
+            "torch_version": str(torch.__version__),
+            "device": str(torch_device),
+            "advantage_baseline": advantage_baseline,
+            "advantage_clip": advantage_clip,
+            "entropy_coef": entropy_coef,
+            "max_logit_abs": max_logit_abs,
+            "accepted_weight": accepted_weight,
+            "candidate_weight": candidate_weight,
+            "selected_candidate_weight": selected_candidate_weight,
+            "category_balance": bool(category_balance),
+            "mean_example_weight": mean_example_weight,
+            "logit_scale": logit_scale,
+            "pre_scale_max_abs_logit": max_abs_logit,
+            "reward_mean": global_baseline,
+            "advantage_mean": mean_advantage,
+            "advantage_std": std_advantage,
+        },
+    }
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
 def coord_scale_keys(num_action_scale: int) -> list[str]:
     """Return SMART coord/scale prior keys for the legacy action order."""
 
@@ -495,6 +1053,14 @@ class LoadedActionPrior:
             for row in payload.get("output_weights", [])
         ]
         self.output_bias = [float(value) for value in payload.get("output_bias", [])]
+        self.action_input_weights = [
+            [float(value) for value in row]
+            for row in payload.get("action_input_weights", [])
+        ]
+        self.action_hidden_bias = [float(value) for value in payload.get("action_hidden_bias", [])]
+        self.action_output_weights = [float(value) for value in payload.get("action_output_weights", [])]
+        self.action_output_bias = float(payload.get("action_output_bias", 0.0) or 0.0)
+        self.model_num_action_scale = int(payload.get("num_action_scale", 0) or 0)
 
     def action_logits_for(
         self,
@@ -503,11 +1069,17 @@ class LoadedActionPrior:
         num_action_scale: int,
         context: dict[str, Any] | None = None,
     ) -> list[float]:
+        actions = [int(action) for action in actions]
+        if self.policy_type == "action_mlp_prior":
+            return self._action_mlp_logits_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context or {},
+            )
         class_logits = self._class_logits(context or {})
         out = []
         per_bbox = 6 * int(num_action_scale) + 1
         for action in actions:
-            action = int(action)
             if action in self.action_logits:
                 out.append(self.action_logits[action])
                 continue
@@ -560,6 +1132,49 @@ class LoadedActionPrior:
             out.setdefault(key, value)
         return out
 
+    def _action_mlp_logits_for(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ) -> list[float]:
+        if (
+            not self.action_input_weights
+            or not self.action_hidden_bias
+            or not self.action_output_weights
+        ):
+            class_logits = self._class_logits(context)
+            per_bbox = 6 * int(num_action_scale) + 1
+            out = []
+            for action in actions:
+                local = int(action) % per_bbox
+                if local == per_bbox - 1:
+                    key = "6:0"
+                else:
+                    key = "%d:%d" % (local // int(num_action_scale), local % int(num_action_scale))
+                out.append(float(class_logits.get(key, self.default_logit)))
+            return out
+
+        model_num_action_scale = max(self.model_num_action_scale, int(num_action_scale), 1)
+        out = []
+        for action in actions:
+            features = action_features(
+                context,
+                int(action),
+                action_num_action_scale=int(num_action_scale),
+                model_num_action_scale=model_num_action_scale,
+                categories=self.categories,
+            )
+            _, hidden = _mlp_hidden(features, self.action_input_weights, self.action_hidden_bias)
+            logit = self.action_output_bias
+            for hidden_idx, value in enumerate(hidden):
+                if hidden_idx >= len(self.action_output_weights):
+                    break
+                logit += value * self.action_output_weights[hidden_idx]
+            out.append(float(logit))
+        return out
+
 
 def linear_feature_names(categories: list[str]) -> list[str]:
     return [
@@ -600,12 +1215,105 @@ def linear_features(record: dict[str, Any], categories: list[str]) -> list[float
     return features
 
 
+def action_feature_names(categories: list[str], num_action_scale: int) -> list[str]:
+    names = list(linear_feature_names(categories))
+    names.extend(
+        [
+            "bbox_idx_norm",
+            "bbox_centered",
+            "bbox_reverse_norm",
+            "local_action_norm",
+            "is_axis_action",
+            "is_recenter_action",
+            "is_lower_coord",
+            "is_upper_coord",
+            "signed_scale_norm",
+            "abs_scale_norm",
+            "scale_idx_norm",
+        ]
+    )
+    names.extend([f"axis={axis}" for axis in ("x", "y", "z")])
+    names.extend([f"coord={coord_idx}" for coord_idx in range(7)])
+    names.extend([f"scale_idx={scale_idx}" for scale_idx in range(max(int(num_action_scale), 1))])
+    return names
+
+
+def action_features(
+    record: dict[str, Any],
+    action: int,
+    *,
+    action_num_action_scale: int,
+    model_num_action_scale: int,
+    categories: list[str],
+) -> list[float]:
+    action_num_action_scale = max(int(action_num_action_scale), 1)
+    model_num_action_scale = max(int(model_num_action_scale), 1)
+    per_bbox = 6 * action_num_action_scale + 1
+    action = int(action)
+    bbox_idx = max(action // per_bbox, 0)
+    local = action % per_bbox
+    if local == per_bbox - 1:
+        coord_idx = 6
+        scale_idx = 0
+    else:
+        coord_idx = local // action_num_action_scale
+        scale_idx = local % action_num_action_scale
+    num_bbox = max(int(record.get("num_bbox", 0) or 0), bbox_idx + 1, 1)
+    signed_scale = _action_scale_value(scale_idx, action_num_action_scale) if coord_idx < 6 else 0.0
+    max_scale = max(abs(_action_scale_value(0, action_num_action_scale)), 1.0)
+    if action_num_action_scale > 1:
+        scale_idx_norm = scale_idx / float(action_num_action_scale - 1)
+    else:
+        scale_idx_norm = 0.0
+    features = list(linear_features(record, categories))
+    features.extend(
+        [
+            bbox_idx / float(num_bbox),
+            (bbox_idx - (num_bbox - 1) * 0.5) / max(float(num_bbox), 1.0),
+            (num_bbox - 1 - bbox_idx) / float(num_bbox),
+            local / float(max(per_bbox - 1, 1)),
+            1.0 if coord_idx < 6 else 0.0,
+            1.0 if coord_idx >= 6 else 0.0,
+            1.0 if coord_idx < 6 and coord_idx % 2 == 0 else 0.0,
+            1.0 if coord_idx < 6 and coord_idx % 2 == 1 else 0.0,
+            signed_scale / max_scale,
+            abs(signed_scale) / max_scale,
+            scale_idx_norm,
+        ]
+    )
+    axis_idx = coord_idx // 2 if coord_idx < 6 else -1
+    features.extend(1.0 if axis_idx == idx else 0.0 for idx in range(3))
+    features.extend(1.0 if coord_idx == idx else 0.0 for idx in range(7))
+    features.extend(1.0 if scale_idx == idx and coord_idx < 6 else 0.0 for idx in range(model_num_action_scale))
+    return features
+
+
+def _action_scale_value(scale_idx: int, num_action_scale: int) -> float:
+    num_action_scale = max(int(num_action_scale), 1)
+    half = max(num_action_scale // 2, 1)
+    if scale_idx < half:
+        return float(-(2 ** (half - 1 - scale_idx)))
+    return float(2 ** (scale_idx - half))
+
+
 def _record_coord_scale_key(record: dict[str, Any]) -> str:
     coord_idx = int(record.get("coord_idx", 6))
     scale_idx = int(record.get("scale_idx", 0))
     if coord_idx >= 6:
         return "6:0"
     return f"{coord_idx}:{scale_idx}"
+
+
+def _candidate_group_key(record: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(record.get("category", "")),
+            str(record.get("mesh", "")),
+            str(record.get("mcts_iter", "")),
+            str(record.get("rollout_step", "")),
+            str(record.get("node_id", "")),
+        ]
+    )
 
 
 def _linear_logits(features: list[float], weights: list[list[float]], bias: list[float]) -> list[float]:

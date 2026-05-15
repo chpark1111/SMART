@@ -470,6 +470,24 @@ def get_parser() -> ArgumentParser:
         help="optional JSONL path for accepted refine/MCTS action traces used by later policy/RL experiments",
     )
     parser.add_argument(
+        "--candidate_trace_path",
+        type=str,
+        default="",
+        help=(
+            "optional JSONL path for MCTS candidate traces. This records already "
+            "scored rollout candidates for policy/RL training without changing search."
+        ),
+    )
+    parser.add_argument(
+        "--candidate_trace_top_k",
+        type=int,
+        default=0,
+        help=(
+            "maximum rollout candidate rows to write per MCTS rollout step. "
+            "0 records all candidates when candidate_trace_path is set."
+        ),
+    )
+    parser.add_argument(
         "--category",
         type=str,
         default="",

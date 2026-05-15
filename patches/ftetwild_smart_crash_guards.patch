@@ -1,0 +1,80 @@
+diff --git a/src/MeshImprovement.cpp b/src/MeshImprovement.cpp
+index b937fa8..77e3dea 100644
+--- a/src/MeshImprovement.cpp
++++ b/src/MeshImprovement.cpp
+@@ -2637,7 +2637,6 @@ void floatTetWild::get_surface(Mesh& mesh, Eigen::MatrixXd& V, Eigen::MatrixXi&
+     }
+ }
+ 
+-#include <igl/is_vertex_manifold.h>
+ void floatTetWild::manifold_surface(Mesh& mesh, Eigen::MatrixXd& V, Eigen::MatrixXi& F) {
+     auto &tets = mesh.tets;
+     auto &tet_vertices = mesh.tet_vertices;
+@@ -2715,18 +2714,26 @@ void floatTetWild::manifold_surface(Mesh& mesh, Eigen::MatrixXd& V, Eigen::Matri
+         conn_f4v.push_back(f_group);
+     }
+ 
+-    //fortest
+-    Eigen::Matrix<bool, Eigen::Dynamic, Eigen::Dynamic> B;
+-    igl::is_vertex_manifold(F, B);
+-    cout << B.rows() << endl;
+-    int cnt = 0;
+-    for (int i = 0; i < B.rows(); i++) {
+-        if (!B(i, 0)) {
+-            cnt++;
+-//            cout << "non-manifold " << i << " " << V.row(i) << endl;
++    Eigen::Matrix<int, Eigen::Dynamic, 3> clean_F(F.rows(), 3);
++    int clean_rows = 0;
++    for (int i = 0; i < F.rows(); i++) {
++        const bool in_range = F(i, 0) >= 0 && F(i, 0) < V.rows()
++                           && F(i, 1) >= 0 && F(i, 1) < V.rows()
++                           && F(i, 2) >= 0 && F(i, 2) < V.rows();
++        const bool non_degenerate = F(i, 0) != F(i, 1)
++                                 && F(i, 1) != F(i, 2)
++                                 && F(i, 2) != F(i, 0);
++        if (in_range && non_degenerate) {
++            clean_F.row(clean_rows++) = F.row(i);
+         }
+     }
+-    cout << cnt << endl;
+-    //fortest
++    if (clean_rows != F.rows()) {
++        cout << "drop invalid manifold surface faces: "
++             << F.rows() - clean_rows << endl;
++        clean_F.conservativeResize(clean_rows, 3);
++        F = clean_F;
++    }
++
++    cout << "manifold surface face count: " << F.rows() << endl;
+ 
+ }
+diff --git a/src/external/bfs_orient.cpp b/src/external/bfs_orient.cpp
+index 3ae6074..852e37d 100644
+--- a/src/external/bfs_orient.cpp
++++ b/src/external/bfs_orient.cpp
+@@ -12,8 +12,18 @@
+ #include <queue>
+ 
+ void floatTetWild::bfs_orient(const Eigen::Matrix<int, Eigen::Dynamic, 3> &F, Eigen::Matrix<int, Eigen::Dynamic, 3> &FF, Eigen::VectorXi &C) {
++    if (F.rows() == 0) {
++        FF.resize(0, 3);
++        C.resize(0);
++        return;
++    }
++
+     Eigen::SparseMatrix<int> A;
+     igl::orientable_patches(F, C, A);
++    if (C.size() == 0) {
++        FF.resize(0, 3);
++        return;
++    }
+ 
+     // number of faces
+     const int m = F.rows();
+@@ -90,4 +100,4 @@ void floatTetWild::bfs_orient(const Eigen::Matrix<int, Eigen::Dynamic, 3> &F, Ei
+                 FF.row(f) = FF.row(f).reverse().eval();
+         }
+     }
+-}
+\ No newline at end of file
++}

@@ -826,12 +826,34 @@ tables are deferred until after exact parity is locked.
      `runs/bench_exact/action_prior_puct_linear_airplane2_mcts2.json` kept metric
      diffs at `0` and measured `1.055x`; it is promising enough to test at
      MCTS20/MCTS100, but still too small to recommend.
+   - Added an offline policy-gradient PyTorch MLP prior:
+     `smart build-prior --model-type rl-mlp`,
+     `scripts/train_action_prior_from_traces.py --model-type rl-mlp`, and
+     `smart.build_rl_mlp_action_prior_from_traces`. It uses exact SMART trace
+     rewards as replay data and exports a JSON policy, so runtime MCTS still
+     uses the existing exact reward/evaluation. The packaged all-trace asset is
+     `smart/assets/priors/category_general_all_available_offline_rl_mlp_prior.json`.
+     On `runs/bench_exact/rl_prior_cat5_mcts20_weight_sweep.json`, prior weights
+     `0.05`, `0.1`, and `0.2` measured `1.032x`, `1.057x`, and `1.081x`.
+     Weight `0.1` is the current research setting; `0.2` is faster but worsened
+     more cases.
+   - Added `scripts/run_quality_guarded_mcts.py`, which runs baseline and
+     learned-prior MCTS, evaluates both, and copies the non-worse selection into
+     `mcts_guarded`. On
+     `runs/bench_exact/quality_guard_cat5_mcts20_rl01.json`, the global
+     offline-RL prior was selected on `10/15` cases, baseline was selected on
+     `5/15`, and one raw-prior worse case was blocked by the guard. The guarded
+     stage therefore produced `15/15` successful non-worse outputs.
+   - Category-specific offline-RL priors were trained, but the first chair-only
+     guarded check (`runs/bench_exact/quality_guard_chair5_mcts20_catrl01.json`)
+     was not better than the global prior: `2/5` raw prior outputs were rejected
+     for worse coverage. Keep category-specific priors experimental.
 
-   Next RL/MCTS step: generate more traces from the processed expanded set and
-   train category-specific linear and PyTorch MLP priors. A global smoke prior
-   is too blunt for table cases. The prior/RL path is therefore active, but it
-   is intentionally not default until it improves quality metrics instead of
-   merely changing the search trajectory.
+   Next RL/MCTS step: train a stronger category-aware policy and use the quality
+   guard as the acceptance layer. A global prior is still too blunt for some
+   chair cases. The prior/RL path is therefore active, but it is intentionally
+   not a reproduction default until it improves or preserves final SMART quality
+   metrics on larger sweeps.
 
 1. Opt-in no-reward MCTS early stop
 
@@ -882,9 +904,23 @@ tables are deferred until after exact parity is locked.
      (`2.722 -> 2.609`), MOV (`3.034 -> 2.497`), TOV (`1.580 -> 1.508`), and
      vIoU (`0.3867 -> 0.3978`) while keeping coverage above `0.998`.
 
-   Next gate: run this over the current 16 processed meshes and compare against
-   MCTS output. Promote only if coverage remains high and the aggregate quality
-   tradeoff is consistently positive.
+   Guarded check:
+
+   - `runs/bench_exact/local_refine_guarded_refined21_covtol_improved_reuse_mcts_guarded.json`:
+     `scripts/run_quality_guarded_local_refine.py` ran the hybrid post-process
+     on all `21` currently refined `mcts_guarded` targets. It selected local
+     refine on `10/21`, selected input on `11/21`, and improved `10/21` cases.
+     Aggregate selected-stage metrics improved BVS (`2.0373 -> 2.0010`), MOV
+     (`1.5140 -> 1.3500`), TOV (`0.9780 -> 0.9480`), and vIoU
+     (`0.6142 -> 0.6269`) versus `mcts_guarded`; coverage stayed effectively
+     unchanged under the explicit `0.001` coverage tolerance. Strict coverage
+     guard selected local refine on only `2/21`, which shows most quality gains
+     trade a very small coverage change for much better tightness.
+
+   Next gate: run this over a larger category-balanced set and compare strict
+   guard (`covered_tolerance=0`) versus quality-first guard
+   (`covered_tolerance=0.001`). Promote only if coverage remains high and the
+   aggregate quality tradeoff is consistently positive.
 
 1. Optional MCTS transposition table
 

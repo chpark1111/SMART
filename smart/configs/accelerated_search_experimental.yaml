@@ -64,7 +64,7 @@
     "score_cache_size": 65536,
     "stateful_union_cache": true,
     "stateful_cache_capacity": 65536,
-    "action_prior_path": "smart/assets/priors/smoke5_coord_scale_prior.json",
+    "action_prior_path": "smart/assets/priors/category_general_expanded_full_mlp_prior.json",
     "action_prior_weight": 0.1,
     "allow_search_order_changes": true,
     "render_initial": false,

@@ -28,6 +28,13 @@ maturin develop --release --extras pipeline
 Alternatively, if you want pip to drive the editable install, install the
 Python `maturin` build backend first and then run
 `pip install -e ".[pipeline]"`.
+On Apple Silicon with Homebrew Rust and a universal Python, pip/maturin can try
+the missing x86_64 target. Use the arm64 target explicitly for local editable
+installs:
+
+```
+CARGO_BUILD_TARGET=aarch64-apple-darwin pip install -e ".[pipeline]"
+```
 
 After a PyPI release, users should only need:
 
@@ -59,6 +66,33 @@ Run a data sanity check:
 smart --config configs/demo.yaml check-data
 ```
 
+For the SMART paper categories, use only the three ShapeNet synset archives
+needed by the official reproduction path:
+
+```text
+airplane  02691156.zip
+chair     03001627.zip
+table     04379243.zip
+```
+
+Prepare them into the official layout without mixing categories:
+
+```bash
+python3 scripts/prepare_shapenet_samples.py \
+  --archive-dir /path/to/shapenet_zips \
+  --output-root data/expanded \
+  --categories airplane chair table \
+  --limit 100000 \
+  --normalize preserve
+
+smart --config configs/expanded_full.yaml check-data
+```
+
+`configs/expanded_full.yaml` then runs the same official pipeline on
+`data/expanded/shapenet_{airplane,chair,table}/<model_id>/model.obj`.
+The pipeline still normalizes into `runs/expanded_full/normalized/`, so the
+downloaded ShapeNet-derived files are left untouched.
+
 Check the local runtime, external binaries, vendored Manifold binding, Blender,
 and optional Rust tooling:
 
@@ -71,7 +105,8 @@ If the `smart` console script is not on PATH, use `python -m smart` with the
 same arguments.
 
 Build external tools. This downloads/builds ManifoldPlus and fTetWild under
-`external/mesh2tet`, and builds the fixed vendored Manifold Python binding under
+`external/mesh2tet`, applies SMART's local fTetWild crash-guard patch, and
+builds the fixed vendored Manifold Python binding under
 `smart/vendor/manifold/build`:
 
 ```
@@ -132,6 +167,21 @@ Run the hybrid MCTS plus fine local-search profile:
 smart --config configs/hybrid_local_search_experimental.yaml run
 ```
 
+Run the guarded hybrid post-process on already generated `mcts_guarded`
+outputs:
+
+```
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 20 \
+  --input-stage mcts_guarded \
+  --max-step 100 \
+  --action-unit 0.005 \
+  --covered-tolerance 0.001 \
+  --selection-mode improved
+```
+
 The stateful profiles are intentionally separate from `accelerated_exact.yaml`.
 `manifold_stateful` is still opt-in: the latest smoke sweeps preserve paper
 metrics and show a small MCTS speed win after exact reward memoization, but
@@ -174,6 +224,9 @@ Tetrahedral validation requires `tetra.msh` and a watertight
 because ShapeNet-style meshes often contain detached semantic parts and the
 downstream SMART stages can process them. Use
 `--set tetra.require_single_component=true` only for strict debugging.
+The validator also rejects empty/tiny fTetWild outputs through
+`tetra.min_tetra_count` and `tetra.min_surface_faces`, so crash-prone or
+pathological Mesh2Tet cases are skipped before CoACD/merge.
 
 Run one stage or one mesh:
 
@@ -219,6 +272,15 @@ status = smart.doctor("configs/demo.yaml")
 Outputs and logs are written to `runs/<profile>/`. Each stage appends a JSONL
 manifest under `runs/<profile>/manifests`, so Mesh2Tet failures are recorded and
 skipped instead of stopping the whole run.
+
+For long or expanded runs, summarize failures and timeout causes with:
+
+```bash
+python scripts/analyze_pipeline_failures.py --manifest-dir runs/expanded_full/manifests
+```
+
+This separates true stage timeouts from fTetWild crashes, external kills, and
+completed MCTS outputs that only exceeded a wrapper timeout.
 
 Evaluation uses the metric definitions from `past_codes/Evaluation`: `BVS`,
 `MOV`, `TOV`, `Covered`, `vIoU`, `cub_CD`, and box count. Results are written to
@@ -395,8 +457,8 @@ smart --config configs/smoke_5.yaml build-prior \
 ```
 
 The default `--model-type counts` writes portable coord/scale logits. A
-state-aware linear policy and a PyTorch MLP policy are also available for
-RL/action-ordering experiments:
+state-aware linear policy, supervised PyTorch MLP, and offline RL PyTorch MLP
+are also available for action-ordering experiments:
 
 ```bash
 smart --config configs/smoke_5.yaml build-prior \
@@ -412,11 +474,57 @@ smart --config configs/smoke_5.yaml build-prior \
   --epochs 200 \
   --hidden-size 32 \
   --device auto
+
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/traces/airplane_mcts20_trace.jsonl \
+  --output runs/bench_exact/priors/airplane_rl_prior.json \
+  --model-type rl-mlp \
+  --min-reward -1000000000 \
+  --epochs 300 \
+  --hidden-size 32 \
+  --advantage-baseline category \
+  --device auto
 ```
 
-For `--model-type mlp`, `--device auto` uses PyTorch and probes Apple Silicon
-MPS first, then CUDA, then CPU. The saved JSON still contains plain weights, so
-MCTS inference does not need to keep a PyTorch model object alive.
+For `--model-type mlp` and `--model-type rl-mlp`, `--device auto` uses PyTorch
+and probes Apple Silicon MPS first, then CUDA, then CPU. The saved JSON still
+contains plain weights, so MCTS inference does not need to keep a PyTorch model
+object alive.
+The current packaged category-general research prior is:
+
+```text
+smart/assets/priors/category_general_expanded_full_mlp_prior.json
+```
+
+It was trained from every currently available valid action trace under
+`runs/`: `79` trace files, `10,502` action records seen, `7,389`
+reward-nonnegative records used, and `119` unique meshes across
+airplane/chair/table. The reproducibility list is written to
+`runs/bench_exact/priors/all_available_trace_files_20260514.txt`, and the
+training output is mirrored at
+`runs/bench_exact/priors/category_general_all_available_mlp_prior.json`.
+Use it only with `mcts.allow_search_order_changes=true`; it guides action
+ordering and never replaces SMART's exact reward/evaluation. Because this is a
+newly trained prior, rerun the category-balanced benchmark before treating its
+speed or quality as a result.
+The current packaged offline-RL research prior is:
+
+```text
+smart/assets/priors/category_general_all_available_offline_rl_mlp_prior.json
+```
+
+It was trained with all valid action records, including negative-reward
+exploration actions, using category-baseline advantages. The matching opt-in
+profile is `configs/rl_search_experimental.yaml`. A minimal three-mesh smoke at
+`mcts_iter=10`, `max_step=10`, and prior weight `0.1` measured `1.094x` mean
+MCTS-stage speedup with all reported metrics identical and no quality-worse
+cases; this is only a smoke result. A larger 15-mesh weight sweep at
+`mcts_iter=20`, `max_step=20`
+(`runs/bench_exact/rl_prior_cat5_mcts20_weight_sweep.json`) measured `1.032x`,
+`1.057x`, and `1.081x` for weights `0.05`, `0.1`, and `0.2`. Weight `0.1`
+had one improved case and one worse case, while `0.2` had more worse cases, so
+offline RL priors remain research-only until a quality guard or stronger policy
+passes a larger validation.
 
 The same builder is also available as a Python API:
 
@@ -477,6 +585,33 @@ weight `1.0`, but it is still an opt-in search-order experiment.
 For category-general priors, use
 `scripts/benchmark_action_prior_generalization.py`; it builds leave-one-out
 priors from traces of the other meshes and reports both speed and metric drift.
+To collect more category-balanced traces from every configured dataset, use the
+batch collector:
+
+```bash
+python3 scripts/collect_action_traces.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --batch-size 5 \
+  --max-batches-per-category 4 \
+  --mcts-iter 20 \
+  --mcts-max-step 20 \
+  --trace-root runs/bench_exact/trace_collection
+
+python3 scripts/train_action_prior_from_traces.py \
+  runs/bench_exact/trace_collection/*.jsonl \
+  --output runs/bench_exact/priors/category_general_mlp_prior.json \
+  --model-type mlp \
+  --epochs 200 \
+  --hidden-size 32 \
+  --device auto
+```
+
+For the full airplane/chair/table ShapeNet set, switch the collector config to
+`configs/expanded_full.yaml` after preparing the three category archives. This
+is the current intended category-general RL/prior path: collect accepted exact
+SMART actions, train a category-aware action prior, use it only to guide MCTS
+action ordering, and keep final quality judged by SMART evaluation metrics.
 The checked five-mesh smoke result
 `runs/bench_exact/action_prior_generalization_smoke5_w01.json` uses only
 portable coord/scale logits, keeps all reported metric differences at `0` for
@@ -485,9 +620,11 @@ weight is not automatically safer: the three-target sweep
 `runs/bench_exact/action_prior_generalization_smoke3_smallw.json` shows
 `weight=0.2` can change the selected result and move `BVS`, `TOV`, and `vIoU`.
 So `0.1` is the current smoke-safe experimental value, not a default.
-The generated smoke prior is packaged at
-`smart/assets/priors/smoke5_coord_scale_prior.json`, and the opt-in profile
-`configs/accelerated_search_experimental.yaml` points to that package asset.
+The generated smoke prior remains packaged at
+`smart/assets/priors/smoke5_coord_scale_prior.json`. The opt-in profile
+`configs/accelerated_search_experimental.yaml` now points to the larger
+category-general MLP asset trained from the expanded airplane/chair/table trace
+pool.
 `mcts.stateful_unscored_apply=true` is also available as a debug-only exact
 Rust-state application experiment. On the same 20-iteration airplane smoke it
 was slightly slower and changed the selected final bbox snapshot because tiny
@@ -629,7 +766,7 @@ kept reported metrics identical and measured `1.069x`, but reward traces differ
 slightly, so it stays a research flag until a larger sweep passes. The packaged
 profile is `configs/properties_volume_experimental.yaml`.
 
-MCTS/RL upgrades are being kept separate from exact acceleration. The current
+MCTS/RL upgrades are being kept separate from exact acceleration. The older
 trace-derived action-prior sweep
 `runs/bench_exact/mcts_accel_profiles_expanded_processed16_iter20_prior_weight_sweep.json`
 shows `1.043x` to `1.055x` speedups for prior weights `0.02` to `0.1`, but all
@@ -651,14 +788,206 @@ adds an opt-in PUCT-style prior bonus during child selection; the first tiny
 linear-prior PUCT smoke
 `runs/bench_exact/action_prior_puct_linear_airplane2_mcts2.json` kept reported
 metric diffs at `0` and measured `1.055x`, but the sample is too small for a
-recommendation. The next useful RL step is collecting larger category-specific
-traces, then comparing the linear, MLP, and PUCT prior variants while still
-judging final boxes with SMART evaluation metrics.
+recommendation. The current offline-RL MLP prior trained from all available
+traces is packaged at
+`smart/assets/priors/category_general_all_available_offline_rl_mlp_prior.json`.
+On `runs/bench_exact/rl_prior_cat5_mcts20_weight_sweep.json`, prior weight
+`0.1` gave `1.057x` mean stage speedup over baseline, with `14/15`
+quality-not-worse cases and `1/15` quality-improved case; weight `0.2` reached
+`1.081x` but had `3/15` worse cases. This makes the RL path active and useful
+for research, but not a default reproduction setting yet. The next useful step
+is a quality-guarded prior run or a stronger category-aware policy, still judged
+with final SMART evaluation metrics.
+The first quality-guarded 15-mesh run
+`runs/bench_exact/quality_guard_cat5_mcts20_rl01.json` used the same global
+offline-RL prior at weight `0.1`. The raw prior was not-worse on `14/15` cases
+and worse on `1/15`, but the guard selected baseline for the worse case, so all
+`15/15` `mcts_guarded` outputs succeeded. The guard selected prior on `10/15`
+cases, baseline on `5/15`, and measured `1.053x` mean raw-prior stage speedup.
+A quick chair-specific offline-RL prior did not improve stability
+(`2/5` worse prior cases on the same chair subset), so the current recommended
+research setting is still the global prior plus quality guard.
+An action-level policy-gradient agent is also available through
+`smart build-prior --model-type pg-agent`. Unlike the older coord/scale RL
+prior, it scores concrete SMART action ids and sees bbox index features, so it
+can change which box MCTS explores first. It remains a research prior, not a
+paper default. The first all-trace model is packaged at
+`smart/assets/priors/category_general_policy_gradient_agent_prior.json`.
+On `runs/bench_exact/quality_guard_cat3_mcts20_pg_agent_w005.json`
+(`3` meshes per category, `mcts_iter=20`, `max_step=20`, weight `0.05`), the
+raw prior was not-worse on `7/9` cases and worse on `2/9`, while the quality
+guard selected prior on `4/9` and baseline on `5/9`. Mean raw-prior stage
+speedup was `1.006x`. This is a useful RL hook, but the current stronger
+research baseline is still the global offline-RL coord/scale prior plus guard
+until the action-level agent improves quality more consistently.
+
+For a quality-guarded learned-prior run, use:
+
+```bash
+python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/rl_search_experimental.yaml \
+  --category airplane \
+  --mesh 1026dd1b26120799107f68a9cb8e3c \
+  --prior-path smart/assets/priors/category_general_all_available_offline_rl_mlp_prior.json \
+  --prior-weight 0.1 \
+  --mcts-iter 20 \
+  --max-step 20
+```
+
+The script runs baseline MCTS and prior-guided MCTS, evaluates both with SMART
+metrics, and copies the selected bbox result into the `mcts_guarded` stage. If
+the prior result is worse on any guarded metric, the baseline bbox is selected.
+`smart evaluate --stage mcts_guarded ...` and `render.input_stage:
+mcts_guarded` can then consume the guarded result.
+
+To train the action-level policy-gradient agent from trace files:
+
+```bash
+python3 scripts/train_action_prior_from_traces.py \
+  $(cat runs/bench_exact/priors/all_available_trace_files_20260514.txt) \
+  --output runs/bench_exact/priors/category_general_policy_gradient_agent_prior.json \
+  --model-type pg-agent \
+  --min-reward -1000000000000 \
+  --epochs 80 \
+  --learning-rate 0.005 \
+  --hidden-size 48 \
+  --device auto \
+  --advantage-baseline category \
+  --advantage-clip 5 \
+  --entropy-coef 0.005 \
+  --max-logit-abs 6
+```
+
+For better RL data than accepted actions alone, collect candidate traces during
+MCTS. This is opt-in and does not change search behavior; it records per-bbox
+rollout candidates that SMART already exact-scored:
+
+```bash
+smart --config configs/expanded_full.yaml \
+  --set mcts.mcts_iter=20 \
+  --set mcts.max_step=20 \
+  --set mcts.candidate_trace_path=runs/bench_exact/candidates/example.jsonl \
+  --set mcts.candidate_trace_top_k=4 \
+  mcts --category airplane --mesh 1026dd1b26120799107f68a9cb8e3c --force
+```
+
+`--model-type pg-agent` uses these `record_type=mcts_candidate` rows as
+within-rollout comparisons: candidates above the rollout candidate mean get
+positive advantage, lower candidates get negative advantage. A smoke probe
+`runs/bench_exact/candidate_trace_probe.jsonl` produced `28` candidate rows from
+a 3-iteration MCTS run, and the trainer consumed all `28` as candidate records.
+The first category-balanced candidate-trace run
+`runs/bench_exact/candidate_pg_cat3_mcts10_collection.json` collected `541`
+candidate rows from `9` airplane/chair/table meshes. The retrained
+candidate-aware PG-agent
+`runs/bench_exact/priors/category_general_candidate_pg_agent_cat3_prior.json`
+used those candidate rows plus the existing trace list. The same research prior
+is packaged at
+`smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json`. On
+`runs/bench_exact/candidate_pg_cat3_mcts10_benchmark.json` with `3` meshes per
+category, `mcts_iter=10`, `max_step=10`, and prior weight `0.05`, the prior was
+quality-not-worse on `9/9` cases and quality-improved on `1/9`. Mean stage
+speedup was `1.038x` overall (`1.148x` airplane, `0.956x` chair, `1.009x`
+table). A follow-up sweep
+`runs/bench_exact/candidate_pg_cat3_mcts10_weight_sweep.json` found weight
+`0.2` better on this subset: quality-not-worse `9/9`, quality-improved `2/9`,
+no worse cases, and `1.067x` mean stage speedup. This is a real RL/prior
+signal, but it still needs larger guarded validation before becoming a
+recommended setting.
+On a larger `5` meshes per category check
+`runs/bench_exact/candidate_pg_cat5_mcts10_w02_benchmark.json`, the same
+weight-`0.2` prior was quality-not-worse on `14/15`, improved `2/15`, and worse
+on `1/15`, with `1.035x` mean stage speedup. The worse case was table
+`1040cd764facf6981190e285a2cbc9c`; the guard run
+`runs/bench_exact/candidate_pg_guard_w02_table_badcase.json` rejected that prior
+output and selected the baseline bbox into `mcts_guarded`. This means the RL
+prior is useful only with guard selection at this stage.
+The next guarded check
+`runs/bench_exact/candidate_pg_guard_cat10_mcts10_w02.json` ran `10` meshes per
+category with weight `0.2`: all `30/30` guarded outputs succeeded, raw prior
+was not-worse on `25/30`, improved `2/30`, and worse on `5/30`; the guard
+rejected those `5` worse prior outputs. Final selection was prior `15/30` and
+baseline `15/30`, with `1.074x` mean raw-prior stage speedup.
+Scaling candidate collection to `10` meshes per category produced
+`runs/bench_exact/candidate_pg_cat10_mcts10_collection.json` with `2206`
+candidate rows, but the retrained prior
+`runs/bench_exact/priors/category_general_candidate_pg_agent_cat10_prior.json`
+was not better: `runs/bench_exact/candidate_pg_cat10_prior_guard_cat10_mcts10_w02.json`
+kept guarded success at `30/30`, but selected prior on only `10/30`, improved
+`0/30`, and measured `1.016x`. This prior is intentionally not packaged; the
+packaged research prior remains the cat3 candidate-aware model above.
+The trainer also exposes `--accepted-weight`, `--candidate-weight`,
+`--selected-candidate-weight`, and `--category-balance` for PG-agent loss
+experiments. A weighted cat10 retrain
+`runs/bench_exact/priors/category_general_candidate_pg_agent_cat10_weighted_prior.json`
+improved selected-prior frequency on the 5/category smoke but still produced
+`0/15` improvements and `3/15` raw worse cases, so it is not promoted.
+For quality-first research, `scripts/run_quality_guarded_mcts.py` now accepts
+`--prior-weights 0.05,0.1,0.2` and treats each weight as a separate exact
+candidate. The first multi-weight guard
+`runs/bench_exact/candidate_pg_multiweight_guard_cat3_mcts10.json` succeeded on
+`9/9`, selected a prior candidate on `7/9`, improved `2/9`, and observed no
+raw worse candidate on that subset. This costs more runtime because it runs
+multiple MCTS searches per mesh.
+The larger cat5 check
+`runs/bench_exact/candidate_pg_multiweight_guard_cat5_mcts10.json` succeeded on
+`15/15`, selected a prior candidate on `13/15`, selected baseline on `2/15`,
+and improved `2/15`. One table mesh had all three prior weights worse than
+baseline, so the guard selected baseline. This confirms multi-weight guard is
+robust as a quality-first research mode, but it is expensive because each mesh
+runs baseline plus three prior-guided MCTS searches.
+The matching research profile is
+`configs/rl_multiweight_guard_experimental.yaml`; run it through the guard
+script because the main paper pipeline intentionally keeps one MCTS trajectory:
+
+```bash
+python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/rl_multiweight_guard_experimental.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 5 \
+  --prior-path smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json \
+  --prior-weights 0.05,0.1,0.2 \
+  --mcts-iter 10 \
+  --max-step 10
+```
+
+To reduce wall-clock cost, add `--adaptive-prior-weights`. It still evaluates
+with exact SMART metrics and only skips later weights after an earlier learned
+candidate is already quality-improved versus baseline. For faster exploratory
+sweeps, add `--adaptive-stop-mode not_worse`; that can stop after a faster
+non-worse candidate, but it may miss a later weight with a larger improvement.
+The first fast adaptive cat3 check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_cat3_mcts10.json`
+kept `9/9` guarded successes and skipped `12/27` candidate MCTS runs.
+The follow-up refined cat5 check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_cat5_mcts10.json`
+kept `14/14` guarded successes and reduced total MCTS launches from `56` to
+`32`.
+The full currently refined subset check
+`runs/bench_exact/candidate_pg_multiweight_adaptive_fast_refined21_mcts10.json`
+kept `21/21` guarded successes and reduced total MCTS launches from `84` to
+`61`.
+
 The first hybrid MCTS + local-search probe is also available through the new
 `local_refine` stage and `configs/hybrid_local_search_experimental.yaml`. On
 the checked 10-box airplane case, post-MCTS local search improved BVS
 (`2.722 -> 2.609`), MOV (`3.034 -> 2.497`), TOV (`1.580 -> 1.508`), and vIoU
 (`0.3867 -> 0.3978`) while keeping coverage above `0.998`.
+`scripts/run_quality_guarded_local_refine.py` now makes this hybrid path
+guarded: it evaluates `mcts_guarded`, runs local refine, evaluates the refined
+result, and copies the selected output into `local_refine_guarded`. On the full
+currently refined subset
+`runs/bench_exact/local_refine_guarded_refined21_covtol_improved_reuse_mcts_guarded.json`
+(`10` airplane, `7` chair, `4` table), it produced `21/21` guarded successes,
+selected local refine on `10/21`, selected the input on `11/21`, and improved
+`10/21` cases. The selected `local_refine_guarded` stage improved aggregate
+BVS (`2.0373 -> 2.0010`), MOV (`1.5140 -> 1.3500`), TOV (`0.9780 -> 0.9480`),
+and vIoU (`0.6142 -> 0.6269`) versus `mcts_guarded`; coverage changed only
+slightly (`0.999527 -> 0.999520`) under the explicit `0.001` coverage
+tolerance used for this quality-first run. A strict coverage guard
+(`--covered-tolerance 0`) selected local refine on only `2/21`, so the current
+quality-first setting intentionally permits tiny coverage movement while still
+rejecting clear regressions.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be
