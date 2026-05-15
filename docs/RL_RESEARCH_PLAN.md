@@ -365,6 +365,14 @@ refinement.
   The next collection should either process more table-like positives and
   harder airplane/chair cases, or increase search budget enough to expose
   nonzero final gains for those categories.
+- Extra data confirmed the MCTS final-return bottleneck is policy/search quality,
+  not just sample count. Six new table meshes were processed through refine, then
+  `runs/bench_exact/candidate_pg_final_return_table10.jsonl` and
+  `runs/bench_exact/candidate_pg_final_return_table_new6_mcts20.jsonl` were
+  collected. The first still had positives only on the same known table mesh; the
+  MCTS20 run on the six new tables produced `0` positive final-return rows. This
+  means short-budget learned MCTS is currently safe but does not create enough
+  positive final-quality trajectories for strong policy/value training.
 - Value-head imbalance controls are now implemented:
   `--value-positive-weight`, `--value-negative-weight`, and
   `--value-zero-weight`. A positive-heavy cat5 value-only run with weights
@@ -390,3 +398,23 @@ refinement.
   the near-term learning target should be a stronger local-search gate and
   post-MCTS action/value proposal, while MCTS action policy learning continues
   to accumulate final-return positives.
+- `scripts/run_quality_guarded_local_refine.py` can now export
+  `record_type=local_refine_final_return` rows. These preserve the immediate
+  local-refine action reward as `action_reward`, set `reward` to final exact
+  quality gain, and force guard-failing runs negative. On
+  `runs/bench_exact/local_refine_trace_mcts_cat10_covtol.json`, local refine was
+  selected on `19/30` exact-guarded cases (`6/10` airplane, `5/10` chair,
+  `8/10` table), with selected mean BVS/MOV/TOV/vIoU improvements and negligible
+  coverage drift. The trace
+  `runs/bench_exact/local_refine_trace_mcts_cat10_covtol.jsonl` contains `218`
+  rows, `193` positive labels, and positives from `19` meshes.
+- Combining that trace with
+  `runs/bench_exact/local_refine_trace_after_candidate_pg_cat10_covtol.jsonl`
+  gives `394` local-search final-return rows, `341` positives, and `27` meshes
+  across airplane/chair/table. The PyTorch policy-value checkpoint
+  `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`
+  was trained from this set (`394` records used, `198` positive and `196`
+  negative normalized value targets). A small MCTS probe with this local-refine
+  policy-value prior stayed safe (`9/9` not-worse) but selected baseline on every
+  case, so the model is not an MCTS default. Its role is post-MCTS local-search
+  action/value proposal and gate research.

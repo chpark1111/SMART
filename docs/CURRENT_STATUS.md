@@ -561,6 +561,14 @@ Not promoted to default:
   A cat10 value-only checkpoint was trained, but an offset-10 held-out attempt
   found no existing processed refine outputs; the guarded runner now errors
   clearly when `--mesh-offset` skips every eligible mesh.
+- Additional MCTS final-return collection did not fix the positive-label
+  imbalance. Six new table meshes were processed through refine, then
+  `runs/bench_exact/candidate_pg_final_return_table10.jsonl` and
+  `runs/bench_exact/candidate_pg_final_return_table_new6_mcts20.jsonl` were
+  collected. The table10 trace still had positives only on the original known
+  table mesh, and the new-six MCTS20 trace had `0` positive rows. This indicates
+  the short-budget learned MCTS policy is safe but not yet generating enough
+  final-quality improvements for robust value learning.
 - Value-head class weighting is now exposed with `--value-positive-weight`,
   `--value-negative-weight`, and `--value-zero-weight`. A positive-heavy cat5
   checkpoint
@@ -593,6 +601,23 @@ Not promoted to default:
   the same `10` improvements. This is currently the strongest quality/time
   result: learned MCTS remains weak as a direct quality improver, but
   gated post-MCTS local search is consistently useful.
+- `scripts/run_quality_guarded_local_refine.py` now supports
+  `--final-return-trace-output`. It writes
+  `record_type=local_refine_final_return`, preserves the immediate action reward
+  as `action_reward`, and labels every action by the final exact SMART quality
+  guard. On `runs/bench_exact/local_refine_trace_mcts_cat10_covtol.json`, the
+  trace run succeeded on `30/30` mcts-manifest cases and selected local refine on
+  `19/30` (`6/10` airplane, `5/10` chair, `8/10` table). The JSONL trace has
+  `218` rows, `193` positives, and positives from `19` meshes.
+- Combining that trace with
+  `runs/bench_exact/local_refine_trace_after_candidate_pg_cat10_covtol.jsonl`
+  gives `394` local-search final-return rows with `341` positives from `27`
+  meshes. A PyTorch policy-value checkpoint was trained at
+  `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`.
+  A small MCTS probe with that checkpoint was safe (`9/9` not-worse, no worse
+  candidates) but selected baseline on all cases, so it is not a direct MCTS
+  default. The better use is a future post-MCTS local-search action/value proposal
+  model.
 
 ## Next Work
 
@@ -607,10 +632,10 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Collect final-return traces on a larger 20-50 mesh/category sweep. The
-   trace/export/training path is wired, and base-policy value-only fine-tuning
-   now preserves the known improvement case, but held-out improvement is still
-   absent on the current five-case probe.
+5. Collect more MCTS final-return positives and separately expand local-refine
+   final-return traces. The MCTS path still has sparse positives, while the
+   local-refine path now has a useful positive dataset and should be turned into a
+   post-MCTS action/value proposal model.
 6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we

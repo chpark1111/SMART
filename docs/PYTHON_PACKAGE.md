@@ -487,6 +487,28 @@ On the current cat10 policy/value guarded MCTS outputs, the same gate skipped
 `11/21` local-refine launches and still caught all `10` improvements under the
 `Covered` tolerance `0.001` quality guard. This is the recommended research
 post-process when optimizing for quality rather than strict paper reproduction.
+For post-MCTS action/value research, the local-refine runner can also export
+final-return labels:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --from-input-manifest \
+  --input-stage mcts \
+  --categories airplane,chair,table \
+  --per-category-limit 10 \
+  --selection-mode improved \
+  --covered-tolerance 0.001 \
+  --quality-weights Avg_BVS=1,Avg_MOV=0.25,Avg_TOV=0.25,Avg_Covered=2,Avg_vIoU=1 \
+  --final-return-trace-output runs/bench_exact/local_refine_trace_mcts_cat10_covtol.jsonl
+```
+
+The current cat10 manifest trace selected local refine on `19/30` cases and
+wrote `218` action rows with `193` positive final-return labels. Combined with
+the guarded learned-MCTS local-refine trace, the post-MCTS local-search dataset
+is `394` rows with `341` positives from `27` meshes. A PyTorch policy-value
+checkpoint trained from it is available as a research artifact at
+`runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`.
 Evaluate the generated gated stage from its manifest:
 
 ```bash

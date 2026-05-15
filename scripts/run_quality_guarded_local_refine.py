@@ -25,7 +25,7 @@ from smart.pipeline.config import load_config, workspace_path  # noqa: E402
 from smart.pipeline.manifest import ManifestWriter, StageRecord  # noqa: E402
 from smart.pipeline.stages import bbox_dir_for_render, list_mesh_ids  # noqa: E402
 from smart.local_refine_gate import load_local_refine_gate, score_local_refine_gate  # noqa: E402
-from smart.quality import GuardedSelection, select_quality_guarded_run  # noqa: E402
+from smart.quality import GuardedSelection, quality_gain_score, select_quality_guarded_run  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chamfer-points", type=int, default=0)
     parser.add_argument("--metric-tolerance", type=float, default=1e-9)
     parser.add_argument(
+        "--quality-weights",
+        default="",
+        help="Optional comma-separated metric weights for final-return trace labels, e.g. Avg_BVS=1,Avg_vIoU=1",
+    )
+    parser.add_argument(
         "--covered-tolerance",
         type=float,
         default=0.0,
@@ -75,6 +80,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gate-path", default="", help="Optional local-refine gate JSON; skips local refine below threshold")
     parser.add_argument("--gate-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--final-return-trace-output",
+        default="",
+        help="Optional JSONL output. Local-refine action traces are relabeled with final exact quality gain.",
+    )
+    parser.add_argument(
+        "--trace-actions-dir",
+        default="",
+        help="Directory for temporary local_refine action traces when --final-return-trace-output is set.",
+    )
     parser.add_argument("--print-full-report", action="store_true", help="Print the full JSON report instead of a compact summary")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--python", default=sys.executable)
@@ -85,10 +100,18 @@ def main() -> int:
     args = parse_args()
     cfg = load_config(args.config)
     category_meshes = _select_category_meshes(cfg, args)
+    quality_weights = _parse_quality_weights(args.quality_weights)
     gate_payload = load_local_refine_gate(_repo_path(args.gate_path)) if args.gate_path else None
     run_tag = args.run_tag or time.strftime("local_refine_guard_%Y%m%d_%H%M%S")
     output = _repo_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    final_trace_output = _repo_path(args.final_return_trace_output) if args.final_return_trace_output else None
+    if final_trace_output is not None:
+        final_trace_output.parent.mkdir(parents=True, exist_ok=True)
+        final_trace_output.write_text("", encoding="utf-8")
+    trace_actions_dir = _trace_actions_dir(args, output, final_trace_output)
+    if trace_actions_dir is not None:
+        trace_actions_dir.mkdir(parents=True, exist_ok=True)
     writer = ManifestWriter(workspace_path(cfg, "manifests"))
     report: dict[str, Any] = {
         "config": args.config,
@@ -99,12 +122,14 @@ def main() -> int:
         "action_unit": args.action_unit,
         "metric_tolerance": args.metric_tolerance,
         "covered_tolerance": args.covered_tolerance,
+        "quality_weights": quality_weights,
         "selection_mode": args.selection_mode,
         "reward_backend": args.reward_backend,
         "backend": args.backend,
         "reuse_local_refine": args.reuse_local_refine,
         "gate_path": args.gate_path,
         "gate_threshold": args.gate_threshold,
+        "final_return_trace_output": str(final_trace_output) if final_trace_output is not None else "",
         "run_tag": run_tag,
         "categories": sorted(category_meshes),
         "meshes": category_meshes,
@@ -133,12 +158,21 @@ def main() -> int:
                     "gate": gate_decision,
                 }
             else:
-                refined = _run_local_refine(args, category=category_name, mesh_id=mesh_id, exp_tag=mesh_tag)
+                trace_path = _local_refine_trace_path(trace_actions_dir, mesh_tag)
+                refined = _run_local_refine(args, category=category_name, mesh_id=mesh_id, exp_tag=mesh_tag, trace_path=trace_path)
                 refined["gate"] = gate_decision
             if refined.get("returncode") == 0 and not refined.get("skipped_by_gate"):
                 refined.update(_run_eval(args, category=category_name, mesh_id=mesh_id, stage="local_refine", exp_tag=f"{mesh_tag}_local_refine"))
             runs = {"input": baseline, "local_refine": refined}
             selection = _select_local_refine(args, runs)
+            final_trace_rows = _append_final_return_trace_rows(
+                final_trace_output,
+                category=category_name,
+                mesh_id=mesh_id,
+                runs=runs,
+                selection=selection.to_dict(),
+                quality_weights=quality_weights,
+            )
             selected_run = runs.get(selection.selected_label, {})
             selected_bbox = _selected_bbox_path(selected_run)
             guarded_output = None
@@ -171,6 +205,7 @@ def main() -> int:
                     "local_refine_reused": bool(refined.get("reused")),
                     "local_refine_skipped_by_gate": bool(refined.get("skipped_by_gate")),
                     "gate": gate_decision,
+                    "final_return_trace_rows": final_trace_rows,
                 },
                 error=error,
             )
@@ -180,6 +215,7 @@ def main() -> int:
                 "mesh_id": mesh_id,
                 "runs": runs,
                 "selection": selection.to_dict(),
+                "final_return_trace_rows": final_trace_rows,
                 "guarded_record": asdict(record),
             }
             report["aggregate"] = _aggregate_records(report["records"])
@@ -192,7 +228,14 @@ def main() -> int:
     return 0 if all(item["guarded_record"]["status"] == "success" for item in report["records"].values()) else 1
 
 
-def _run_local_refine(args: argparse.Namespace, *, category: str, mesh_id: str, exp_tag: str) -> dict[str, Any]:
+def _run_local_refine(
+    args: argparse.Namespace,
+    *,
+    category: str,
+    mesh_id: str,
+    exp_tag: str,
+    trace_path: Path | None = None,
+) -> dict[str, Any]:
     command = [
         args.python,
         "-m",
@@ -213,13 +256,20 @@ def _run_local_refine(args: argparse.Namespace, *, category: str, mesh_id: str, 
         f"local_refine.timeout_sec={args.timeout}",
         "--set",
         f"local_refine.exp_tag={exp_tag}",
-        "local_refine",
-        "--category",
-        category,
-        "--mesh",
-        mesh_id,
-        "--force",
     ]
+    if trace_path is not None:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        command.extend(["--set", f"local_refine.trace_actions_path={trace_path}"])
+    command.extend(
+        [
+            "local_refine",
+            "--category",
+            category,
+            "--mesh",
+            mesh_id,
+            "--force",
+        ]
+    )
     started = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -237,6 +287,7 @@ def _run_local_refine(args: argparse.Namespace, *, category: str, mesh_id: str, 
             "stdout_tail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
             "stderr_tail": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
             "timeout": True,
+            "trace_actions_path": str(trace_path) if trace_path is not None else "",
         }
     return {
         "command": command,
@@ -244,6 +295,7 @@ def _run_local_refine(args: argparse.Namespace, *, category: str, mesh_id: str, 
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-2000:],
         "stderr_tail": completed.stderr[-2000:],
+        "trace_actions_path": str(trace_path) if trace_path is not None else "",
     }
 
 
@@ -415,6 +467,118 @@ def _repo_path(path: str | Path) -> Path:
     return out if out.is_absolute() else REPO_ROOT / out
 
 
+def _trace_actions_dir(args: argparse.Namespace, output: Path, final_trace_output: Path | None) -> Path | None:
+    if args.trace_actions_dir:
+        return _repo_path(args.trace_actions_dir)
+    if final_trace_output is None:
+        return None
+    return output.with_name(f"{output.stem}_local_refine_traces")
+
+
+def _local_refine_trace_path(trace_actions_dir: Path | None, exp_tag: str) -> Path | None:
+    if trace_actions_dir is None:
+        return None
+    return trace_actions_dir / f"{_safe_tag(exp_tag)}.jsonl"
+
+
+def _append_final_return_trace_rows(
+    output: Path | None,
+    *,
+    category: str,
+    mesh_id: str,
+    runs: dict[str, dict[str, Any]],
+    selection: dict[str, Any],
+    quality_weights: dict[str, float],
+) -> int:
+    if output is None:
+        return 0
+    run = runs.get("local_refine", {})
+    trace_path = str(run.get("trace_actions_path", "") or "")
+    if not trace_path:
+        return 0
+    path = Path(trace_path)
+    if not path.exists():
+        return 0
+    comparison = selection.get("comparisons", {}).get("local_refine") or {}
+    final_not_worse = bool(comparison.get("not_worse", False))
+    final_improved = bool(comparison.get("improved", False))
+    final_deltas = dict(comparison.get("deltas", {}))
+    final_worse_metrics = list(comparison.get("worse_metrics", []))
+    final_improved_metrics = list(comparison.get("improved_metrics", []))
+    quality_score = _final_return_quality_score(
+        comparison,
+        weights=quality_weights,
+        not_worse=final_not_worse,
+        worse_metrics=final_worse_metrics,
+    )
+    selected_label = str(selection.get("selected_label", ""))
+    rows_written = 0
+    with output.open("a", encoding="utf-8") as out_file:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            action_reward = float(row.get("reward", 0.0) or 0.0)
+            row.update(
+                {
+                    "schema_version": 4,
+                    "record_type": "local_refine_final_return",
+                    "original_record_type": str(row.get("record_type", "")),
+                    "category": str(row.get("category", category) or category),
+                    "mesh": str(row.get("mesh", mesh_id) or mesh_id),
+                    "run_label": "local_refine",
+                    "selected_run": bool(selected_label == "local_refine"),
+                    "selection_label": selected_label,
+                    "selection_reason": str(selection.get("reason", "")),
+                    "action_reward": action_reward,
+                    "reward": float(quality_score),
+                    "final_quality_score": float(quality_score),
+                    "final_not_worse": final_not_worse,
+                    "final_improved": final_improved,
+                    "final_deltas": final_deltas,
+                    "final_worse_metrics": final_worse_metrics,
+                    "final_improved_metrics": final_improved_metrics,
+                }
+            )
+            out_file.write(json.dumps(row, sort_keys=True) + "\n")
+            rows_written += 1
+    return rows_written
+
+
+def _final_return_quality_score(
+    comparison: dict[str, Any],
+    *,
+    weights: dict[str, float],
+    not_worse: bool,
+    worse_metrics: list[str],
+) -> float:
+    score = quality_gain_score(comparison, weights=weights)
+    if not_worse:
+        return float(score)
+    deltas = comparison.get("deltas", {})
+    violation = 0.0
+    for metric in worse_metrics:
+        violation += abs(float(deltas.get(metric, 0.0))) * float(weights.get(metric, 1.0))
+    return -max(abs(float(score)), violation, 1.0e-9)
+
+
+def _parse_quality_weights(text: str) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for item in str(text or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise SystemExit(f"Invalid --quality-weights item: {item!r}")
+        key, value = item.split("=", 1)
+        weights[key.strip()] = float(value)
+    return weights
+
+
+def _safe_tag(text: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(text))
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -429,6 +593,7 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "gate_path": report.get("gate_path"),
         "gate_threshold": report.get("gate_threshold"),
         "selection_mode": report.get("selection_mode"),
+        "final_return_trace_output": report.get("final_return_trace_output"),
         "run_tag": report.get("run_tag"),
         "aggregate": report.get("aggregate", {}),
     }

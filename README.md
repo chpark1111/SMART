@@ -1188,6 +1188,12 @@ one learned-candidate quality improvement, but the label distribution is still
 sparse (`59` positive rows out of `2228`, all from table), so the next useful
 RL step is more positive final-return coverage rather than promoting the
 value-only checkpoint.
+That sparsity was not just a data-count issue. After adding six more table
+meshes through refine, `runs/bench_exact/candidate_pg_final_return_table10.jsonl`
+still produced positive MCTS final-return rows only for the same table mesh, and
+`runs/bench_exact/candidate_pg_final_return_table_new6_mcts20.jsonl` produced
+`0` positives at MCTS20/max-step20. The current MCTS prior is therefore safe but
+not yet a reliable quality-improvement generator.
 The value trainer also exposes `--value-positive-weight`,
 `--value-negative-weight`, and `--value-zero-weight` for sparse final-return
 labels. A positive-heavy cat5 value-only run stayed safe on the held-out offset
@@ -1202,6 +1208,31 @@ On the larger cat10 policy/value guarded outputs, local refine with
 skipped the other `11/21` local-refine launches and still selected the same
 10 improvements, giving the strongest current quality/time tradeoff after
 guarded learned MCTS.
+Local-refine can now export final-return action traces too:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --from-input-manifest \
+  --input-stage mcts \
+  --stage local_refine_trace_mcts_cat10_covtol \
+  --categories airplane,chair,table \
+  --per-category-limit 10 \
+  --max-step 50 \
+  --action-unit 0.005 \
+  --selection-mode improved \
+  --covered-tolerance 0.001 \
+  --quality-weights Avg_BVS=1,Avg_MOV=0.25,Avg_TOV=0.25,Avg_Covered=2,Avg_vIoU=1 \
+  --final-return-trace-output runs/bench_exact/local_refine_trace_mcts_cat10_covtol.jsonl
+```
+
+This produced `30/30` successes and selected local refine on `19/30` cases.
+The resulting trace has `218` rows with `193` positive final-return labels
+across airplane/chair/table. Combined with the guarded learned-MCTS local-refine
+trace, the local-search final-return set is now `394` rows with `341` positives
+from `27` meshes. A PyTorch policy-value checkpoint trained from that set lives
+at `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`;
+it is a research artifact for post-MCTS action/value proposal, not a default.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

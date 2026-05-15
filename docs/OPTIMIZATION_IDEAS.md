@@ -998,11 +998,23 @@ tables are deferred until after exact parity is locked.
    rows and enabled `--policy-base-prior`, which freezes the existing action
    policy and trains only the value head. That value-only checkpoint preserved
    the known table improvement but did not improve the current held-out probe.
-   Value-head positive/negative/zero weighting is implemented and helped
-   raw-prior speed on the held-out probe, but it still did not produce held-out
-   quality improvements.
-   The optimization target is therefore more final-return coverage and better
-   value/policy weighting, not replacing exact SMART reward.
+	   Value-head positive/negative/zero weighting is implemented and helped
+	   raw-prior speed on the held-out probe, but it still did not produce held-out
+	   quality improvements.
+	   Extra table meshes and MCTS20 collection still produced no new positive
+	   MCTS final-return labels, so the optimization target is not just more rows:
+	   it is a stronger proposal policy.
+
+	   The local-refine side now has much better final-return coverage.
+	   `scripts/run_quality_guarded_local_refine.py --final-return-trace-output`
+	   writes `record_type=local_refine_final_return` rows. The current cat10
+	   mcts-manifest run selected local refine on `19/30` cases and produced `218`
+	   rows with `193` positives. Combined with the post-learned-MCTS local-refine
+	   trace, the set is `394` rows with `341` positives from `27` meshes. A
+	   PyTorch policy-value checkpoint trained from that set is safe but not useful
+	   as an MCTS prior yet, so the next concrete improvement is a post-MCTS
+	   local-search action/value proposer plus the existing exact quality guard,
+	   not replacing exact SMART reward.
 
 3. Opt-in tet-clipping reward backend
 

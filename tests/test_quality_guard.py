@@ -10,6 +10,9 @@ from scripts.run_quality_guarded_mcts import (
     _final_return_quality_score,
     _select_category_meshes,
 )
+from scripts.run_quality_guarded_local_refine import (
+    _final_return_quality_score as _local_refine_final_return_quality_score,
+)
 from smart.quality import compare_quality, quality_gain_score, select_quality_guarded_run
 
 
@@ -168,6 +171,22 @@ def test_final_return_score_penalizes_guard_failure() -> None:
     assert _final_return_quality_score(
         comparison,
         weights={},
+        not_worse=False,
+        worse_metrics=comparison["worse_metrics"],
+    ) < 0
+
+
+def test_local_refine_final_return_score_penalizes_guard_failure() -> None:
+    comparison = compare_quality(
+        _summary(Avg_BVS=1.9, Avg_Covered=0.97),
+        _summary(),
+    ).to_dict()
+
+    assert quality_gain_score(comparison) > 0
+    assert comparison["not_worse"] is False
+    assert _local_refine_final_return_quality_score(
+        comparison,
+        weights={"Avg_Covered": 2.0},
         not_worse=False,
         worse_metrics=comparison["worse_metrics"],
     ) < 0
