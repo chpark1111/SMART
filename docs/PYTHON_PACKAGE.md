@@ -400,6 +400,22 @@ python3 scripts/export_local_refine_gate_dataset.py \
   --output runs/bench_exact/local_refine_gate_manifest52.csv
 ```
 
+Train the PyTorch gate with Apple-Silicon-aware device selection:
+
+```bash
+PYTHONPATH=. python3 scripts/train_local_refine_gate.py \
+  runs/bench_exact/local_refine_gate_manifest52.csv \
+  --output runs/bench_exact/local_refine_gate_manifest52_model.json \
+  --hidden-size 8 \
+  --epochs 120 \
+  --device auto
+```
+
+The packaged research gate is
+`smart/assets/gates/local_refine_gate_manifest52.json`. It uses only category
+and pre-local-refine SMART metrics, and its current leave-one-out validation on
+the `52`-row dataset is accuracy `0.75`, F1 `0.780`, and ROC-AUC `0.784`.
+
 ## Command Line Usage
 
 Run the full pipeline:
@@ -506,6 +522,8 @@ Useful public functions:
 - `smart.build_linear_action_prior_from_traces(traces, output=..., epochs=200, learning_rate=0.05)`: train a state-aware linear action-ordering prior from schema-v2 traces.
 - `smart.build_mlp_action_prior_from_traces(traces, output=..., epochs=200, hidden_size=16, device="auto")`: train a PyTorch MLP action-ordering prior and save JSON weights.
 - `smart.load_action_prior(path)`: load count, linear, or MLP prior JSON for inspection or direct scoring.
+- `smart.train_local_refine_gate(dataset, output=..., hidden_size=8, device="auto")`: train the PyTorch post-MCTS local-refine gate.
+- `smart.load_local_refine_gate(path)` and `smart.score_local_refine_gate(payload, row)`: load and score a packaged gate JSON.
 
 Each call returns plain Python dictionaries or paths, so the package can be used
 inside scripts, notebooks, batch runners, or CI.

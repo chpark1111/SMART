@@ -931,6 +931,17 @@ tables are deferred until after exact parity is locked.
    (`covered_tolerance=0.001`). Promote only if coverage remains high and the
    aggregate quality tradeoff is consistently positive.
 
+   Implemented local-refine gate baseline:
+   `smart.local_refine_gate` and `scripts/train_local_refine_gate.py` train a
+   PyTorch MLP classifier from the exported guard dataset. The model uses only
+   category and pre-local-refine SMART metrics, avoiding local-output leakage.
+   The current packaged research asset
+   `smart/assets/gates/local_refine_gate_manifest52.json` was trained from the
+   `52`-row manifest export. Leave-one-out validation measured accuracy
+   `0.75`, F1 `0.780`, and ROC-AUC `0.784`, compared with a majority baseline
+   accuracy of `0.558`. This does not replace exact SMART evaluation; it is a
+   decision model for when to spend the extra local-refine time.
+
 1. Optional MCTS transposition table
 
    Hash bbox states and reuse node values across equivalent states reached by

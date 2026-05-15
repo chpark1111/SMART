@@ -1021,6 +1021,28 @@ python3 scripts/export_local_refine_gate_dataset.py \
 
 The current export contains `52` rows with `29` positive local-refine
 improvement labels.
+Train the first PyTorch gate on that dataset with:
+
+```bash
+PYTHONPATH=. python3 scripts/train_local_refine_gate.py \
+  runs/bench_exact/local_refine_gate_manifest52.csv \
+  --output runs/bench_exact/local_refine_gate_manifest52_model.json \
+  --hidden-size 8 \
+  --epochs 120 \
+  --device auto
+```
+
+The current packaged research gate is:
+
+```text
+smart/assets/gates/local_refine_gate_manifest52.json
+```
+
+It uses only category and pre-local-refine SMART metrics, not local-refine
+outputs or deltas. On the current `52`-row manifest dataset, leave-one-out
+validation gives accuracy `0.75`, F1 `0.780`, and ROC-AUC `0.784` versus the
+majority baseline accuracy `0.558`. This is not a final policy, but it is a
+real learned signal for deciding when the extra local search is worth running.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

@@ -5,6 +5,7 @@ include pyproject.toml
 recursive-include configs *.yaml
 recursive-include smart/configs *.yaml
 recursive-include smart/assets/priors *.json
+recursive-include smart/assets/gates *.json
 recursive-include cmake *.cmake
 recursive-include docs *.md *.png
 recursive-include scripts *.py

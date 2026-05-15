@@ -266,3 +266,13 @@ refinement.
   JSONL. The current manifest52 export has `52` rows and `29` positive
   improvement labels, which is enough for smoke-testing a gate but not enough
   for a final learned policy.
+- `smart.local_refine_gate` and `scripts/train_local_refine_gate.py` now train a
+  PyTorch gate for that decision. It uses only category and pre-local-refine
+  SMART metrics, so it can run before the optional local search. The current
+  packaged gate is
+  `smart/assets/gates/local_refine_gate_manifest52.json`. On the `52`-row
+  manifest dataset, leave-one-out validation measured accuracy `0.75`, F1
+  `0.780`, and ROC-AUC `0.784` versus a majority baseline accuracy of `0.558`.
+  This makes the next research step concrete: use the gate to skip local refine
+  when it is unlikely to improve quality, then collect more rows from larger
+  category-balanced runs.

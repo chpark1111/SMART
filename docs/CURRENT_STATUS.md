@@ -418,9 +418,15 @@ Not promoted to default:
 - `runs/bench_exact/local_refine_guarded_expanded200_mcts_manifest52_covtol_improved.json`
   strengthens that result on `52` processed MCTS outputs: local search was
   selected on `29/52` and improved all selected cases. This makes local refine
-  gating a better near-term RL target than raw MCTS action ordering: learn when
-  the post-MCTS local search is likely to pay off, then still use exact SMART
-  metrics as the final guard.
+  the strongest current quality-improvement stage after MCTS.
+- `smart.local_refine_gate` and `scripts/train_local_refine_gate.py` now train a
+  PyTorch local-refine gate from that report. The packaged research model is
+  `smart/assets/gates/local_refine_gate_manifest52.json`. It uses only category
+  and pre-local-refine metrics; leave-one-out validation on the `52` rows gives
+  accuracy `0.75`, F1 `0.780`, and ROC-AUC `0.784`, compared with majority
+  baseline accuracy `0.558`. This makes local-refine gating a better near-term
+  RL target than raw MCTS action ordering: learn when the post-MCTS local search
+  is likely to pay off, then still use exact SMART metrics as the final guard.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit
