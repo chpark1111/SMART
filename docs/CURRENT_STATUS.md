@@ -531,6 +531,35 @@ Not promoted to default:
   not beat the packaged policy-value prior: all three candidates were rejected
   by the guard and baseline was selected. Keep the packaged prior unchanged
   until final-return traces cover a much larger category-balanced set.
+- `scripts/run_quality_guarded_mcts.py --mesh-offset` now supports held-out
+  validation splits from the same configured category order. A cat5
+  final-return collection
+  `runs/bench_exact/policy_value_final_return_train_cat5.jsonl` produced
+  `1518` final-return rows from `14` successful airplane/chair/table meshes.
+  The raw labels are still sparse (`59` positive, `108` negative, and `1351`
+  zero rows), so policy retraining can easily overfit.
+- `--policy-base-prior` is now available for `--model-type policy-value`. It
+  freezes an existing action policy and trains only the scalar value head from
+  final-return traces. The value-only model
+  `runs/bench_exact/priors/category_general_policy_value_base_final_return_cat5_prior.json`
+  kept the known table improvement (`prior_w0p2` selected, `prior_improved=1`)
+  but did not generalize on the current offset held-out probe:
+  `runs/bench_exact/policy_value_base_final_return_holdout3.json` kept `5/5`
+  guarded successes, selected baseline on `5/5`, had no worse candidates, and
+  measured about `1.11x` mean raw-prior speedup. Increasing
+  `action_value_weight` to `0.08` stayed safe but still selected baseline on
+  all held-out cases.
+- A post-policy-value hybrid probe
+  `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json` ran
+  local search after the guarded policy-value output on four held-out cases. It
+  selected local refine on `1/4` and rejected `3/4` worse local-refine outputs.
+  The gated version
+  `runs/bench_exact/local_refine_gate_after_policy_value_holdout_probe.json`
+  used `smart/assets/gates/local_refine_gate_manifest52.json`, skipped `2/4`
+  local-refine launches, and still caught the one improved case. This supports
+  the current quality direction: learned MCTS proposes candidates, exact guard
+  selects, and a learned gate controls whether fine local search is worth the
+  extra cost.
 
 ## Next Work
 
@@ -546,8 +575,9 @@ Not promoted to default:
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
 5. Collect final-return traces on a larger 20-50 mesh/category sweep. The
-   trace/export/training path is now wired, but the first tiny fine-tune was
-   worse than the packaged policy-value prior.
+   trace/export/training path is wired, and base-policy value-only fine-tuning
+   now preserves the known improvement case, but held-out improvement is still
+   absent on the current five-case probe.
 6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we

@@ -994,8 +994,12 @@ tables are deferred until after exact parity is locked.
    accepted actions with final exact SMART quality gain instead of only local
    action reward, and it forces guard-failing candidates negative. The first
    tiny fine-tune from `300` final-return rows was worse than the packaged
-   policy-value prior, so the optimization is not model architecture yet; it is
-   collecting enough final-return rows from 20-50 meshes per category.
+   policy-value prior. The next cat5 collection produced `1518` final-return
+   rows and enabled `--policy-base-prior`, which freezes the existing action
+   policy and trains only the value head. That value-only checkpoint preserved
+   the known table improvement but did not improve the current held-out probe.
+   The optimization target is therefore more final-return coverage and better
+   value/policy weighting, not replacing exact SMART reward.
 
 3. Opt-in tet-clipping reward backend
 

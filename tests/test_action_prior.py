@@ -564,6 +564,62 @@ def test_policy_value_action_prior_scores_concrete_actions(tmp_path) -> None:
     assert all(isinstance(value, float) for value in values)
 
 
+def test_policy_value_action_prior_can_reuse_base_policy(tmp_path) -> None:
+    pytest.importorskip("torch")
+    trace = tmp_path / "trace.jsonl"
+    rows = [
+        {
+            "category": "airplane",
+            "mesh": "a",
+            "coord_idx": 0,
+            "scale_idx": 0,
+            "num_action_scale": 2,
+            "action": 0,
+            "reward": 1.0,
+            "num_bbox": 2,
+        },
+        {
+            "category": "airplane",
+            "mesh": "a",
+            "coord_idx": 3,
+            "scale_idx": 1,
+            "num_action_scale": 2,
+            "action": 7,
+            "reward": -1.0,
+            "num_bbox": 2,
+        },
+    ]
+    trace.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    base = tmp_path / "base_policy.json"
+    output = tmp_path / "value_only.json"
+    base_payload = build_policy_gradient_action_prior_from_traces(
+        [trace],
+        output=base,
+        epochs=2,
+        learning_rate=0.01,
+        hidden_size=4,
+        device="cpu",
+    )
+
+    payload = build_policy_value_action_prior_from_traces(
+        [trace],
+        output=output,
+        policy_base_prior=base,
+        epochs=0,
+        value_epochs=2,
+        learning_rate=0.01,
+        device="cpu",
+    )
+
+    assert payload["policy_type"] == "action_policy_value_prior"
+    assert payload["metadata"]["policy_base_prior"] == str(base)
+    assert payload["metadata"]["trace_files"] == [str(trace)]
+    assert payload["metadata"]["value_trace_files"] == [str(trace)]
+    assert payload["metadata"]["policy_base_trace_files"] == [str(trace)]
+    assert payload["action_output_weights"] == base_payload["action_output_weights"]
+    assert payload["action_output_bias"] == base_payload["action_output_bias"]
+
+
 def test_cli_build_prior(tmp_path, capsys) -> None:
     trace = tmp_path / "trace.jsonl"
     trace.write_text(

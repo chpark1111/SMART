@@ -109,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Policy-value value-head learning rate; default reuses --learning-rate",
     )
     prior.add_argument("--value-clip", type=float, default=5.0, help="Policy-value normalized action-value target clip")
+    prior.add_argument(
+        "--policy-base-prior",
+        default="",
+        help="For --model-type policy-value, reuse this action policy and train only the value head",
+    )
     prior.add_argument("--json", action="store_true", help="Emit full prior JSON instead of metadata only")
 
     args = parser.parse_args(argv)
@@ -281,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
             prior_payload = build_policy_value_action_prior_from_traces(
                 args.traces,
                 output=args.output,
+                policy_base_prior=args.policy_base_prior or None,
                 min_reward=args.min_reward,
                 smoothing=args.smoothing,
                 num_action_scale=args.num_action_scale or None,

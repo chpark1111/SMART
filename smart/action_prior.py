@@ -1008,6 +1008,7 @@ def build_policy_value_action_prior_from_traces(
     traces: Iterable[str | Path],
     *,
     output: str | Path,
+    policy_base_prior: str | Path | None = None,
     min_reward: float = -1.0e18,
     smoothing: float = 1.0,
     num_action_scale: int | None = None,
@@ -1037,31 +1038,42 @@ def build_policy_value_action_prior_from_traces(
     """
 
     trace_paths = [Path(path) for path in traces]
-    policy_tmp = Path(output).with_suffix(".policy.tmp.json")
-    payload = build_policy_gradient_action_prior_from_traces(
-        trace_paths,
-        output=policy_tmp,
-        min_reward=min_reward,
-        smoothing=smoothing,
-        num_action_scale=num_action_scale,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        l2=l2,
-        hidden_size=hidden_size,
-        device=device,
-        advantage_baseline=advantage_baseline,
-        advantage_clip=advantage_clip,
-        entropy_coef=entropy_coef,
-        max_logit_abs=max_logit_abs,
-        accepted_weight=accepted_weight,
-        candidate_weight=candidate_weight,
-        selected_candidate_weight=selected_candidate_weight,
-        category_balance=category_balance,
-    )
-    try:
-        policy_tmp.unlink()
-    except OSError:
-        pass
+    base_policy_metadata: dict[str, Any] = {}
+    if policy_base_prior:
+        with Path(policy_base_prior).open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+        if not payload.get("action_input_weights") or not payload.get("action_output_weights"):
+            raise ValueError("policy_base_prior must contain an action-level MLP policy")
+        payload.setdefault("metadata", {})
+        base_policy_metadata = dict(payload.get("metadata", {}))
+        if num_action_scale is not None:
+            payload["num_action_scale"] = max(int(payload.get("num_action_scale", 0) or 0), int(num_action_scale))
+    else:
+        policy_tmp = Path(output).with_suffix(".policy.tmp.json")
+        payload = build_policy_gradient_action_prior_from_traces(
+            trace_paths,
+            output=policy_tmp,
+            min_reward=min_reward,
+            smoothing=smoothing,
+            num_action_scale=num_action_scale,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            l2=l2,
+            hidden_size=hidden_size,
+            device=device,
+            advantage_baseline=advantage_baseline,
+            advantage_clip=advantage_clip,
+            entropy_coef=entropy_coef,
+            max_logit_abs=max_logit_abs,
+            accepted_weight=accepted_weight,
+            candidate_weight=candidate_weight,
+            selected_candidate_weight=selected_candidate_weight,
+            category_balance=category_balance,
+        )
+        try:
+            policy_tmp.unlink()
+        except OSError:
+            pass
 
     examples = _action_value_examples(
         trace_paths,
@@ -1104,19 +1116,24 @@ def build_policy_value_action_prior_from_traces(
     payload["policy_type"] = "action_policy_value_prior"
     payload["action_value_output_weights"] = value_w.detach().cpu().tolist()
     payload["action_value_output_bias"] = float(value_b.detach().cpu().item())
-    payload["metadata"].update(
-        {
-            "source": "smart.action_prior.build_policy_value_action_prior_from_traces",
-            "model_type": "policy_value_agent",
-            "value_records_used": int(examples["records_used"]),
-            "value_candidate_records_used": int(examples["candidate_records_used"]),
-            "value_epochs": int(value_epochs if value_epochs is not None else epochs),
-            "value_learning_rate": float(value_learning_rate if value_learning_rate is not None else learning_rate),
-            "value_clip": float(value_clip),
-            "value_target_mean": float(examples["target_mean"]),
-            "value_target_std": float(examples["target_std"]),
-        }
-    )
+    metadata_update: dict[str, Any] = {
+        "source": "smart.action_prior.build_policy_value_action_prior_from_traces",
+        "model_type": "policy_value_agent",
+        "trace_files": [str(path) for path in trace_paths],
+        "value_trace_files": [str(path) for path in trace_paths],
+        "policy_base_prior": str(policy_base_prior or ""),
+        "value_records_used": int(examples["records_used"]),
+        "value_candidate_records_used": int(examples["candidate_records_used"]),
+        "value_epochs": int(value_epochs if value_epochs is not None else epochs),
+        "value_learning_rate": float(value_learning_rate if value_learning_rate is not None else learning_rate),
+        "value_clip": float(value_clip),
+        "value_target_mean": float(examples["target_mean"]),
+        "value_target_std": float(examples["target_std"]),
+    }
+    if base_policy_metadata:
+        metadata_update["policy_base_model_type"] = str(base_policy_metadata.get("model_type", ""))
+        metadata_update["policy_base_trace_files"] = list(base_policy_metadata.get("trace_files", []))
+    payload["metadata"].update(metadata_update)
 
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

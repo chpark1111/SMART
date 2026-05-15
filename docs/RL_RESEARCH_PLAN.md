@@ -338,3 +338,29 @@ refinement.
   final-return objective is now wired, but the dataset is far too small; collect
   20-50 meshes/category with final-return traces before replacing the packaged
   policy-value prior.
+- To avoid destroying the useful packaged policy logits while learning from a
+  small final-return set, policy-value training now supports
+  `--policy-base-prior`. This freezes an existing action policy and trains only
+  the scalar action-value head. The cat5 final-return collection
+  `runs/bench_exact/policy_value_final_return_train_cat5.jsonl` contains `1518`
+  rows from `14` successful train meshes, but positive final-quality labels are
+  still sparse (`59` positive, `108` negative, `1351` zero).
+- The value-only fine-tune
+  `runs/bench_exact/priors/category_general_policy_value_base_final_return_cat5_prior.json`
+  preserved the known table improvement
+  (`runs/bench_exact/policy_value_base_final_return_traincheck.json` selected
+  `prior_w0p2` and improved exact quality). On the current held-out offset
+  probe
+  `runs/bench_exact/policy_value_base_final_return_holdout3.json`, it stayed
+  safe (`5/5` guarded successes, no worse candidates) but selected baseline on
+  every case. Raising `action_value_weight` to `0.08` did not change that. This
+  means the value head is learning a useful local signal, but it does not yet
+  generalize strongly enough to improve unseen meshes.
+- Hybrid local search remains the stronger quality-improvement mechanism after
+  learned MCTS. On four held-out policy-value outputs,
+  `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json`
+  selected local refine on `1/4` and rejected `3/4` worse outputs. The gated
+  version with `smart/assets/gates/local_refine_gate_manifest52.json` skipped
+  `2/4` local-refine launches and still caught the one improvement. The next RL
+  target should therefore be action/value learning from larger final-return
+  traces plus a learned local-search gate, not raw replacement of MCTS.

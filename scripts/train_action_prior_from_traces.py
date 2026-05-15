@@ -82,6 +82,11 @@ def main() -> int:
         help="policy-value value-head learning rate; default reuses --learning-rate",
     )
     parser.add_argument("--value-clip", type=float, default=5.0, help="policy-value normalized action-value target clip")
+    parser.add_argument(
+        "--policy-base-prior",
+        default="",
+        help="For --model-type policy-value, reuse this action policy and train only the value head.",
+    )
     parser.add_argument("--accepted-weight", type=float, default=1.0, help="pg-agent loss weight for accepted SMART trace records")
     parser.add_argument("--candidate-weight", type=float, default=1.0, help="pg-agent loss weight for mcts_candidate records")
     parser.add_argument(
@@ -167,6 +172,7 @@ def main() -> int:
         payload = build_policy_value_action_prior_from_traces(
             args.traces,
             output=args.output,
+            policy_base_prior=args.policy_base_prior or None,
             min_reward=args.min_reward,
             smoothing=args.alpha,
             num_action_scale=args.num_action_scale or None,

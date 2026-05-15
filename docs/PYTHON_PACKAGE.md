@@ -276,6 +276,20 @@ smart --config configs/smoke_5.yaml build-prior \
   --device auto
 ```
 
+For final-return fine-tuning, keep a good action policy fixed and train only
+the action-value head:
+
+```bash
+smart --config configs/smoke_5.yaml build-prior \
+  runs/bench_exact/policy_value_final_return_train_cat5.jsonl \
+  --output runs/bench_exact/priors/policy_value_value_only_prior.json \
+  --model-type policy-value \
+  --policy-base-prior smart/assets/priors/category_general_policy_value_agent_prior.json \
+  --epochs 0 \
+  --value-epochs 200 \
+  --device auto
+```
+
 The MLP trainer uses PyTorch. `--device auto` probes Apple Silicon MPS first,
 then CUDA, then CPU; install the `pipeline` extra to get `torch`.
 The current packaged policy-value research prior is
@@ -286,6 +300,9 @@ To collect final-return training rows for this model, run guarded MCTS with
 `--final-return-trace-output`. The output JSONL can be passed back to
 `smart build-prior --model-type policy-value`; each row keeps the immediate
 step reward as `action_reward` and uses `reward` for final exact quality gain.
+The current value-only final-return checkpoint preserved a known table
+improvement but did not improve the held-out offset probe, so it is not packaged
+as the default prior.
 
 The same function is available from Python:
 

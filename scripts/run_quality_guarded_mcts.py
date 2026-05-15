@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mesh", action="append", help="Mesh id; repeat for multiple meshes. Requires --category.")
     parser.add_argument("--mesh-limit", type=int, default=1, help="Used when --mesh is omitted")
     parser.add_argument("--per-category-limit", type=int, default=None, help="Alias for --mesh-limit in multi-category runs")
+    parser.add_argument(
+        "--mesh-offset",
+        type=int,
+        default=0,
+        help="Skip this many eligible meshes per category before applying --mesh-limit. Useful for held-out sweeps.",
+    )
     parser.add_argument("--prior-path", required=True)
     parser.add_argument("--prior-weight", type=float, default=0.1)
     parser.add_argument(
@@ -151,6 +157,7 @@ def main() -> int:
         "config": args.config,
         "categories": sorted(category_meshes),
         "meshes": category_meshes,
+        "mesh_offset": args.mesh_offset,
         "prior_path": args.prior_path,
         "prior_weight": args.prior_weight,
         "puct_prior_weight": args.puct_prior_weight,
@@ -472,7 +479,7 @@ def _select_category_meshes(cfg: dict[str, Any], args: argparse.Namespace) -> di
         if args.mesh:
             meshes = list(args.mesh)
         else:
-            meshes = _candidate_meshes(cfg, category, limit, args.only_existing_refine)
+            meshes = _candidate_meshes(cfg, category, limit, args.only_existing_refine, args.mesh_offset)
         out[name] = meshes
     if not out:
         raise SystemExit("No categories selected")
@@ -484,11 +491,16 @@ def _candidate_meshes(
     category: dict[str, Any],
     limit: int,
     only_existing_refine: bool,
+    offset: int = 0,
 ) -> list[str]:
     selected: list[str] = []
     refine_root = stage_root(cfg, "refine", category)
+    skipped = 0
     for mesh_id in list_mesh_ids(category):
         if only_existing_refine and latest_bbox_dir(refine_root, mesh_id) is None:
+            continue
+        if skipped < max(int(offset), 0):
+            skipped += 1
             continue
         selected.append(mesh_id)
         if limit > 0 and len(selected) >= limit:

@@ -1162,6 +1162,31 @@ PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
 Rows with `record_type=mcts_final_return` keep the immediate action reward as
 `action_reward` and set `reward` to the final quality label. Guard-failing
 candidates are forced negative even if one scalar metric improves.
+When you want to keep the existing policy logits and train only the action-value
+head from final-return labels, pass `--policy-base-prior`:
+
+```bash
+python3 scripts/train_action_prior_from_traces.py \
+  runs/bench_exact/policy_value_final_return_train_cat5.jsonl \
+  --output runs/bench_exact/priors/category_general_policy_value_base_final_return_cat5_prior.json \
+  --model-type policy-value \
+  --policy-base-prior smart/assets/priors/category_general_policy_value_agent_prior.json \
+  --epochs 0 \
+  --value-epochs 200 \
+  --device auto
+```
+
+This value-only fine-tune keeps the packaged action policy unchanged and only
+updates the scalar action-value head. On the known table improvement case it
+selected the learned candidate and improved exact SMART quality, but on the
+current held-out offset probe it was safe rather than better: `5/5` guarded
+successes, `0/5` learned selections, no worse candidates, and about `1.11x`
+mean raw-prior speedup. It is therefore a research checkpoint, not the packaged
+default.
+The latest gated post-MCTS local-refine probe on four held-out policy-value
+outputs selected one improved local-refine result and kept three inputs. With
+`smart/assets/gates/local_refine_gate_manifest52.json` at threshold `0.5`, it
+skipped `2/4` local-refine runs while still catching the one improvement.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be
