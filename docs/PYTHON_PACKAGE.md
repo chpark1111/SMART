@@ -454,6 +454,28 @@ python3 -m smart --config configs/expanded_200.yaml evaluate \
 `--from-manifest` is important for custom subset stages because it evaluates
 only successful stage records rather than every mesh listed in the config.
 
+For quality-first learned MCTS, run the guarded prior search with
+`--selection-objective quality_score`:
+
+```bash
+PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 5 \
+  --prior-path smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json \
+  --prior-weights 0.05,0.1,0.2 \
+  --selection-objective quality_score \
+  --mcts-iter 10 \
+  --max-step 10 \
+  --stage mcts_quality_guarded_cat5 \
+  --output runs/bench_exact/candidate_pg_quality_score_guard_cat5_mcts10.json
+```
+
+This objective keeps the exact per-metric guard but chooses among candidates by
+scalar final SMART quality gain, not speed. On the current 14-mesh processed
+subset, it selected prior on `1/14` cases and improved aggregate BVS, MOV, TOV,
+and vIoU versus baseline with no coverage drift.
+
 ## Command Line Usage
 
 Run the full pipeline:

@@ -968,6 +968,17 @@ tables are deferred until after exact parity is locked.
    as the evaluator. This preserves the paper's geometry guarantee while
    improving search efficiency and category generalization.
 
+   Quality-first selection is now wired:
+   `scripts/run_quality_guarded_mcts.py --selection-objective quality_score`
+   ignores faster identical candidates and selects a learned-prior result only
+   when exact metrics produce positive scalar quality gain under the per-metric
+   guard. On
+   `runs/bench_exact/candidate_pg_quality_score_guard_cat5_mcts10.json`, this
+   selected prior on `1/14` processed meshes and improved aggregate BVS/MOV/TOV
+   and vIoU over baseline with no coverage drift. The gain is small, so the
+   next optimization is not more threshold tuning; it is richer final-return
+   training data for the policy.
+
 3. Opt-in tet-clipping reward backend
 
    Wire the verified Rust tet-clipping kernel into greedy/MCTS reward

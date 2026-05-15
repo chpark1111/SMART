@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import smart
 from scripts.run_quality_guarded_mcts import _adaptive_stop_reason, _aggregate_records
-from smart.quality import compare_quality, select_quality_guarded_run
+from smart.quality import compare_quality, quality_gain_score, select_quality_guarded_run
 
 
 def _summary(**overrides):
@@ -118,6 +118,37 @@ def test_quality_guard_handles_multiple_prior_candidates() -> None:
     assert selection.eligible_labels == ["baseline", "prior_w0p1", "prior_w0p2"]
 
 
+def test_quality_score_objective_ignores_faster_identical_prior() -> None:
+    selection = select_quality_guarded_run(
+        {
+            "baseline": _run(_summary(), elapsed=2.0),
+            "prior": _run(_summary(), elapsed=1.0),
+        },
+        candidate_labels=["prior"],
+        selection_objective="quality_score",
+    )
+
+    assert selection.selected_label == "baseline"
+    assert selection.reason == "baseline_selected"
+
+
+def test_quality_score_objective_prefers_larger_metric_gain() -> None:
+    selection = select_quality_guarded_run(
+        {
+            "baseline": _run(_summary(), elapsed=1.0),
+            "small_gain": _run(_summary(Avg_TOV=0.75), elapsed=0.5),
+            "large_gain": _run(_summary(Avg_BVS=1.8), elapsed=2.0),
+        },
+        candidate_labels=["small_gain", "large_gain"],
+        selection_objective="quality_score",
+    )
+
+    assert selection.selected_label == "large_gain"
+    assert selection.reason == "candidate_quality_score_improved"
+    assert quality_gain_score(selection.comparisons["large_gain"]) > quality_gain_score(selection.comparisons["small_gain"])
+    assert smart.quality_gain_score is quality_gain_score
+
+
 def test_adaptive_guard_stops_only_after_quality_improvement() -> None:
     identical_selection = select_quality_guarded_run(
         {
@@ -139,6 +170,17 @@ def test_adaptive_guard_stops_only_after_quality_improvement() -> None:
     assert _adaptive_stop_reason(identical_selection, mode="not_worse") == "candidate_not_worse_faster"
     assert improved_selection.reason == "candidate_quality_improved"
     assert _adaptive_stop_reason(improved_selection) == "candidate_quality_improved"
+
+    quality_score_selection = select_quality_guarded_run(
+        {
+            "baseline": _run(_summary(), elapsed=2.0),
+            "prior_w0p05": _run(_summary(Avg_BVS=1.8), elapsed=3.0),
+        },
+        candidate_labels=["prior_w0p05"],
+        selection_objective="quality_score",
+    )
+    assert quality_score_selection.reason == "candidate_quality_score_improved"
+    assert _adaptive_stop_reason(quality_score_selection) == "candidate_quality_score_improved"
 
 
 def test_guard_aggregate_counts_skipped_candidate_runs() -> None:

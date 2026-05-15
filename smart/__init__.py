@@ -18,6 +18,7 @@ __all__ = [
     "load_action_prior",
     "load_local_refine_gate",
     "load",
+    "quality_gain_score",
     "run_pipeline",
     "score_local_refine_gate",
     "select_quality_guarded_run",
@@ -39,6 +40,7 @@ _API_EXPORTS = {
     "load_action_prior",
     "load_local_refine_gate",
     "load",
+    "quality_gain_score",
     "run_pipeline",
     "score_local_refine_gate",
     "select_quality_guarded_run",
@@ -98,6 +100,11 @@ def __getattr__(name: str):
 
         globals()[name] = compare_quality
         return compare_quality
+    if name == "quality_gain_score":
+        from .quality import quality_gain_score
+
+        globals()[name] = quality_gain_score
+        return quality_gain_score
     if name == "select_quality_guarded_run":
         from .quality import select_quality_guarded_run
 

@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from smart.pipeline.config import load_config, workspace_path  # noqa: E402
 from smart.pipeline.manifest import ManifestWriter, StageRecord  # noqa: E402
 from smart.pipeline.stages import latest_bbox_dir, list_mesh_ids, stage_root  # noqa: E402
-from smart.quality import select_quality_guarded_run  # noqa: E402
+from smart.quality import quality_gain_score, select_quality_guarded_run  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,6 +71,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mcts-backend", default="auto")
     parser.add_argument("--chamfer-points", type=int, default=0)
     parser.add_argument("--metric-tolerance", type=float, default=1e-9)
+    parser.add_argument(
+        "--selection-objective",
+        choices=("legacy", "quality_score"),
+        default="legacy",
+        help=(
+            "legacy may keep faster identical candidates; quality_score selects "
+            "only non-worse candidates with positive scalar SMART metric gain."
+        ),
+    )
+    parser.add_argument(
+        "--quality-weights",
+        default="",
+        help="Optional comma-separated metric weights, e.g. Avg_BVS=1,Avg_vIoU=2",
+    )
     parser.add_argument("--stage", default="mcts_guarded")
     parser.add_argument("--run-tag", default="")
     parser.add_argument("--output", default="runs/bench_exact/quality_guarded_mcts.json")
@@ -91,6 +105,7 @@ def main() -> int:
     cfg = load_config(args.config)
     category_meshes = _select_category_meshes(cfg, args)
     prior_weights = _parse_prior_weights(args)
+    quality_weights = _parse_quality_weights(args.quality_weights)
     run_tag = args.run_tag or time.strftime("quality_guard_%Y%m%d_%H%M%S")
     output = _repo_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +124,8 @@ def main() -> int:
         "reward_backend": args.reward_backend,
         "mcts_backend": args.mcts_backend,
         "stage": args.stage,
+        "selection_objective": args.selection_objective,
+        "quality_weights": quality_weights,
         "run_tag": run_tag,
         "records": {},
     }
@@ -139,6 +156,8 @@ def main() -> int:
                         baseline_label="baseline",
                         candidate_labels=candidate_labels,
                         tolerance=args.metric_tolerance,
+                        selection_objective=args.selection_objective,
+                        quality_score_weights=quality_weights,
                     )
                     adaptive_stop_reason = _adaptive_stop_reason(
                         partial_selection,
@@ -156,6 +175,8 @@ def main() -> int:
                 baseline_label="baseline",
                 candidate_labels=candidate_labels,
                 tolerance=args.metric_tolerance,
+                selection_objective=args.selection_objective,
+                quality_score_weights=quality_weights,
             )
             selected_run = runs.get(selection.selected_label, {})
             selected_bbox = _selected_bbox_path(selected_run)
@@ -191,6 +212,10 @@ def main() -> int:
                     "baseline_elapsed_sec": baseline.get("elapsed_sec"),
                     "candidate_elapsed_sec": {
                         label: runs.get(label, {}).get("elapsed_sec")
+                        for label in candidate_labels
+                    },
+                    "candidate_quality_score": {
+                        label: quality_gain_score(selection.comparisons.get(label), weights=quality_weights)
                         for label in candidate_labels
                     },
                     "skipped_candidate_labels": skipped_candidate_labels,
@@ -450,6 +475,19 @@ def _parse_prior_weights(args: argparse.Namespace) -> list[float]:
     return weights
 
 
+def _parse_quality_weights(text: str) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for item in str(text or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise SystemExit(f"Invalid --quality-weights item: {item!r}")
+        key, value = item.split("=", 1)
+        weights[key.strip()] = float(value)
+    return weights
+
+
 def _weight_slug(weight: float) -> str:
     text = ("%g" % float(weight)).replace("-", "m").replace(".", "p")
     return f"w{text}"
@@ -468,6 +506,7 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "prior_weights": report.get("prior_weights"),
         "adaptive_prior_weights": report.get("adaptive_prior_weights"),
         "adaptive_stop_mode": report.get("adaptive_stop_mode"),
+        "selection_objective": report.get("selection_objective"),
         "aggregate": report.get("aggregate", {}),
     }
 
@@ -599,7 +638,7 @@ def _adaptive_stop_reason(selection: Any, *, mode: str = "improved") -> str | No
     """
 
     reason = getattr(selection, "reason", "")
-    if reason == "candidate_quality_improved":
+    if reason in {"candidate_quality_improved", "candidate_quality_score_improved"}:
         return reason
     if mode == "not_worse" and reason == "candidate_not_worse_faster":
         return reason

@@ -282,3 +282,14 @@ refinement.
   and saving `20.3%` of measured local-refine time. Thresholds above `0.5`
   save more time but miss improvements, so the gate is useful as a cost-control
   layer rather than a replacement for exact evaluation.
+- Quality-first learned MCTS is now explicitly supported through
+  `scripts/run_quality_guarded_mcts.py --selection-objective quality_score`.
+  This keeps the exact per-metric guard but chooses a learned-prior output only
+  when it gives positive scalar final SMART metric gain. The first cat5
+  processed subset run
+  `runs/bench_exact/candidate_pg_quality_score_guard_cat5_mcts10.json` selected
+  the candidate-aware PG prior on `1/14` cases, kept baseline on `13/14`, and
+  improved aggregate BVS/MOV/TOV/vIoU with no coverage drift. The effect is
+  small; the next research target is collecting more candidate traces and
+  training the action policy on final-return quality, not just local candidate
+  rewards.

@@ -15,6 +15,14 @@ METRIC_KEYS = (
 )
 LOWER_IS_BETTER = ("Avg_BVS", "Avg_MOV", "Avg_TOV", "Avg_cub_CD")
 HIGHER_IS_BETTER = ("Avg_Covered", "Avg_vIoU")
+DEFAULT_QUALITY_SCORE_WEIGHTS = {
+    "Avg_BVS": 1.0,
+    "Avg_MOV": 1.0,
+    "Avg_TOV": 1.0,
+    "Avg_Covered": 1.0,
+    "Avg_vIoU": 1.0,
+    "Avg_cub_CD": 1.0,
+}
 
 
 @dataclass(frozen=True)
@@ -85,6 +93,8 @@ def select_quality_guarded_run(
     candidate_labels: list[str] | None = None,
     tolerance: float = 1e-9,
     metric_tolerances: dict[str, float] | None = None,
+    selection_objective: str = "legacy",
+    quality_score_weights: dict[str, float] | None = None,
 ) -> GuardedSelection:
     baseline = runs.get(baseline_label)
     if not _successful_run(baseline):
@@ -129,19 +139,30 @@ def select_quality_guarded_run(
         else:
             rejected[label] = list(comparison.worse_metrics)
 
-    selected = max(
-        eligible,
-        key=lambda label: (
-            _improved_count(comparisons.get(label)),
-            _stage_speed(runs.get(label)),
-        ),
-    )
-    if selected == baseline_label:
-        reason = "baseline_selected"
-    elif _improved_count(comparisons.get(selected)) > 0:
-        reason = "candidate_quality_improved"
+    if selection_objective == "legacy":
+        selected = max(
+            eligible,
+            key=lambda label: (
+                _improved_count(comparisons.get(label)),
+                _stage_speed(runs.get(label)),
+            ),
+        )
+        if selected == baseline_label:
+            reason = "baseline_selected"
+        elif _improved_count(comparisons.get(selected)) > 0:
+            reason = "candidate_quality_improved"
+        else:
+            reason = "candidate_not_worse_faster"
+    elif selection_objective == "quality_score":
+        selected, reason = _select_by_quality_score(
+            baseline_label,
+            eligible,
+            comparisons,
+            tolerance=tolerance,
+            quality_score_weights=quality_score_weights,
+        )
     else:
-        reason = "candidate_not_worse_faster"
+        raise ValueError(f"unsupported selection objective: {selection_objective!r}")
     return GuardedSelection(
         selected_label=selected,
         baseline_label=baseline_label,
@@ -150,6 +171,29 @@ def select_quality_guarded_run(
         reason=reason,
         comparisons={label: comparison.to_dict() for label, comparison in comparisons.items()},
     )
+
+
+def quality_gain_score(
+    comparison: QualityComparison | dict[str, Any] | None,
+    *,
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Return a scalar exact-metric gain where higher is better.
+
+    The score is only a ranking helper for already exact-evaluated candidates.
+    It does not replace per-metric guard checks.
+    """
+
+    if comparison is None:
+        return 0.0
+    deltas = comparison.deltas if isinstance(comparison, QualityComparison) else comparison.get("deltas", {})
+    weights = {**DEFAULT_QUALITY_SCORE_WEIGHTS, **(weights or {})}
+    score = 0.0
+    for key in LOWER_IS_BETTER:
+        score += -float(deltas.get(key, 0.0)) * float(weights.get(key, 0.0))
+    for key in HIGHER_IS_BETTER:
+        score += float(deltas.get(key, 0.0)) * float(weights.get(key, 0.0))
+    return float(score)
 
 
 def _metric(summary: dict[str, Any], key: str) -> float:
@@ -174,6 +218,31 @@ def _first_successful_label(runs: dict[str, dict[str, Any]], labels: list[str] |
         if _successful_run(runs.get(label)):
             return label
     return None
+
+
+def _select_by_quality_score(
+    baseline_label: str,
+    eligible: list[str],
+    comparisons: dict[str, QualityComparison],
+    *,
+    tolerance: float,
+    quality_score_weights: dict[str, float] | None,
+) -> tuple[str, str]:
+    best_label = baseline_label
+    best_score = 0.0
+    for label in eligible:
+        if label == baseline_label:
+            continue
+        comparison = comparisons.get(label)
+        if comparison is None or not comparison.not_worse:
+            continue
+        score = quality_gain_score(comparison, weights=quality_score_weights)
+        if score > best_score + tolerance:
+            best_label = label
+            best_score = score
+    if best_label == baseline_label:
+        return baseline_label, "baseline_selected"
+    return best_label, "candidate_quality_score_improved"
 
 
 def _improved_count(comparison: QualityComparison | None) -> int:

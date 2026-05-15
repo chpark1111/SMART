@@ -1086,6 +1086,31 @@ python3 -m smart --config configs/expanded_200.yaml evaluate \
 
 The current gated stage evaluation has `52/52` successes with aggregate BVS
 `1.7225`, MOV `1.1410`, TOV `0.6913`, Covered `0.999681`, and vIoU `0.6970`.
+
+For quality-first learned MCTS, use `--selection-objective quality_score` in the
+guarded MCTS runner. This ignores faster-but-identical prior candidates and
+selects a learned-search output only when exact SMART metrics give a positive
+scalar quality gain while still passing the non-worse per-metric guard:
+
+```bash
+PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 5 \
+  --prior-path smart/assets/priors/category_general_candidate_pg_agent_cat3_prior.json \
+  --prior-weights 0.05,0.1,0.2 \
+  --selection-objective quality_score \
+  --mcts-iter 10 \
+  --max-step 10 \
+  --stage mcts_quality_guarded_cat5 \
+  --output runs/bench_exact/candidate_pg_quality_score_guard_cat5_mcts10.json
+```
+
+On the current 14-mesh processed subset, this selected a learned prior on
+`1/14` cases and kept baseline on `13/14`. The selected aggregate improved over
+baseline by BVS `-0.00093`, MOV `-0.01306`, TOV `-0.00044`, and vIoU
+`+0.00038`, with no coverage drift. The result is small, but it is now measuring
+the right target: final quality improvement, not trajectory identity or speed.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

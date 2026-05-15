@@ -444,6 +444,16 @@ Not promoted to default:
   `runs/bench_exact/local_refine_gate_guarded_manifest52_t05_stage_eval.json`
   has `52/52` successes with BVS `1.7225`, MOV `1.1410`, TOV `0.6913`,
   Covered `0.999681`, and vIoU `0.6970`.
+- `scripts/run_quality_guarded_mcts.py --selection-objective quality_score`
+  now changes the learned-MCTS research target from speed/identity to final
+  quality gain. The exact per-metric guard still rejects worse candidates, but
+  among eligible candidates the selector keeps only positive scalar SMART metric
+  gains. On
+  `runs/bench_exact/candidate_pg_quality_score_guard_cat5_mcts10.json`, the
+  candidate-aware PG prior was selected on `1/14` processed meshes, baseline was
+  kept on `13/14`, and selected aggregate metrics improved over baseline by BVS
+  `-0.00093`, MOV `-0.01306`, TOV `-0.00044`, and vIoU `+0.00038` with no
+  coverage drift. This is a small but correctly targeted RL quality result.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit
