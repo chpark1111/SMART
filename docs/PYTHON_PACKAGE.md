@@ -428,6 +428,19 @@ python3 scripts/run_quality_guarded_local_refine.py \
   --output runs/bench_exact/local_refine_gate_run.json
 ```
 
+Analyze thresholds from existing guard results without rerunning local refine:
+
+```bash
+PYTHONPATH=. python3 scripts/evaluate_local_refine_gate.py \
+  runs/bench_exact/local_refine_gate_manifest52.csv \
+  --gate-path smart/assets/gates/local_refine_gate_manifest52.json \
+  --output runs/bench_exact/local_refine_gate_manifest52_threshold_sweep.json
+```
+
+The current sweep shows threshold `0.5` catches all `29/29` known improvements
+while skipping `22/52` local-refine runs, saving `20.3%` of measured local-refine
+stage time on the manifest52 rows.
+
 ## Command Line Usage
 
 Run the full pipeline:

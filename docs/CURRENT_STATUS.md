@@ -432,6 +432,13 @@ Not promoted to default:
   (`runs/bench_exact/local_refine_gate_skip_smoke.json`) scored one airplane
   case, skipped local refine, selected input, and wrote a successful guarded
   output.
+- `scripts/evaluate_local_refine_gate.py` provides fast threshold analysis from
+  the already-computed gate dataset. The current manifest52 sweep
+  `runs/bench_exact/local_refine_gate_manifest52_threshold_sweep.json` shows
+  threshold `0.5` runs local refine on `30/52`, skips `22/52`, catches all
+  `29/29` known improvement cases, matches the full guarded local-refine
+  aggregate metrics, and saves `20.3%` of measured local-refine stage time.
+  Higher thresholds save more time but miss real improvement cases.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit

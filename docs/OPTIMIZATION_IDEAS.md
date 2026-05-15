@@ -943,7 +943,11 @@ tables are deferred until after exact parity is locked.
    decision model for when to spend the extra local-refine time. The guarded
    runner now accepts `--gate-path` and `--gate-threshold`; a forced skip smoke
    confirmed that low-probability cases can bypass the local-refine subprocess
-   and still produce a guarded bbox output.
+   and still produce a guarded bbox output. The threshold sweep script
+   `scripts/evaluate_local_refine_gate.py` shows threshold `0.5` on manifest52
+   skips `22/52` local-refine runs, catches all `29/29` known improvements, and
+   saves `20.3%` of measured local-refine time while matching full guarded
+   local-refine aggregate metrics.
 
 1. Optional MCTS transposition table
 

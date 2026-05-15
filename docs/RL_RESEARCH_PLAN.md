@@ -276,3 +276,9 @@ refinement.
   This makes the next research step concrete: use the gate to skip local refine
   when it is unlikely to improve quality, then collect more rows from larger
   category-balanced runs.
+- `scripts/evaluate_local_refine_gate.py` turns that into a time/quality sweep.
+  On the current manifest52 dataset, threshold `0.5` catches every known
+  local-refine improvement (`29/29`) while skipping `22/52` local-refine runs
+  and saving `20.3%` of measured local-refine time. Thresholds above `0.5`
+  save more time but miss improvements, so the gate is useful as a cost-control
+  layer rather than a replacement for exact evaluation.

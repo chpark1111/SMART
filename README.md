@@ -1059,6 +1059,20 @@ python3 scripts/run_quality_guarded_local_refine.py \
 A forced skip smoke with `--gate-threshold 1.0` scored one airplane case,
 skipped local refine, selected the input bbox, and wrote a successful guarded
 output.
+For fast threshold analysis without rerunning the expensive local-refine stage:
+
+```bash
+PYTHONPATH=. python3 scripts/evaluate_local_refine_gate.py \
+  runs/bench_exact/local_refine_gate_manifest52.csv \
+  --gate-path smart/assets/gates/local_refine_gate_manifest52.json \
+  --output runs/bench_exact/local_refine_gate_manifest52_threshold_sweep.json
+```
+
+On the current manifest52 sweep, threshold `0.5` runs local refine on `30/52`
+cases, skips `22/52`, catches all `29/29` known improvement cases, and matches
+the full guarded local-refine aggregate metrics while saving `20.3%` of the
+local-refine stage time in the measured rows. This makes the gate useful as a
+cost control layer, not as a direct quality-improvement model.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be
