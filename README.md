@@ -1197,6 +1197,11 @@ The latest gated post-MCTS local-refine probe on four held-out policy-value
 outputs selected one improved local-refine result and kept three inputs. With
 `smart/assets/gates/local_refine_gate_manifest52.json` at threshold `0.5`, it
 skipped `2/4` local-refine runs while still catching the one improvement.
+On the larger cat10 policy/value guarded outputs, local refine with
+`Covered` tolerance `0.001` selected `10/21` improved results. The same gate
+skipped the other `11/21` local-refine launches and still selected the same
+10 improvements, giving the strongest current quality/time tradeoff after
+guarded learned MCTS.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

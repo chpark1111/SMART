@@ -581,6 +581,18 @@ Not promoted to default:
   the current quality direction: learned MCTS proposes candidates, exact guard
   selects, and a learned gate controls whether fine local search is worth the
   extra cost.
+- The larger post-policy-value local-refine check
+  `runs/bench_exact/local_refine_after_policy_value_cat10_covtol_probe.json`
+  reused the `21` cat10 policy/value guarded MCTS outputs and applied the
+  quality-first `Covered` tolerance `0.001`. It selected local refine on
+  `10/21` cases and improved selected mean BVS by `-0.0763`, MOV by `-0.3446`,
+  TOV by `-0.0630`, and vIoU by `+0.0266`, with only `-1.5e-05` mean coverage
+  drift. The gated version
+  `runs/bench_exact/local_refine_gate_after_policy_value_cat10_covtol_probe.json`
+  scored all `21` cases, skipped `11` local-refine launches, and still caught
+  the same `10` improvements. This is currently the strongest quality/time
+  result: learned MCTS remains weak as a direct quality improver, but
+  gated post-MCTS local search is consistently useful.
 
 ## Next Work
 

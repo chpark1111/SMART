@@ -483,6 +483,10 @@ PYTHONPATH=. python3 scripts/evaluate_local_refine_gate.py \
 The current sweep shows threshold `0.5` catches all `29/29` known improvements
 while skipping `22/52` local-refine runs, saving `20.3%` of measured local-refine
 stage time on the manifest52 rows.
+On the current cat10 policy/value guarded MCTS outputs, the same gate skipped
+`11/21` local-refine launches and still caught all `10` improvements under the
+`Covered` tolerance `0.001` quality guard. This is the recommended research
+post-process when optimizing for quality rather than strict paper reproduction.
 Evaluate the generated gated stage from its manifest:
 
 ```bash

@@ -380,3 +380,13 @@ refinement.
   `2/4` local-refine launches and still caught the one improvement. The next RL
   target should therefore be action/value learning from larger final-return
   traces plus a learned local-search gate, not raw replacement of MCTS.
+- The cat10 policy/value outputs make this clearer. With `Covered` tolerance
+  `0.001`,
+  `runs/bench_exact/local_refine_after_policy_value_cat10_covtol_probe.json`
+  selected local refine on `10/21` cases and improved selected mean BVS/MOV/TOV
+  and vIoU with negligible coverage drift. The packaged gate
+  `smart/assets/gates/local_refine_gate_manifest52.json` skipped `11/21`
+  local-refine launches and caught the same `10` improvements. This suggests
+  the near-term learning target should be a stronger local-search gate and
+  post-MCTS action/value proposal, while MCTS action policy learning continues
+  to accumulate final-return positives.
