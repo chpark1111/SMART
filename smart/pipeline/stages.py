@@ -1974,15 +1974,12 @@ def latest_exp_dir_for_bbox(root: Path, mesh_id: str) -> Path | None:
 
 
 def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: str, input_stage: str) -> Path | None:
+    manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
+    if manifest_bbox is not None:
+        return manifest_bbox
     if input_stage in {"mcts", "mcts_guarded", "refine", "local_refine", "local_refine_guarded"}:
-        manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
-        if manifest_bbox is not None:
-            return manifest_bbox
         return latest_bbox_dir(stage_root(cfg, input_stage, category), mesh_id)
     if input_stage == "merge":
-        manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
-        if manifest_bbox is not None:
-            return manifest_bbox
         return latest_bbox_dir(stage_root(cfg, "merge", category), mesh_id)
     candidate = Path(input_stage).expanduser()
     if not candidate.is_absolute():

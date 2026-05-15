@@ -1073,6 +1073,19 @@ cases, skips `22/52`, catches all `29/29` known improvement cases, and matches
 the full guarded local-refine aggregate metrics while saving `20.3%` of the
 local-refine stage time in the measured rows. This makes the gate useful as a
 cost control layer, not as a direct quality-improvement model.
+The actual gated stage can then be evaluated from its manifest:
+
+```bash
+python3 -m smart --config configs/expanded_200.yaml evaluate \
+  --stage local_refine_gate_guarded \
+  --from-manifest \
+  --chamfer-points 0 \
+  --output runs/bench_exact/local_refine_gate_guarded_manifest52_t05_stage_eval.json \
+  --json
+```
+
+The current gated stage evaluation has `52/52` successes with aggregate BVS
+`1.7225`, MOV `1.1410`, TOV `0.6913`, Covered `0.999681`, and vIoU `0.6970`.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

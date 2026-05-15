@@ -374,6 +374,31 @@ def test_bbox_dir_prefers_success_manifest_output(tmp_path) -> None:
     assert bbox_dir_for_render(cfg, category, "mesh-a", "mcts") == manifest_path
 
 
+def test_bbox_dir_uses_manifest_for_custom_stage(tmp_path) -> None:
+    category = {"name": "chair", "mesh_root": str(tmp_path / "meshes")}
+    cfg = {"workspace": str(tmp_path), "normalization": {"enabled": False}}
+    manifest_path = (
+        tmp_path
+        / "local_refine_gate_guarded"
+        / "chair"
+        / "exp"
+        / "result"
+        / "updated0"
+        / "mesh-a"
+        / "bboxs_steps0"
+    )
+    manifest_path.mkdir(parents=True)
+    manifest_root = tmp_path / "manifests"
+    manifest_root.mkdir()
+    (manifest_root / "local_refine_gate_guarded.jsonl").write_text(
+        '{"category":"chair","mesh_id":"mesh-a","stage":"local_refine_gate_guarded",'
+        f'"status":"success","finished_at":1,"output_path":"{manifest_path}"' + "}\n",
+        encoding="utf-8",
+    )
+
+    assert bbox_dir_for_render(cfg, category, "mesh-a", "local_refine_gate_guarded") == manifest_path
+
+
 def test_latest_bbox_dir_can_filter_outputs_before_current_run(tmp_path) -> None:
     old_path = tmp_path / "mcts" / "chair" / "exp" / "result" / "updated2" / "mesh-a" / "bboxs_steps6"
     new_path = tmp_path / "mcts" / "chair" / "exp" / "result" / "updated3" / "mesh-a" / "bboxs_steps7"

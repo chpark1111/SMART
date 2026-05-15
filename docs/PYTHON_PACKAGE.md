@@ -440,6 +440,19 @@ PYTHONPATH=. python3 scripts/evaluate_local_refine_gate.py \
 The current sweep shows threshold `0.5` catches all `29/29` known improvements
 while skipping `22/52` local-refine runs, saving `20.3%` of measured local-refine
 stage time on the manifest52 rows.
+Evaluate the generated gated stage from its manifest:
+
+```bash
+python3 -m smart --config configs/expanded_200.yaml evaluate \
+  --stage local_refine_gate_guarded \
+  --from-manifest \
+  --chamfer-points 0 \
+  --output runs/bench_exact/local_refine_gate_guarded_manifest52_t05_stage_eval.json \
+  --json
+```
+
+`--from-manifest` is important for custom subset stages because it evaluates
+only successful stage records rather than every mesh listed in the config.
 
 ## Command Line Usage
 

@@ -60,13 +60,17 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument(
         "--stage",
         default="mcts",
-        choices=["merge", "refine", "mcts", "mcts_guarded", "local_refine", "local_refine_guarded"],
-        help="BBox output stage to evaluate",
+        help="BBox output stage to evaluate, including custom guarded stages",
     )
     evaluate.add_argument("--category", help="Limit to one configured category")
     evaluate.add_argument("--mesh", action="append", help="Limit to one mesh id; repeat for multiple meshes")
     evaluate.add_argument("--chamfer-points", type=int, default=2048, help="Surface samples for cub_CD")
     evaluate.add_argument("--output", help="Path to write evaluation JSON")
+    evaluate.add_argument(
+        "--from-manifest",
+        action="store_true",
+        help="Evaluate only successful records listed in the stage manifest",
+    )
     evaluate.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     prior = sub.add_parser("build-prior", help="Build an opt-in MCTS action-prior JSON from trace files")
@@ -168,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             meshes=args.mesh,
             chamfer_points=args.chamfer_points,
             output_path=args.output,
+            from_manifest=args.from_manifest,
         )
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))

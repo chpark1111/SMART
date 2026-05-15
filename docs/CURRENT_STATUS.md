@@ -439,6 +439,11 @@ Not promoted to default:
   `29/29` known improvement cases, matches the full guarded local-refine
   aggregate metrics, and saves `20.3%` of measured local-refine stage time.
   Higher thresholds save more time but miss real improvement cases.
+- `smart evaluate --from-manifest` now supports custom subset stages such as
+  `local_refine_gate_guarded`. The current gated stage eval
+  `runs/bench_exact/local_refine_gate_guarded_manifest52_t05_stage_eval.json`
+  has `52/52` successes with BVS `1.7225`, MOV `1.1410`, TOV `0.6913`,
+  Covered `0.999681`, and vIoU `0.6970`.
 - Action trace schema is now versioned. New traces include category, bbox/action
   layout, action unit, BVS, volume sum, backend, and Manifold volume method.
   `smart build-prior` and `scripts/train_action_prior_from_traces.py` now emit

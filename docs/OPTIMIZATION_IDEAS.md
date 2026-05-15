@@ -947,7 +947,10 @@ tables are deferred until after exact parity is locked.
    `scripts/evaluate_local_refine_gate.py` shows threshold `0.5` on manifest52
    skips `22/52` local-refine runs, catches all `29/29` known improvements, and
    saves `20.3%` of measured local-refine time while matching full guarded
-   local-refine aggregate metrics.
+   local-refine aggregate metrics. `smart evaluate --from-manifest` now
+   evaluates custom subset stages cleanly; the current gated stage evaluation
+   has `52/52` successes and the same aggregate quality numbers as the offline
+   threshold analysis.
 
 1. Optional MCTS transposition table
 

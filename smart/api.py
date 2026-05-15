@@ -54,6 +54,7 @@ def evaluate(
     meshes: Iterable[str] | None = None,
     chamfer_points: int = 2048,
     output_path: str | Path | None = None,
+    from_manifest: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate SMART bbox outputs with the paper metrics."""
@@ -65,6 +66,7 @@ def evaluate(
         meshes=list(meshes) if meshes is not None else None,
         chamfer_points=chamfer_points,
         output_path=output_path,
+        from_manifest=from_manifest,
     )
 
 

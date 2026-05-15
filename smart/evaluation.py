@@ -52,12 +52,18 @@ def evaluate_config(
     meshes: list[str] | None = None,
     chamfer_points: int = 2048,
     output_path: str | Path | None = None,
+    from_manifest: bool = False,
 ) -> dict[str, Any]:
     records: list[EvaluationRecord] = []
+    manifest_meshes = _manifest_meshes(cfg, stage, category_name=category_name, meshes=meshes) if from_manifest else None
     for category in cfg.get("categories", []):
         if category_name and category["name"] != category_name:
             continue
-        for mesh_id in list_mesh_ids(category, explicit=meshes):
+        if manifest_meshes is not None:
+            mesh_ids = manifest_meshes.get(str(category["name"]), [])
+        else:
+            mesh_ids = list_mesh_ids(category, explicit=meshes)
+        for mesh_id in mesh_ids:
             records.append(
                 evaluate_mesh(
                     cfg,
@@ -72,6 +78,7 @@ def evaluate_config(
     payload = {
         "stage": stage,
         "chamfer_points": chamfer_points,
+        "from_manifest": from_manifest,
         "summary": summary,
         "records": [asdict(record) for record in records],
     }
@@ -80,6 +87,54 @@ def evaluate_config(
     out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     payload["output_path"] = str(out)
     return payload
+
+
+def _manifest_meshes(
+    cfg: dict[str, Any],
+    stage: str,
+    *,
+    category_name: str | None,
+    meshes: list[str] | None,
+) -> dict[str, list[str]]:
+    manifest = workspace_path(cfg, "manifests", f"{stage}.jsonl")
+    if not manifest.exists():
+        return {}
+    allowed_meshes = set(meshes or [])
+    configured = {str(category["name"]) for category in cfg.get("categories", [])}
+    latest: dict[tuple[str, str], float] = {}
+    order: list[tuple[str, str]] = []
+    with manifest.open("r", encoding="utf-8") as file:
+        for line in file:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("stage") != stage or record.get("status") != "success":
+                continue
+            category = str(record.get("category") or "")
+            mesh_id = str(record.get("mesh_id") or "")
+            if not category or not mesh_id:
+                continue
+            if category not in configured:
+                continue
+            if category_name and category != category_name:
+                continue
+            if allowed_meshes and mesh_id not in allowed_meshes:
+                continue
+            output_path = record.get("output_path")
+            if not output_path or not Path(str(output_path)).exists():
+                continue
+            key = (category, mesh_id)
+            finished_at = float(record.get("finished_at") or 0.0)
+            if key not in latest:
+                order.append(key)
+            if finished_at >= latest.get(key, -1.0):
+                latest[key] = finished_at
+    selected: dict[str, list[str]] = {}
+    for category, mesh_id in order:
+        if (category, mesh_id) in latest:
+            selected.setdefault(category, []).append(mesh_id)
+    return selected
 
 
 def evaluate_mesh(
