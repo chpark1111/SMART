@@ -365,6 +365,13 @@ refinement.
   The next collection should either process more table-like positives and
   harder airplane/chair cases, or increase search budget enough to expose
   nonzero final gains for those categories.
+- Value-head imbalance controls are now implemented:
+  `--value-positive-weight`, `--value-negative-weight`, and
+  `--value-zero-weight`. A positive-heavy cat5 value-only run with weights
+  `16/4/0.25` stayed non-worse on the offset-5 held-out probe and improved
+  raw-prior speed, but still selected baseline on every held-out case. This
+  confirms simple reweighting is not enough; we need more positive final-return
+  cases or a richer action/value target.
 - Hybrid local search remains the stronger quality-improvement mechanism after
   learned MCTS. On four held-out policy-value outputs,
   `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json`

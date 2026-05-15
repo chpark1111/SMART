@@ -1028,6 +1028,9 @@ def build_policy_value_action_prior_from_traces(
     value_epochs: int | None = None,
     value_learning_rate: float | None = None,
     value_clip: float = 5.0,
+    value_positive_weight: float = 1.0,
+    value_negative_weight: float = 1.0,
+    value_zero_weight: float = 1.0,
 ) -> dict[str, Any]:
     """Train an action-level policy prior plus an action-value head.
 
@@ -1086,6 +1089,9 @@ def build_policy_value_action_prior_from_traces(
         candidate_weight=candidate_weight,
         selected_candidate_weight=selected_candidate_weight,
         category_balance=category_balance,
+        value_positive_weight=value_positive_weight,
+        value_negative_weight=value_negative_weight,
+        value_zero_weight=value_zero_weight,
     )
     if not examples["features"]:
         raise ValueError("no trainable action-value examples found")
@@ -1127,8 +1133,14 @@ def build_policy_value_action_prior_from_traces(
         "value_epochs": int(value_epochs if value_epochs is not None else epochs),
         "value_learning_rate": float(value_learning_rate if value_learning_rate is not None else learning_rate),
         "value_clip": float(value_clip),
+        "value_positive_weight": float(value_positive_weight),
+        "value_negative_weight": float(value_negative_weight),
+        "value_zero_weight": float(value_zero_weight),
         "value_target_mean": float(examples["target_mean"]),
         "value_target_std": float(examples["target_std"]),
+        "value_positive_examples": int(examples["positive_examples"]),
+        "value_negative_examples": int(examples["negative_examples"]),
+        "value_zero_examples": int(examples["zero_examples"]),
     }
     if base_policy_metadata:
         metadata_update["policy_base_model_type"] = str(base_policy_metadata.get("model_type", ""))
@@ -1512,6 +1524,9 @@ def _action_value_examples(
     candidate_weight: float,
     selected_candidate_weight: float,
     category_balance: bool,
+    value_positive_weight: float = 1.0,
+    value_negative_weight: float = 1.0,
+    value_zero_weight: float = 1.0,
 ) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for trace_path in trace_paths:
@@ -1560,6 +1575,9 @@ def _action_value_examples(
     weights: list[float] = []
     example_categories: list[str] = []
     candidate_records_used = 0
+    positive_examples = 0
+    negative_examples = 0
+    zero_examples = 0
     for record in records:
         action = int(record.get("action", -1))
         if action < 0:
@@ -1588,6 +1606,15 @@ def _action_value_examples(
         else:
             target = reward - baseline_map.get(baseline_key, global_baseline)
             weight = float(accepted_weight)
+        if target > 1.0e-12:
+            weight *= float(value_positive_weight)
+            positive_examples += 1
+        elif target < -1.0e-12:
+            weight *= float(value_negative_weight)
+            negative_examples += 1
+        else:
+            weight *= float(value_zero_weight)
+            zero_examples += 1
         feature_record = dict(record)
         feature_record["num_bbox"] = num_bbox
         features.append(
@@ -1610,6 +1637,9 @@ def _action_value_examples(
             "weights": [],
             "records_used": 0,
             "candidate_records_used": 0,
+            "positive_examples": 0,
+            "negative_examples": 0,
+            "zero_examples": 0,
             "target_mean": 0.0,
             "target_std": 1.0,
         }
@@ -1638,6 +1668,9 @@ def _action_value_examples(
         "weights": weights,
         "records_used": len(features),
         "candidate_records_used": candidate_records_used,
+        "positive_examples": positive_examples,
+        "negative_examples": negative_examples,
+        "zero_examples": zero_examples,
         "target_mean": target_mean,
         "target_std": target_std,
     }

@@ -287,6 +287,9 @@ smart --config configs/smoke_5.yaml build-prior \
   --policy-base-prior smart/assets/priors/category_general_policy_value_agent_prior.json \
   --epochs 0 \
   --value-epochs 200 \
+  --value-positive-weight 16 \
+  --value-negative-weight 4 \
+  --value-zero-weight 0.25 \
   --device auto
 ```
 
@@ -302,7 +305,9 @@ To collect final-return training rows for this model, run guarded MCTS with
 step reward as `action_reward` and uses `reward` for final exact quality gain.
 The current value-only final-return checkpoint preserved a known table
 improvement but did not improve the held-out offset probe, so it is not packaged
-as the default prior.
+as the default prior. The value weighting flags are useful for sparse
+final-return labels, but current probes show they improve raw-prior speed more
+than held-out quality.
 
 The same function is available from Python:
 

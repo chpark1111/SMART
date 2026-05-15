@@ -529,6 +529,9 @@ def test_policy_value_action_prior_scores_concrete_actions(tmp_path) -> None:
         learning_rate=0.01,
         hidden_size=4,
         device="cpu",
+        value_positive_weight=3.0,
+        value_negative_weight=2.0,
+        value_zero_weight=0.5,
     )
     prior = load_action_prior(output)
     logits = prior.action_logits_for(
@@ -559,6 +562,12 @@ def test_policy_value_action_prior_scores_concrete_actions(tmp_path) -> None:
     assert payload["policy_type"] == "action_policy_value_prior"
     assert payload["metadata"]["model_type"] == "policy_value_agent"
     assert payload["metadata"]["value_records_used"] == 3
+    assert payload["metadata"]["value_positive_examples"] == 1
+    assert payload["metadata"]["value_negative_examples"] == 1
+    assert payload["metadata"]["value_zero_examples"] == 1
+    assert payload["metadata"]["value_positive_weight"] == 3.0
+    assert payload["metadata"]["value_negative_weight"] == 2.0
+    assert payload["metadata"]["value_zero_weight"] == 0.5
     assert len(logits) == 2
     assert len(values) == 2
     assert all(isinstance(value, float) for value in values)

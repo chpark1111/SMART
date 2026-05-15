@@ -998,6 +998,9 @@ tables are deferred until after exact parity is locked.
    rows and enabled `--policy-base-prior`, which freezes the existing action
    policy and trains only the value head. That value-only checkpoint preserved
    the known table improvement but did not improve the current held-out probe.
+   Value-head positive/negative/zero weighting is implemented and helped
+   raw-prior speed on the held-out probe, but it still did not produce held-out
+   quality improvements.
    The optimization target is therefore more final-return coverage and better
    value/policy weighting, not replacing exact SMART reward.
 

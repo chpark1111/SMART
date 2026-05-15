@@ -561,6 +561,15 @@ Not promoted to default:
   A cat10 value-only checkpoint was trained, but an offset-10 held-out attempt
   found no existing processed refine outputs; the guarded runner now errors
   clearly when `--mesh-offset` skips every eligible mesh.
+- Value-head class weighting is now exposed with `--value-positive-weight`,
+  `--value-negative-weight`, and `--value-zero-weight`. A positive-heavy cat5
+  checkpoint
+  `runs/bench_exact/priors/category_general_policy_value_base_final_return_cat5_posweighted_prior.json`
+  used weights `16/4/0.25` for positive/negative/zero targets. On the same
+  offset-5 held-out probe it stayed safe (`5/5` successes, `0` worse
+  candidates) and increased raw-prior speed to `1.18x`, but selected baseline
+  on all cases. Raising `action_value_weight` to `0.08` also stayed safe but
+  did not create held-out quality improvements.
 - A post-policy-value hybrid probe
   `runs/bench_exact/local_refine_after_policy_value_holdout_probe.json` ran
   local search after the guarded policy-value output on four held-out cases. It

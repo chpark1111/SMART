@@ -83,6 +83,24 @@ def main() -> int:
     )
     parser.add_argument("--value-clip", type=float, default=5.0, help="policy-value normalized action-value target clip")
     parser.add_argument(
+        "--value-positive-weight",
+        type=float,
+        default=1.0,
+        help="policy-value loss multiplier for positive value targets",
+    )
+    parser.add_argument(
+        "--value-negative-weight",
+        type=float,
+        default=1.0,
+        help="policy-value loss multiplier for negative value targets",
+    )
+    parser.add_argument(
+        "--value-zero-weight",
+        type=float,
+        default=1.0,
+        help="policy-value loss multiplier for zero value targets",
+    )
+    parser.add_argument(
         "--policy-base-prior",
         default="",
         help="For --model-type policy-value, reuse this action policy and train only the value head.",
@@ -192,6 +210,9 @@ def main() -> int:
             value_epochs=args.value_epochs or None,
             value_learning_rate=args.value_learning_rate or None,
             value_clip=args.value_clip,
+            value_positive_weight=args.value_positive_weight,
+            value_negative_weight=args.value_negative_weight,
+            value_zero_weight=args.value_zero_weight,
         )
     else:
         payload = build_action_prior_from_traces(

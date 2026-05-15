@@ -1188,6 +1188,11 @@ one learned-candidate quality improvement, but the label distribution is still
 sparse (`59` positive rows out of `2228`, all from table), so the next useful
 RL step is more positive final-return coverage rather than promoting the
 value-only checkpoint.
+The value trainer also exposes `--value-positive-weight`,
+`--value-negative-weight`, and `--value-zero-weight` for sparse final-return
+labels. A positive-heavy cat5 value-only run stayed safe on the held-out offset
+probe (`5/5` guarded successes, no worse candidates) and improved raw-prior
+speed to about `1.18x`, but it still selected baseline on every held-out case.
 The latest gated post-MCTS local-refine probe on four held-out policy-value
 outputs selected one improved local-refine result and kept three inputs. With
 `smart/assets/gates/local_refine_gate_manifest52.json` at threshold `0.5`, it
