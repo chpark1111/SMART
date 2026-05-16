@@ -1161,13 +1161,13 @@ def coord_scale_keys(num_action_scale: int) -> list[str]:
     return [f"{coord}:{scale}" for coord in range(6) for scale in range(num_action_scale)] + ["6:0"]
 
 
-def load_action_prior(path: str | Path) -> "LoadedActionPrior":
+def load_action_prior(path: str | Path, *, inference_device: str = "json") -> "LoadedActionPrior":
     with Path(path).open("r", encoding="utf-8") as file:
-        return LoadedActionPrior(json.load(file))
+        return LoadedActionPrior(json.load(file), inference_device=inference_device)
 
 
 class LoadedActionPrior:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], *, inference_device: str = "json") -> None:
         self.payload = payload
         self.policy_type = str(payload.get("policy_type") or payload.get("type") or "coord_scale_count_prior")
         self.default_logit = float(payload.get("default_logit", 0.0))
@@ -1214,6 +1214,17 @@ class LoadedActionPrior:
         ]
         self.action_value_output_bias = float(payload.get("action_value_output_bias", 0.0) or 0.0)
         self.model_num_action_scale = int(payload.get("num_action_scale", 0) or 0)
+        self.inference_device = str(inference_device or "json")
+        self._torch = None
+        self._torch_device = None
+        self._torch_action_input_weights = None
+        self._torch_action_hidden_bias = None
+        self._torch_action_output_weights = None
+        self._torch_action_output_bias = None
+        self._torch_action_value_output_weights = None
+        self._torch_action_value_output_bias = None
+        if self.inference_device.lower() not in {"", "json", "python"}:
+            self._init_torch_inference(self.inference_device)
 
     def action_logits_for(
         self,
@@ -1224,6 +1235,13 @@ class LoadedActionPrior:
     ) -> list[float]:
         actions = [int(action) for action in actions]
         if self.policy_type in {"action_mlp_prior", "action_policy_value_prior"}:
+            torch_logits = self._action_mlp_logits_for_torch(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context or {},
+            )
+            if torch_logits is not None:
+                return torch_logits
             return self._action_mlp_logits_for(
                 actions,
                 num_action_scale=int(num_action_scale),
@@ -1254,6 +1272,13 @@ class LoadedActionPrior:
         actions = [int(action) for action in actions]
         if not self.action_value_output_weights:
             return [0.0 for _ in actions]
+        torch_values = self._action_values_for_torch(
+            actions,
+            num_action_scale=int(num_action_scale),
+            context=context or {},
+        )
+        if torch_values is not None:
+            return torch_values
         model_num_action_scale = max(self.model_num_action_scale, int(num_action_scale), 1)
         out = []
         for action in actions:
@@ -1370,6 +1395,144 @@ class LoadedActionPrior:
         )
         _, hidden = _mlp_hidden(features, self.action_input_weights, self.action_hidden_bias)
         return hidden
+
+    def _init_torch_inference(self, device: str) -> None:
+        if self.policy_type not in {"action_mlp_prior", "action_policy_value_prior"}:
+            return
+        if not self.action_input_weights or not self.action_hidden_bias or not self.action_output_weights:
+            return
+        torch = _import_torch()
+        torch_device = _select_torch_device(torch, device)
+        self._torch = torch
+        self._torch_device = torch_device
+        self._torch_action_input_weights = torch.tensor(
+            self.action_input_weights,
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        self._torch_action_hidden_bias = torch.tensor(
+            self.action_hidden_bias,
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        self._torch_action_output_weights = torch.tensor(
+            self.action_output_weights,
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        self._torch_action_output_bias = torch.tensor(
+            self.action_output_bias,
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        if self.action_value_output_weights:
+            self._torch_action_value_output_weights = torch.tensor(
+                self.action_value_output_weights,
+                dtype=torch.float32,
+                device=torch_device,
+            )
+            self._torch_action_value_output_bias = torch.tensor(
+                self.action_value_output_bias,
+                dtype=torch.float32,
+                device=torch_device,
+            )
+
+    def _batched_action_features(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ) -> list[list[float]]:
+        model_num_action_scale = max(self.model_num_action_scale, int(num_action_scale), 1)
+        expected_features = len(self.action_input_weights)
+        features = [
+            action_features(
+                context,
+                int(action),
+                action_num_action_scale=int(num_action_scale),
+                model_num_action_scale=model_num_action_scale,
+                categories=self.categories,
+            )
+            for action in actions
+        ]
+        if expected_features <= 0:
+            return features
+        fixed = []
+        for row in features:
+            if len(row) < expected_features:
+                fixed.append(row + [0.0] * (expected_features - len(row)))
+            else:
+                fixed.append(row[:expected_features])
+        return fixed
+
+    def _torch_hidden_for_actions(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ):
+        if (
+            self._torch is None
+            or self._torch_action_input_weights is None
+            or self._torch_action_hidden_bias is None
+        ):
+            return None
+        if not actions:
+            return None
+        features = self._batched_action_features(
+            actions,
+            num_action_scale=int(num_action_scale),
+            context=context,
+        )
+        if not features:
+            return None
+        with self._torch.no_grad():
+            x = self._torch.tensor(features, dtype=self._torch.float32, device=self._torch_device)
+            return self._torch.tanh(
+                x.matmul(self._torch_action_input_weights) + self._torch_action_hidden_bias
+            )
+
+    def _action_mlp_logits_for_torch(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ) -> list[float] | None:
+        if self._torch_action_output_weights is None or self._torch_action_output_bias is None:
+            return None
+        hidden = self._torch_hidden_for_actions(
+            actions,
+            num_action_scale=int(num_action_scale),
+            context=context,
+        )
+        if hidden is None:
+            return None
+        with self._torch.no_grad():
+            logits = hidden.matmul(self._torch_action_output_weights) + self._torch_action_output_bias
+            return [float(value) for value in logits.detach().cpu().tolist()]
+
+    def _action_values_for_torch(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ) -> list[float] | None:
+        if self._torch_action_value_output_weights is None or self._torch_action_value_output_bias is None:
+            return None
+        hidden = self._torch_hidden_for_actions(
+            actions,
+            num_action_scale=int(num_action_scale),
+            context=context,
+        )
+        if hidden is None:
+            return None
+        with self._torch.no_grad():
+            values = hidden.matmul(self._torch_action_value_output_weights) + self._torch_action_value_output_bias
+            return [float(value) for value in values.detach().cpu().tolist()]
 
 
 def linear_feature_names(categories: list[str]) -> list[str]:

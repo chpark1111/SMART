@@ -1041,6 +1041,7 @@ def run_refine_mesh(
         )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
+        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
         command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
@@ -1279,6 +1280,7 @@ def run_mcts_mesh(
         )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
+        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--puct_prior_weight", str(stage_cfg.get("puct_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
@@ -1482,6 +1484,7 @@ def run_local_refine_mesh(
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
+        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
         command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])

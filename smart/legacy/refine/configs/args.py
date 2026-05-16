@@ -263,6 +263,16 @@ def get_parser() -> ArgumentParser:
         help="optional JSON action-prior file learned from SMART traces; guides MCTS sampling only",
     )
     parser.add_argument(
+        "--action_prior_device",
+        type=str,
+        default="json",
+        help=(
+            "inference backend for action-level learned priors: json/python, cpu, "
+            "mps, cuda, or auto. auto tries Apple Silicon MPS first, then CUDA, "
+            "then CPU. Exact SMART reward is unchanged."
+        ),
+    )
+    parser.add_argument(
         "--action_prior_weight",
         type=float,
         default=0.0,

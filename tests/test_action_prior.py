@@ -573,6 +573,74 @@ def test_policy_value_action_prior_scores_concrete_actions(tmp_path) -> None:
     assert all(isinstance(value, float) for value in values)
 
 
+def test_policy_value_action_prior_torch_inference_matches_json(tmp_path) -> None:
+    pytest.importorskip("torch")
+    trace = tmp_path / "candidate_trace.jsonl"
+    rows = [
+        {
+            "record_type": "mcts_candidate",
+            "category": "airplane",
+            "mesh": "a",
+            "coord_idx": 0,
+            "scale_idx": 0,
+            "num_action_scale": 2,
+            "action": 0,
+            "reward": 2.0,
+            "selected": True,
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+        {
+            "record_type": "mcts_candidate",
+            "category": "airplane",
+            "mesh": "a",
+            "coord_idx": 3,
+            "scale_idx": 1,
+            "num_action_scale": 2,
+            "action": 7,
+            "reward": -2.0,
+            "selected": False,
+            "num_bbox": 2,
+            "bvs": 1.0,
+            "max_step": 20,
+            "action_unit": 0.02,
+        },
+    ]
+    trace.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    output = tmp_path / "policy_value.json"
+    build_policy_value_action_prior_from_traces(
+        [trace],
+        output=output,
+        epochs=2,
+        value_epochs=2,
+        learning_rate=0.01,
+        hidden_size=4,
+        device="cpu",
+    )
+    context = {
+        "category": "airplane",
+        "mesh": "a",
+        "num_bbox": 2,
+        "bvs": 1.0,
+        "max_step": 20,
+        "action_unit": 0.02,
+    }
+    actions = [0, 7, 12]
+    json_prior = load_action_prior(output)
+    torch_prior = load_action_prior(output, inference_device="cpu")
+
+    json_logits = json_prior.action_logits_for(actions, num_action_scale=2, context=context)
+    torch_logits = torch_prior.action_logits_for(actions, num_action_scale=2, context=context)
+    json_values = json_prior.action_values_for(actions, num_action_scale=2, context=context)
+    torch_values = torch_prior.action_values_for(actions, num_action_scale=2, context=context)
+
+    assert torch_prior._torch_device.type == "cpu"
+    assert torch_logits == pytest.approx(json_logits, abs=1e-5)
+    assert torch_values == pytest.approx(json_values, abs=1e-5)
+
+
 def test_policy_value_action_prior_can_reuse_base_policy(tmp_path) -> None:
     pytest.importorskip("torch")
     trace = tmp_path / "trace.jsonl"

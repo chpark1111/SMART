@@ -452,3 +452,9 @@ refinement.
   Top-K=2 was slower (`1.21x`) and did not reduce those rejections. This is not
   a quality improvement yet, but it is the first clear learned-agent time
   reduction and should be scaled before trying a larger neural architecture.
+- Runtime policy inference now has an opt-in PyTorch batch path:
+  `action_prior_device=auto|mps|cuda|cpu`. This is separate from training. It
+  lets the learned policy/value scorer run as a batched tensor operation before
+  exact Manifold verification. On the packaged policy-value prior, a 70-action
+  microbench measured `12.15ms` per call for the JSON scalar evaluator and
+  `0.84ms` per call for PyTorch CPU inference, with identical top action.

@@ -665,6 +665,13 @@ Not promoted to default:
   setting. Final quality did not improve yet, so this is an opt-in speed profile
   rather than a promoted quality profile. The full-pipeline profile is
   `configs/rl_policy_topk_experimental.yaml`.
+- Action-level policy/value priors can now run batch PyTorch inference at runtime
+  with `action_prior_device=auto|mps|cuda|cpu`. The default remains `json` for
+  packaging safety. On the current machine, a 70-action policy/value scoring
+  microbench on `category_general_policy_value_agent_prior.json` dropped from
+  `12.15ms` per call with the JSON scalar evaluator to `0.84ms` per call with
+  PyTorch batch inference on CPU, while preserving the same top action. This
+  speeds the learned policy scorer; exact Manifold reward is still the verifier.
 
 ## Next Work
 

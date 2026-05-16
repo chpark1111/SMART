@@ -1152,6 +1152,7 @@ PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
   --categories airplane,chair,table \
   --per-category-limit 3 \
   --prior-path smart/assets/priors/category_general_policy_value_agent_prior.json \
+  --action-prior-device auto \
   --prior-weight 0.1 \
   --puct-prior-weight 0.1 \
   --action-value-weight 0.05 \
@@ -1176,6 +1177,13 @@ still opt-in because top-K pruning changes the search tree and currently
 improves time more than final quality.
 For full pipeline experiments, the same settings are captured in
 `configs/rl_policy_topk_experimental.yaml`.
+That profile sets `action_prior_device=auto`, so PyTorch inference uses Apple
+Silicon MPS when available, then CUDA, then CPU. The packaged
+`category_general_policy_value_agent_prior.json` still falls back to the pure
+JSON/Python evaluator when `action_prior_device=json`.
+On a 70-action policy/value scoring microbench, the JSON evaluator took
+`12.15ms` per call and the PyTorch batch evaluator took `0.84ms` per call on the
+current machine, with the same top action.
 For final-return training data, add `--final-return-trace-output` to the same
 runner. This stores accepted action traces annotated with the final exact SMART
 quality gain:

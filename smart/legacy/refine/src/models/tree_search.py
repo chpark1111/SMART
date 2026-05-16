@@ -143,6 +143,7 @@ class MCTSTreeSearch:
         self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
         self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
         self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior_device = str(getattr(args, "action_prior_device", "json") or "json")
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
         self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self.prior_pruned_nodes = 0
@@ -223,7 +224,7 @@ class MCTSTreeSearch:
             return None
         if load_action_prior is not None:
             try:
-                return load_action_prior(path)
+                return load_action_prior(path, inference_device=self.action_prior_device)
             except Exception as exc:
                 warnings.warn("failed to load MCTS action prior %s: %s" % (path, exc))
                 return None

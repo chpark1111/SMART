@@ -1037,7 +1037,11 @@ tables are deferred until after exact parity is locked.
 	   the `3/27` worse candidates. Top-K=2 was slower (`1.21x`) and did not
 	   reduce those rejections. This is the right place to use GPU/ML inference:
 	   make cheap action proposals, then spend Manifold only on the surviving
-	   actions.
+	   actions. The runtime now supports `action_prior_device=auto|mps|cuda|cpu`
+	   for batched PyTorch policy/value scoring. On the packaged policy-value
+	   prior, a 70-action microbench dropped from `12.15ms` per call with the JSON
+	   scalar evaluator to `0.84ms` per call with PyTorch CPU inference, with the
+	   same top action.
 	   The next concrete improvement is a better post-MCTS local-search
 	   action/value proposer plus the existing exact quality guard, not replacing
 	   exact SMART reward.

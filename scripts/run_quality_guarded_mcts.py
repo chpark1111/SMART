@@ -43,6 +43,14 @@ def parse_args() -> argparse.Namespace:
         help="Skip this many eligible meshes per category before applying --mesh-limit. Useful for held-out sweeps.",
     )
     parser.add_argument("--prior-path", required=True)
+    parser.add_argument(
+        "--action-prior-device",
+        default="json",
+        help=(
+            "Inference backend for action-level prior scoring: json/python, "
+            "cpu, mps, cuda, or auto. auto tries MPS, CUDA, then CPU."
+        ),
+    )
     parser.add_argument("--prior-weight", type=float, default=0.1)
     parser.add_argument(
         "--puct-prior-weight",
@@ -168,6 +176,7 @@ def main() -> int:
         "meshes": category_meshes,
         "mesh_offset": args.mesh_offset,
         "prior_path": args.prior_path,
+        "action_prior_device": args.action_prior_device,
         "prior_weight": args.prior_weight,
         "puct_prior_weight": args.puct_prior_weight,
         "action_value_weight": args.action_value_weight,
@@ -371,6 +380,8 @@ def _run_mcts(
         f"mcts.action_value_weight={args.action_value_weight if prior else 0.0}",
         "--set",
         f"mcts.action_prior_top_k={args.action_prior_top_k if prior else 0}",
+        "--set",
+        f"mcts.action_prior_device={args.action_prior_device if prior else 'json'}",
     ]
     if trace_path is not None:
         command.extend(["--set", f"mcts.trace_actions_path={trace_path}"])
@@ -704,6 +715,7 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "stage": report.get("stage"),
         "run_tag": report.get("run_tag"),
         "prior_path": report.get("prior_path"),
+        "action_prior_device": report.get("action_prior_device"),
         "prior_weights": report.get("prior_weights"),
         "puct_prior_weight": report.get("puct_prior_weight"),
         "action_value_weight": report.get("action_value_weight"),

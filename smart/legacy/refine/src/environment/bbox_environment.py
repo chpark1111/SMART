@@ -185,6 +185,7 @@ class MeshBBoxEnv:
         self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
         self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
         self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior_device = str(getattr(args, "action_prior_device", "json") or "json")
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
 
         self.max_step = args.max_step
@@ -1727,7 +1728,7 @@ class MeshBBoxEnv:
             warnings.warn("smart.action_prior is unavailable; local_refine prior disabled")
             return None
         try:
-            return load_action_prior(path)
+            return load_action_prior(path, inference_device=self.action_prior_device)
         except Exception as exc:
             warnings.warn("failed to load local_refine action prior %s: %s" % (path, exc))
             return None

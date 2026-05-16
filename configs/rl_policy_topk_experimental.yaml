@@ -65,6 +65,7 @@
     "stateful_union_cache": true,
     "stateful_cache_capacity": 65536,
     "action_prior_path": "smart/assets/priors/category_general_policy_value_agent_prior.json",
+    "action_prior_device": "auto",
     "action_prior_weight": 0.1,
     "puct_prior_weight": 0.1,
     "action_value_weight": 0.05,
