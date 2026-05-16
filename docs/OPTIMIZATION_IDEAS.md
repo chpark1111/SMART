@@ -1027,6 +1027,13 @@ tables are deferred until after exact parity is locked.
 	   This is the right quality-evaluation harness for RL/local-search ideas:
 	   learned candidates are allowed to beat the legacy search, but only after
 	   exact metric verification.
+	   MCTS now also has a real learned-agent speed path:
+	   `mcts.action_prior_top_k` prunes each node's untried actions to the top-K
+	   policy/value proposals before exact reward calls. Top-K=1 on the current
+	   3/category smoke kept all learned candidates not-worse and selected the
+	   faster prior on `7/9`, with `1.44x` mean speedup. This is the right place
+	   to use GPU/ML inference: make cheap action proposals, then spend Manifold
+	   only on the surviving actions.
 	   The next concrete improvement is a better post-MCTS local-search
 	   action/value proposer plus the existing exact quality guard, not replacing
 	   exact SMART reward.

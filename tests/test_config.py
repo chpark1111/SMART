@@ -125,6 +125,17 @@ def test_hybrid_local_search_profile_runs_after_mcts() -> None:
     assert cfg["render"]["input_stage"] == "local_refine"
 
 
+def test_rl_policy_topk_profile_enables_opt_in_mcts_pruning() -> None:
+    cfg = load_config("configs/rl_policy_topk_experimental.yaml")
+
+    assert cfg["run_name"] == "rl_policy_topk_experimental"
+    assert cfg["mcts"]["action_prior_path"].endswith("category_general_policy_value_agent_prior.json")
+    assert cfg["mcts"]["action_prior_top_k"] == 1
+    assert cfg["mcts"]["puct_prior_weight"] == 0.1
+    assert cfg["mcts"]["action_value_weight"] == 0.05
+    assert cfg["mcts"]["allow_search_order_changes"] is True
+
+
 def test_expanded_processed_smoke_uses_existing_workspace_and_balanced_meshes() -> None:
     cfg = load_config("configs/expanded_processed_smoke.yaml")
 
@@ -235,6 +246,19 @@ def test_puct_prior_requires_search_order_opt_in(tmp_path) -> None:
 
     assert record.status == "blocked"
     assert "puct_prior_weight" in record.error
+
+
+def test_mcts_action_prior_top_k_requires_search_order_opt_in(tmp_path) -> None:
+    cfg = {
+        "workspace": str(tmp_path),
+        "normalization": {"enabled": False},
+        "mcts": {"action_prior_top_k": 8},
+    }
+
+    record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
+
+    assert record.status == "blocked"
+    assert "action_prior_top_k" in record.error
 
 
 def test_rust_mcts_backend_requires_search_order_opt_in(tmp_path) -> None:

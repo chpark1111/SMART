@@ -648,6 +648,17 @@ Not promoted to default:
   `-0.069/-0.237/-0.061/+0.031` with effectively unchanged `Covered`
   (`+0.000002`). This is quality-oriented research mode, not a default speed
   profile, because it runs two local-refine candidates per mesh.
+- MCTS policy top-K pruning is now wired through `mcts.action_prior_top_k` and
+  `scripts/run_quality_guarded_mcts.py --action-prior-top-k`. This is the
+  direct "learned agent reduces Manifold calls" path: the policy/value prior
+  keeps only the top-K actions per MCTS tree node, and exact reward still
+  verifies the surviving actions. In
+  `runs/bench_exact/mcts_policy_topk1_cat3.json`, top-K=1 kept `9/9` prior
+  candidates not-worse, rejected `0/9`, selected the faster prior on `7/9`, and
+  reached `1.44x` mean prior speedup. A 1/category smoke reached `1.91x`. Final
+  quality did not improve yet, so this is an opt-in speed profile rather than a
+  promoted quality profile. The full-pipeline profile is
+  `configs/rl_policy_topk_experimental.yaml`.
 
 ## Next Work
 
@@ -662,26 +673,29 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Expand the new multi-candidate local-refine guard from 3/category to
+5. Expand MCTS policy top-K pruning to 20-50/category with top-K in `{1,2,4}` and
+   both `legacy` and `quality_score` selection. This is the current best route
+   for time reduction from learned agents.
+6. Expand the new multi-candidate local-refine guard from 3/category to
    20-50/category. Promotion should be based on final exact quality under equal
    or acceptable wall-clock budget, not metric identity with the legacy search.
-6. Collect more MCTS final-return positives and separately expand local-refine
+7. Collect more MCTS final-return positives and separately expand local-refine
    final-return traces. The MCTS path still has sparse positives; the local-refine
    path now has a working action/value proposal hook, but it needs larger
    validation and better metric gains before becoming a recommended profile.
-7. Validate adaptive learned-search selection on a larger 20-50 mesh/category
+8. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we
    need a larger sweep to quantify how often they miss full multi-weight quality
    improvements.
-8. Collect larger category-specific traces, then compare count, linear, PyTorch
+9. Collect larger category-specific traces, then compare count, linear, PyTorch
    MLP, and PUCT action priors as MCTS ordering policies. Research profiles may
    change search order, and metric identity is not required; promotion requires
    final SMART quality to be not worse and preferably improved under the same
    or lower search budget.
-9. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
+10. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
    keep faster/learned search profiles behind explicit research flags.
-10. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in
+11. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in
    Rust.
-11. Keep RL/deep-learning work as action-prior or proposal ordering only, with
+12. Keep RL/deep-learning work as action-prior or proposal ordering only, with
    exact Manifold reward verification.

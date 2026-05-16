@@ -288,8 +288,10 @@ def get_parser() -> ArgumentParser:
         type=int,
         default=0,
         help=(
-            "for local_refine research only: exact-score only the top-K learned "
-            "proposal actions plus top-K cheap upper-bound actions; 0 evaluates all"
+            "research search-pruning knob. For local_refine, exact-score only "
+            "the top-K learned proposal actions plus top-K cheap upper-bound "
+            "actions. For MCTS, keep only the top-K policy/value actions per "
+            "tree node. 0 evaluates all legacy actions."
         ),
     )
     parser.add_argument(

@@ -441,3 +441,10 @@ refinement.
   The learned model therefore has at least one exact-metric win under the same
   final guard, but the mode doubles candidate local-refine launches and needs a
   larger 20-50/category benchmark before it can be recommended.
+- The direct speed path is MCTS policy top-K pruning. `mcts.action_prior_top_k`
+  now applies to MCTS nodes, so a policy/value agent can prune the tree before
+  expensive exact reward calls. In `runs/bench_exact/mcts_policy_topk1_cat3.json`,
+  top-K=1 selected faster non-worse prior outputs on `7/9` meshes and measured
+  `1.44x` mean speedup with `0/9` quality rejections. This is not a quality
+  improvement yet, but it is the first clear learned-agent time reduction and
+  should be scaled before trying a larger neural architecture.

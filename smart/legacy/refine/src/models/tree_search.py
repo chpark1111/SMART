@@ -138,6 +138,16 @@ class MCTSTreeSearch:
         )
         self.transposition_table = OrderedDict()
         self.transposition_hits = 0
+        self.num_actions = self.num_bbox * (6 * self.num_action_scale + 1)
+        self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
+        self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
+        self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
+        self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
+        self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
+        self.prior_pruned_nodes = 0
+        self.prior_pruned_actions = 0
+        self.prior_kept_actions = 0
 
         self.root_id = 0
         self.id2Node.append(
@@ -150,6 +160,7 @@ class MCTSTreeSearch:
                 state_key=self._state_key(),
             )
         )
+        self._prune_node_untried_actions(self.id2Node[self.root_id])
         self.node_cnt = 1
 
         self.not_updated = 0
@@ -161,12 +172,6 @@ class MCTSTreeSearch:
         self.exp_action_cnt = np.zeros(
             (self.num_bbox * (6 * self.num_action_scale + 1)), dtype=int
         )
-        self.num_actions = self.num_bbox * (6 * self.num_action_scale + 1)
-        self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
-        self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
-        self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
-        self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
-        self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self._opposite_actions = self._build_opposite_actions()
         self.skip_summary_metrics = bool(getattr(args, "skip_summary_metrics", False))
         self.candidate_trace_path = str(getattr(args, "candidate_trace_path", "") or "")
@@ -286,6 +291,56 @@ class MCTSTreeSearch:
         except Exception as exc:
             warnings.warn("failed to evaluate MCTS action-value prior: %s" % exc)
             return np.zeros(len(actions), dtype=float)
+
+    def _action_proposal_scores_for(self, actions):
+        actions = [int(action) for action in actions]
+        if not actions:
+            return np.zeros(0, dtype=float)
+        scores = np.zeros(len(actions), dtype=float)
+        prior_scale = self.action_prior_weight
+        if prior_scale == 0.0 and self.puct_prior_weight != 0.0:
+            prior_scale = self.puct_prior_weight
+        if prior_scale != 0.0:
+            scores = scores + prior_scale * self._action_prior_logits_for(actions)
+        if self.action_value_weight != 0.0:
+            scores = scores + self.action_value_weight * self._action_values_for(actions)
+        return np.nan_to_num(scores, nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+
+    def _action_top_k_active(self):
+        return (
+            self.action_prior_top_k > 0
+            and self.action_prior is not None
+            and (
+                self.action_prior_weight != 0.0
+                or self.puct_prior_weight != 0.0
+                or self.action_value_weight != 0.0
+            )
+        )
+
+    def _prune_node_untried_actions(self, node):
+        if not self._action_top_k_active():
+            return
+        actions = [int(action) for action in getattr(node, "untried_actions", [])]
+        if len(actions) <= self.action_prior_top_k:
+            return
+        scores = self._action_proposal_scores_for(actions)
+        order = sorted(
+            range(len(actions)),
+            key=lambda idx: (-float(scores[idx]), int(actions[idx])),
+        )
+        keep = [actions[idx] for idx in order[: self.action_prior_top_k]]
+        keep_set = set(keep)
+        node.untried_actions = keep
+        pruned = len(actions) - len(keep)
+        self.prior_pruned_nodes += 1
+        self.prior_pruned_actions += pruned
+        self.prior_kept_actions += len(keep)
+        if hasattr(node, "action_mask") and node.action_mask is not None:
+            new_mask = np.ones_like(node.action_mask, dtype=bool)
+            for action in keep_set:
+                if 0 <= int(action) < len(new_mask):
+                    new_mask[int(action)] = False
+            node.action_mask = new_mask
 
     def _state_key(self):
         if hasattr(self.env, "_state_cache_key"):
@@ -457,6 +512,7 @@ class MCTSTreeSearch:
                     state_key=self._state_key(),
                 )
                 self._seed_from_transposition(child_node)
+                self._prune_node_untried_actions(child_node)
                 self.id2Node.append(child_node)
                 self.id2Node[node_id].addchild(action, self.node_cnt)
                 path.append(self.node_cnt)
@@ -686,6 +742,7 @@ class MCTSTreeSearch:
             state_key=self._state_key(),
         )
         self._seed_from_transposition(child_node)
+        self._prune_node_untried_actions(child_node)
         self.id2Node.append(child_node)
         self.id2Node[node_id].addchild(action, self.node_cnt)
         path.append(self.node_cnt)
@@ -785,6 +842,19 @@ class MCTSTreeSearch:
 
         if self.use_transposition_table:
             print("MCTS transposition hits: %d" % (self.transposition_hits))
+        if self._action_top_k_active():
+            print(
+                "MCTS action prior top-k pruning: %s"
+                % json.dumps(
+                    {
+                        "top_k": int(self.action_prior_top_k),
+                        "nodes": int(self.prior_pruned_nodes),
+                        "actions_pruned": int(self.prior_pruned_actions),
+                        "actions_kept": int(self.prior_kept_actions),
+                    },
+                    sort_keys=True,
+                )
+            )
         if hasattr(self.env, "_manifold_stateful_cache_stats"):
             stats = self.env._manifold_stateful_cache_stats()
             if stats:

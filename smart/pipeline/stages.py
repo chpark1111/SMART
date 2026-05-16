@@ -1168,6 +1168,22 @@ def run_mcts_mesh(
                 "mcts.allow_search_order_changes=true for research runs."
             ),
         )
+    if int(stage_cfg.get("action_prior_top_k", 0) or 0) > 0 and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.action_prior_top_k prunes the MCTS search tree. Keep it "
+                "0 for paper-compatible runs, or set "
+                "mcts.allow_search_order_changes=true for research runs."
+            ),
+        )
     existing = latest_bbox_dir(stage_root(cfg, "mcts", category), mesh_id)
     if existing and not force:
         return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", output_path=existing)
@@ -1266,6 +1282,7 @@ def run_mcts_mesh(
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--puct_prior_weight", str(stage_cfg.get("puct_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
+        command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):
@@ -1467,6 +1484,7 @@ def run_local_refine_mesh(
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
+        command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):

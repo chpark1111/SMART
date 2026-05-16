@@ -57,6 +57,15 @@ def parse_args() -> argparse.Namespace:
         help="Optional policy-value action-value weight for the learned MCTS candidate.",
     )
     parser.add_argument(
+        "--action-prior-top-k",
+        type=int,
+        default=0,
+        help=(
+            "Optional learned-policy tree pruning. When >0, the prior-guided "
+            "MCTS candidate keeps only the top-K policy/value actions per node."
+        ),
+    )
+    parser.add_argument(
         "--prior-weights",
         default="",
         help="Comma-separated learned-prior weights. When set, all weights are run as separate guarded candidates.",
@@ -162,6 +171,7 @@ def main() -> int:
         "prior_weight": args.prior_weight,
         "puct_prior_weight": args.puct_prior_weight,
         "action_value_weight": args.action_value_weight,
+        "action_prior_top_k": args.action_prior_top_k,
         "prior_weights": prior_weights,
         "adaptive_prior_weights": args.adaptive_prior_weights,
         "adaptive_stop_mode": args.adaptive_stop_mode,
@@ -359,6 +369,8 @@ def _run_mcts(
         f"mcts.puct_prior_weight={args.puct_prior_weight if prior else 0.0}",
         "--set",
         f"mcts.action_value_weight={args.action_value_weight if prior else 0.0}",
+        "--set",
+        f"mcts.action_prior_top_k={args.action_prior_top_k if prior else 0}",
     ]
     if trace_path is not None:
         command.extend(["--set", f"mcts.trace_actions_path={trace_path}"])
@@ -693,6 +705,9 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "run_tag": report.get("run_tag"),
         "prior_path": report.get("prior_path"),
         "prior_weights": report.get("prior_weights"),
+        "puct_prior_weight": report.get("puct_prior_weight"),
+        "action_value_weight": report.get("action_value_weight"),
+        "action_prior_top_k": report.get("action_prior_top_k"),
         "adaptive_prior_weights": report.get("adaptive_prior_weights"),
         "adaptive_stop_mode": report.get("adaptive_stop_mode"),
         "selection_objective": report.get("selection_objective"),

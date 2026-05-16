@@ -102,6 +102,7 @@ def mcts(args):
         reward_backend = str(getattr(args, "reward_backend", "manifold"))
         puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
         action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
+        action_prior_top_k = int(getattr(args, "action_prior_top_k", 0) or 0)
         rust_stats = None
         # The current Rust MCTS runner still calls back into the Python env for
         # exact Manifold rewards. On larger exact-Manifold sweeps that callback
@@ -119,6 +120,7 @@ def mcts(args):
             and hasattr(smart_rust, "run_mcts_callbacks")
             and puct_prior_weight == 0.0
             and action_value_weight == 0.0
+            and action_prior_top_k <= 0
         )
         if use_rust_mcts:
             try:
@@ -134,10 +136,15 @@ def mcts(args):
                 tree = MCTSTreeSearch(args, env)
                 tree.run_mcts(args.mcts_iter)
         else:
-            if backend in {"rust", "rust_stateful"} and puct_prior_weight == 0.0 and action_value_weight == 0.0:
+            if (
+                backend in {"rust", "rust_stateful"}
+                and puct_prior_weight == 0.0
+                and action_value_weight == 0.0
+                and action_prior_top_k <= 0
+            ):
                 raise RuntimeError("mcts_backend=rust requested but smart._rust is unavailable")
             if backend in {"rust", "rust_stateful"} and not getattr(args, "print_off", False):
-                print("MCTS learned prior uses python_tree runner; rust callback runner does not support PUCT/value yet")
+                print("MCTS learned prior/top-k uses python_tree runner; rust callback runner does not support PUCT/value/top-k yet")
             tree = MCTSTreeSearch(args, env)
             tree.run_mcts(args.mcts_iter)
 

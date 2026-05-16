@@ -1142,6 +1142,34 @@ The latest 9-mesh smoke selected a learned policy/value candidate on `1/9`
 cases, kept baseline on `8/9`, and improved aggregate BVS/MOV/TOV/vIoU with no
 coverage drift. This is still research-only; exact SMART evaluation remains the
 acceptance layer.
+To use the agent for speed rather than only action ordering, enable policy
+top-K pruning. This keeps only the top-K policy/value actions per MCTS node and
+passes those actions through the normal exact reward path:
+
+```bash
+PYTHONPATH=. python3 scripts/run_quality_guarded_mcts.py \
+  --config configs/expanded_200.yaml \
+  --categories airplane,chair,table \
+  --per-category-limit 3 \
+  --prior-path smart/assets/priors/category_general_policy_value_agent_prior.json \
+  --prior-weight 0.1 \
+  --puct-prior-weight 0.1 \
+  --action-value-weight 0.05 \
+  --action-prior-top-k 1 \
+  --mcts-iter 10 \
+  --max-step 20 \
+  --selection-objective legacy
+```
+
+The first 3/category top-K smoke,
+`runs/bench_exact/mcts_policy_topk1_cat3.json`, kept `9/9` prior candidates
+not-worse, rejected `0/9`, and selected the faster prior result on `7/9` meshes.
+Mean prior speedup was `1.44x`. In the 1/category smoke, speedup was `1.91x`.
+This is the first useful learned-agent speed path. It is still opt-in because
+top-K pruning changes the search tree and currently improves time more than
+final quality.
+For full pipeline experiments, the same settings are captured in
+`configs/rl_policy_topk_experimental.yaml`.
 For final-return training data, add `--final-return-trace-output` to the same
 runner. This stores accepted action traces annotated with the final exact SMART
 quality gain:
