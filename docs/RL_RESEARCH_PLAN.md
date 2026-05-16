@@ -411,10 +411,19 @@ refinement.
 - Combining that trace with
   `runs/bench_exact/local_refine_trace_after_candidate_pg_cat10_covtol.jsonl`
   gives `394` local-search final-return rows, `341` positives, and `27` meshes
-  across airplane/chair/table. The PyTorch policy-value checkpoint
-  `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`
-  was trained from this set (`394` records used, `198` positive and `196`
-  negative normalized value targets). A small MCTS probe with this local-refine
+  across airplane/chair/table. The PyTorch policy-value checkpoint packaged at
+  `smart/assets/priors/local_refine_policy_value_final_return_cat10.json` was
+  trained from this set (`394` records used, `198` positive and `196` negative
+  normalized value targets). A small MCTS probe with this local-refine
   policy-value prior stayed safe (`9/9` not-worse) but selected baseline on every
-  case, so the model is not an MCTS default. Its role is post-MCTS local-search
-  action/value proposal and gate research.
+  case, so the model is not an MCTS default.
+- The model is now connected where it belongs: post-MCTS local search.
+  `local_refine.action_value_weight` and `local_refine.action_prior_top_k` can
+  bias local-refine action proposals while still exact-scoring candidates before
+  application. The first cat10 probe
+  `runs/bench_exact/local_refine_policy_value_probe_mcts_cat10_v005_top1.json`
+  used `action_value_weight=0.05` and `action_prior_top_k=1`; it matched exact
+  local-refine guarded selections on `30/30` meshes and selected local refine on
+  `19/30`. Runtime was only slightly better (`2.90s` versus `2.94s` mean
+  local-refine time), so this is a working research hook, not a promoted
+  algorithm yet.

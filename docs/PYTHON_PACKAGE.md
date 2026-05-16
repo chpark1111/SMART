@@ -508,7 +508,28 @@ wrote `218` action rows with `193` positive final-return labels. Combined with
 the guarded learned-MCTS local-refine trace, the post-MCTS local-search dataset
 is `394` rows with `341` positives from `27` meshes. A PyTorch policy-value
 checkpoint trained from it is available as a research artifact at
-`runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`.
+`smart/assets/priors/local_refine_policy_value_final_return_cat10.json`.
+It can be tested as an exact-scored local-refine proposal bias:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --from-input-manifest \
+  --input-stage mcts \
+  --categories airplane,chair,table \
+  --per-category-limit 10 \
+  --action-prior-path smart/assets/priors/local_refine_policy_value_final_return_cat10.json \
+  --action-value-weight 0.05 \
+  --action-prior-top-k 1 \
+  --selection-mode improved \
+  --covered-tolerance 0.001
+```
+
+This requires `local_refine.allow_search_order_changes=true`, which the guarded
+runner sets for prior-guided local-refine candidates. The current cat10 probe
+matched exact local-refine selections on `30/30` meshes and ran at `1.015x` mean
+local-refine speedup, so it is a research hook rather than a default package
+profile.
 Evaluate the generated gated stage from its manifest:
 
 ```bash

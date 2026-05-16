@@ -1231,8 +1231,29 @@ The resulting trace has `218` rows with `193` positive final-return labels
 across airplane/chair/table. Combined with the guarded learned-MCTS local-refine
 trace, the local-search final-return set is now `394` rows with `341` positives
 from `27` meshes. A PyTorch policy-value checkpoint trained from that set lives
-at `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`;
-it is a research artifact for post-MCTS action/value proposal, not a default.
+at `smart/assets/priors/local_refine_policy_value_final_return_cat10.json`; it
+is a research artifact for post-MCTS action/value proposal, not a default.
+Use it only with explicit search-order opt-in and exact guarding:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --from-input-manifest \
+  --input-stage mcts \
+  --categories airplane,chair,table \
+  --per-category-limit 10 \
+  --action-prior-path smart/assets/priors/local_refine_policy_value_final_return_cat10.json \
+  --action-value-weight 0.05 \
+  --action-prior-top-k 1 \
+  --selection-mode improved \
+  --covered-tolerance 0.001
+```
+
+The current cat10 probe selected the same `19/30` improvements as exact
+local-refine and had `30/30` identical guarded selections. Mean local-refine time
+was `2.90s` versus `2.94s` for exact local-refine on the same 30 cases, so this
+is a working proposal hook but not yet a meaningful default speed or quality
+upgrade.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

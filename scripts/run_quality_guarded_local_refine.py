@@ -48,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-unit", type=float, default=0.005)
     parser.add_argument("--reward-backend", default="manifold_stateful")
     parser.add_argument("--backend", default="rust_stateful")
+    parser.add_argument("--action-prior-path", default="", help="Optional local-refine action policy/value JSON")
+    parser.add_argument("--action-prior-weight", type=float, default=0.0)
+    parser.add_argument("--action-value-weight", type=float, default=0.0)
+    parser.add_argument("--action-prior-top-k", type=int, default=0)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--eval-timeout", type=int, default=120)
     parser.add_argument("--chamfer-points", type=int, default=0)
@@ -126,6 +130,10 @@ def main() -> int:
         "selection_mode": args.selection_mode,
         "reward_backend": args.reward_backend,
         "backend": args.backend,
+        "action_prior_path": args.action_prior_path,
+        "action_prior_weight": args.action_prior_weight,
+        "action_value_weight": args.action_value_weight,
+        "action_prior_top_k": args.action_prior_top_k,
         "reuse_local_refine": args.reuse_local_refine,
         "gate_path": args.gate_path,
         "gate_threshold": args.gate_threshold,
@@ -257,6 +265,21 @@ def _run_local_refine(
         "--set",
         f"local_refine.exp_tag={exp_tag}",
     ]
+    if args.action_prior_path:
+        command.extend(
+            [
+                "--set",
+                f"local_refine.action_prior_path={args.action_prior_path}",
+                "--set",
+                f"local_refine.action_prior_weight={args.action_prior_weight}",
+                "--set",
+                f"local_refine.action_value_weight={args.action_value_weight}",
+                "--set",
+                f"local_refine.action_prior_top_k={args.action_prior_top_k}",
+                "--set",
+                "local_refine.allow_search_order_changes=true",
+            ]
+        )
     if trace_path is not None:
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         command.extend(["--set", f"local_refine.trace_actions_path={trace_path}"])
@@ -592,6 +615,10 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "reuse_local_refine": report.get("reuse_local_refine"),
         "gate_path": report.get("gate_path"),
         "gate_threshold": report.get("gate_threshold"),
+        "action_prior_path": report.get("action_prior_path"),
+        "action_prior_weight": report.get("action_prior_weight"),
+        "action_value_weight": report.get("action_value_weight"),
+        "action_prior_top_k": report.get("action_prior_top_k"),
         "selection_mode": report.get("selection_mode"),
         "final_return_trace_output": report.get("final_return_trace_output"),
         "run_tag": report.get("run_tag"),

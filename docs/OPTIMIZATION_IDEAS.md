@@ -1012,9 +1012,14 @@ tables are deferred until after exact parity is locked.
 	   rows with `193` positives. Combined with the post-learned-MCTS local-refine
 	   trace, the set is `394` rows with `341` positives from `27` meshes. A
 	   PyTorch policy-value checkpoint trained from that set is safe but not useful
-	   as an MCTS prior yet, so the next concrete improvement is a post-MCTS
-	   local-search action/value proposer plus the existing exact quality guard,
-	   not replacing exact SMART reward.
+	   as an MCTS prior yet. It is now wired into `local_refine` as a post-MCTS
+	   proposal bias through `local_refine.action_value_weight` and
+	   `local_refine.action_prior_top_k`. The first cat10 probe matched exact
+	   local-refine selections on `30/30` meshes and measured only `1.015x` mean
+	   local-refine speedup, so the hook works but is not a promoted accelerator.
+	   The next concrete improvement is a better post-MCTS local-search
+	   action/value proposer plus the existing exact quality guard, not replacing
+	   exact SMART reward.
 
 3. Opt-in tet-clipping reward backend
 

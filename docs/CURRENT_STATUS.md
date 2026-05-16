@@ -612,12 +612,27 @@ Not promoted to default:
 - Combining that trace with
   `runs/bench_exact/local_refine_trace_after_candidate_pg_cat10_covtol.jsonl`
   gives `394` local-search final-return rows with `341` positives from `27`
-  meshes. A PyTorch policy-value checkpoint was trained at
-  `runs/bench_exact/priors/local_refine_policy_value_final_return_combined_cat10.json`.
+  meshes. A PyTorch policy-value checkpoint was trained and packaged at
+  `smart/assets/priors/local_refine_policy_value_final_return_cat10.json`.
   A small MCTS probe with that checkpoint was safe (`9/9` not-worse, no worse
   candidates) but selected baseline on all cases, so it is not a direct MCTS
-  default. The better use is a future post-MCTS local-search action/value proposal
-  model.
+  default.
+- Post-MCTS local-refine can now use that policy/value checkpoint as an opt-in
+  proposal bias. `local_refine.action_prior_path`,
+  `local_refine.action_prior_weight`, `local_refine.action_value_weight`, and
+  `local_refine.action_prior_top_k` are wired, and nonzero weights require
+  `local_refine.allow_search_order_changes=true`. The implementation still exact
+  scores the proposed candidates before applying an action; final acceptance
+  remains guarded by `scripts/run_quality_guarded_local_refine.py`.
+- `runs/bench_exact/local_refine_policy_value_probe_mcts_cat10_v005_top1.json`
+  tested the packaged local-refine policy-value model on the same 30
+  mcts-manifest cases with `action_value_weight=0.05` and
+  `action_prior_top_k=1`. It kept `30/30` successes, selected local refine on
+  `19/30`, and matched the exact local-refine guarded selection on all `30`
+  meshes. Mean local-refine time was `2.90s` versus `2.94s` for the exact greedy
+  local-refine trace. This proves the proposal hook works, but the speedup is only
+  `1.015x` and selected metric deltas are slightly weaker, so it remains
+  research-only.
 
 ## Next Work
 
@@ -633,9 +648,9 @@ Not promoted to default:
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
 5. Collect more MCTS final-return positives and separately expand local-refine
-   final-return traces. The MCTS path still has sparse positives, while the
-   local-refine path now has a useful positive dataset and should be turned into a
-   post-MCTS action/value proposal model.
+   final-return traces. The MCTS path still has sparse positives; the local-refine
+   path now has a working action/value proposal hook, but it needs larger
+   validation and better metric gains before becoming a recommended profile.
 6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we

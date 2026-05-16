@@ -284,6 +284,15 @@ def get_parser() -> ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--action_prior_top_k",
+        type=int,
+        default=0,
+        help=(
+            "for local_refine research only: exact-score only the top-K learned "
+            "proposal actions plus top-K cheap upper-bound actions; 0 evaluates all"
+        ),
+    )
+    parser.add_argument(
         "--mcts_exp_tag",
         type=str,
         default="",

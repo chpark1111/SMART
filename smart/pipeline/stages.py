@@ -1043,6 +1043,7 @@ def run_refine_mesh(
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
+        command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):
@@ -1338,6 +1339,38 @@ def run_local_refine_mesh(
     started = time.time()
     stage_cfg = cfg.get("local_refine", {})
     merge_cfg = cfg.get("merge", {})
+    if float(stage_cfg.get("action_prior_weight", 0.0) or 0.0) != 0.0 and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "local_refine",
+            started,
+            status="blocked",
+            error=(
+                "local_refine.action_prior_weight changes greedy local-search order. "
+                "Keep it at 0 for paper-compatible runs, or set "
+                "local_refine.allow_search_order_changes=true for research runs."
+            ),
+        )
+    if float(stage_cfg.get("action_value_weight", 0.0) or 0.0) != 0.0 and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "local_refine",
+            started,
+            status="blocked",
+            error=(
+                "local_refine.action_value_weight changes greedy local-search order. "
+                "Keep it at 0 for paper-compatible runs, or set "
+                "local_refine.allow_search_order_changes=true for research runs."
+            ),
+        )
     existing = latest_bbox_dir(stage_root(cfg, "local_refine", category), mesh_id)
     if existing and not force:
         return _base_record(
@@ -1433,6 +1466,7 @@ def run_local_refine_mesh(
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
+        command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):

@@ -4,6 +4,7 @@ import os
 import random
 import sys
 import time
+import warnings
 from collections import OrderedDict
 from typing import List, Optional, Set, Tuple, Union
 
@@ -17,6 +18,11 @@ try:
     import smart.rust as smart_rust
 except ImportError:
     smart_rust = None
+
+try:
+    from smart.action_prior import load_action_prior
+except ImportError:
+    load_action_prior = None
 
 _RUST_ACTION_HELPER_MIN = 128
 _FINITE_EPS = 1e-9
@@ -176,6 +182,10 @@ class MeshBBoxEnv:
             "no_action": 0,
         }
         self._candidate_bitset_state = None
+        self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
+        self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
+        self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
 
         self.max_step = args.max_step
 
@@ -989,6 +999,8 @@ class MeshBBoxEnv:
     def _bridge_greedy_sample(self, nw_box=-1):
         if not self._use_manifold_bridge_reward() or bool(self.args.tov):
             return None
+        if self._action_prior_active():
+            return self._prior_guided_exact_greedy_sample(nw_box)
 
         if self._use_manifold_stateful_reward():
             mask_bbox = [True] * self.num_bbox
@@ -1446,6 +1458,8 @@ class MeshBBoxEnv:
     def _bridge_axis_refine_segment(self, max_steps):
         if not self._use_manifold_bridge_reward() or bool(self.args.tov):
             return None
+        if self._action_prior_active():
+            return None
         max_steps = int(max_steps)
         if max_steps <= 0:
             return [], [], self.done
@@ -1702,6 +1716,129 @@ class MeshBBoxEnv:
             "reward_backend": self.reward_backend,
             "manifold_volume_method": self.manifold_volume_method,
         }
+
+    def _load_action_prior(self, path):
+        if not path or (self.action_prior_weight == 0.0 and self.action_value_weight == 0.0):
+            return None
+        if not os.path.exists(path):
+            warnings.warn("local_refine action_prior_path does not exist: %s" % path)
+            return None
+        if load_action_prior is None:
+            warnings.warn("smart.action_prior is unavailable; local_refine prior disabled")
+            return None
+        try:
+            return load_action_prior(path)
+        except Exception as exc:
+            warnings.warn("failed to load local_refine action prior %s: %s" % (path, exc))
+            return None
+
+    def _action_prior_active(self):
+        return self.action_prior is not None and (
+            self.action_prior_weight != 0.0 or self.action_value_weight != 0.0
+        )
+
+    def _action_prior_logits_for(self, actions):
+        actions = [int(action) for action in actions]
+        if self.action_prior is None or self.action_prior_weight == 0.0:
+            return np.zeros(len(actions), dtype=float)
+        try:
+            return np.asarray(
+                self.action_prior.action_logits_for(
+                    actions,
+                    num_action_scale=int(self.num_action_scale),
+                    context=self.action_prior_context(),
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            warnings.warn("failed to evaluate local_refine action prior: %s" % exc)
+            return np.zeros(len(actions), dtype=float)
+
+    def _action_values_for(self, actions):
+        actions = [int(action) for action in actions]
+        if self.action_prior is None or self.action_value_weight == 0.0:
+            return np.zeros(len(actions), dtype=float)
+        if not hasattr(self.action_prior, "action_values_for"):
+            return np.zeros(len(actions), dtype=float)
+        try:
+            return np.asarray(
+                self.action_prior.action_values_for(
+                    actions,
+                    num_action_scale=int(self.num_action_scale),
+                    context=self.action_prior_context(),
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            warnings.warn("failed to evaluate local_refine action-value prior: %s" % exc)
+            return np.zeros(len(actions), dtype=float)
+
+    def _prior_guided_exact_greedy_sample(self, nw_box=-1):
+        actions, upper_rewards = self._candidate_action_order_and_upper(nw_box)
+        if not actions:
+            return None
+        original_actions = list(actions)
+        original_prior_logits = self._action_prior_logits_for(original_actions)
+        original_action_values = self._action_values_for(original_actions)
+        if 0 < self.action_prior_top_k < len(original_actions):
+            proposal_scores = [
+                (
+                    self.action_prior_weight * float(original_prior_logits[idx])
+                    + self.action_value_weight * float(original_action_values[idx]),
+                    int(action),
+                )
+                for idx, action in enumerate(original_actions)
+            ]
+            proposal_scores.sort(key=lambda row: (row[0], -row[1]), reverse=True)
+            upper_scores = [
+                (float(upper_rewards[int(action)]), int(action))
+                for action in original_actions
+            ]
+            upper_scores.sort(key=lambda row: (row[0], -row[1]), reverse=True)
+            keep = {
+                action
+                for _, action in proposal_scores[: self.action_prior_top_k]
+            }
+            keep.update(action for _, action in upper_scores[: self.action_prior_top_k])
+            actions = [action for action in original_actions if int(action) in keep]
+            index_by_action = {int(action): idx for idx, action in enumerate(original_actions)}
+            prior_logits = np.asarray(
+                [original_prior_logits[index_by_action[int(action)]] for action in actions],
+                dtype=float,
+            )
+            action_values = np.asarray(
+                [original_action_values[index_by_action[int(action)]] for action in actions],
+                dtype=float,
+            )
+        else:
+            prior_logits = original_prior_logits
+            action_values = original_action_values
+        box_bounds, box_rotations = self._bridge_current_bounds_rotations()
+        best_action = None
+        best_reward = -sys.float_info.max
+        best_biased_score = -sys.float_info.max
+        for idx, action in enumerate(actions):
+            reward = self._exact_candidate_reward(action, box_bounds, box_rotations)
+            if reward <= 0.0:
+                continue
+            biased_score = (
+                float(reward)
+                + self.action_prior_weight * float(prior_logits[idx])
+                + self.action_value_weight * float(action_values[idx])
+            )
+            if (
+                biased_score > best_biased_score
+                or (
+                    biased_score == best_biased_score
+                    and (reward > best_reward or (reward == best_reward and (best_action is None or action < best_action)))
+                )
+            ):
+                best_action = int(action)
+                best_reward = float(reward)
+                best_biased_score = float(biased_score)
+        if best_action is None:
+            return None
+        return best_action, best_reward
 
     def refine_bbox(self, action, revert=False) -> None:
         i, j, k = self._decode_action(action)
