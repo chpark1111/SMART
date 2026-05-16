@@ -655,9 +655,15 @@ Not promoted to default:
   verifies the surviving actions. In
   `runs/bench_exact/mcts_policy_topk1_cat3.json`, top-K=1 kept `9/9` prior
   candidates not-worse, rejected `0/9`, selected the faster prior on `7/9`, and
-  reached `1.44x` mean prior speedup. A 1/category smoke reached `1.91x`. Final
-  quality did not improve yet, so this is an opt-in speed profile rather than a
-  promoted quality profile. The full-pipeline profile is
+  reached `1.44x` mean prior speedup. A 1/category smoke reached `1.91x`. The
+  larger 10/category probe
+  `runs/bench_exact/mcts_policy_topk1_cat10.json` completed `27` successful
+  cases, kept `24/27` prior candidates not-worse, rejected `3/27` by the final
+  exact guard, selected the faster prior on `18/27`, and measured `1.53x` mean
+  prior speedup. A top-K=2 comparison had the same three guard rejections and
+  only `1.21x` mean speedup, so top-K=1 is the current best experimental speed
+  setting. Final quality did not improve yet, so this is an opt-in speed profile
+  rather than a promoted quality profile. The full-pipeline profile is
   `configs/rl_policy_topk_experimental.yaml`.
 
 ## Next Work
@@ -673,9 +679,10 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Expand MCTS policy top-K pruning to 20-50/category with top-K in `{1,2,4}` and
-   both `legacy` and `quality_score` selection. This is the current best route
-   for time reduction from learned agents.
+5. Expand MCTS policy top-K pruning from the current 27-case top-K=1/2 probe to
+   20-50/category with top-K in `{1,2,4}` and both `legacy` and `quality_score`
+   selection. This is the current best route for time reduction from learned
+   agents, with top-K=1 as the leading setting.
 6. Expand the new multi-candidate local-refine guard from 3/category to
    20-50/category. Promotion should be based on final exact quality under equal
    or acceptable wall-clock budget, not metric identity with the legacy search.

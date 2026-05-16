@@ -1031,9 +1031,13 @@ tables are deferred until after exact parity is locked.
 	   `mcts.action_prior_top_k` prunes each node's untried actions to the top-K
 	   policy/value proposals before exact reward calls. Top-K=1 on the current
 	   3/category smoke kept all learned candidates not-worse and selected the
-	   faster prior on `7/9`, with `1.44x` mean speedup. This is the right place
-	   to use GPU/ML inference: make cheap action proposals, then spend Manifold
-	   only on the surviving actions.
+	   faster prior on `7/9`, with `1.44x` mean speedup. The 10/category
+	   top-K=1 probe selected the faster prior on `18/27` successful cases,
+	   measured `1.53x` mean prior speedup, and let the final exact guard reject
+	   the `3/27` worse candidates. Top-K=2 was slower (`1.21x`) and did not
+	   reduce those rejections. This is the right place to use GPU/ML inference:
+	   make cheap action proposals, then spend Manifold only on the surviving
+	   actions.
 	   The next concrete improvement is a better post-MCTS local-search
 	   action/value proposer plus the existing exact quality guard, not replacing
 	   exact SMART reward.

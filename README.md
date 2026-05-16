@@ -1165,9 +1165,15 @@ The first 3/category top-K smoke,
 `runs/bench_exact/mcts_policy_topk1_cat3.json`, kept `9/9` prior candidates
 not-worse, rejected `0/9`, and selected the faster prior result on `7/9` meshes.
 Mean prior speedup was `1.44x`. In the 1/category smoke, speedup was `1.91x`.
-This is the first useful learned-agent speed path. It is still opt-in because
-top-K pruning changes the search tree and currently improves time more than
-final quality.
+The larger 10/category probe,
+`runs/bench_exact/mcts_policy_topk1_cat10.json`, completed `27` successful cases,
+kept `24/27` prior candidates not-worse, rejected `3/27` by the final exact
+guard, selected the faster prior on `18/27`, and measured `1.53x` mean prior
+speedup. A top-K=2 comparison was slower (`1.21x`) and did not reduce the three
+quality rejections, so the current experimental speed setting is top-K=1 with
+guarded selection. This is the first useful learned-agent speed path. It is
+still opt-in because top-K pruning changes the search tree and currently
+improves time more than final quality.
 For full pipeline experiments, the same settings are captured in
 `configs/rl_policy_topk_experimental.yaml`.
 For final-return training data, add `--final-return-trace-output` to the same

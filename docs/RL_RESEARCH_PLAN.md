@@ -445,6 +445,10 @@ refinement.
   now applies to MCTS nodes, so a policy/value agent can prune the tree before
   expensive exact reward calls. In `runs/bench_exact/mcts_policy_topk1_cat3.json`,
   top-K=1 selected faster non-worse prior outputs on `7/9` meshes and measured
-  `1.44x` mean speedup with `0/9` quality rejections. This is not a quality
-  improvement yet, but it is the first clear learned-agent time reduction and
-  should be scaled before trying a larger neural architecture.
+  `1.44x` mean speedup with `0/9` quality rejections. In the larger
+  `runs/bench_exact/mcts_policy_topk1_cat10.json` probe, top-K=1 selected faster
+  prior outputs on `18/27` successful cases, measured `1.53x` mean prior
+  speedup, and had `3/27` quality rejections caught by the final exact guard.
+  Top-K=2 was slower (`1.21x`) and did not reduce those rejections. This is not
+  a quality improvement yet, but it is the first clear learned-agent time
+  reduction and should be scaled before trying a larger neural architecture.
