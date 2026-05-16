@@ -536,8 +536,10 @@ For quality experiments rather than speed experiments, add
 will launch both exact local-refine and the learned policy/value candidate,
 exact-evaluate both, and publish only the best non-worse bbox output into the
 guarded stage. The first 3/category probe selected exact local-refine on `3/9`
-cases and the learned candidate on `1/9`, with improved selected BVS/MOV/TOV and
-vIoU. This mode is intentionally more expensive and should stay opt-in.
+cases and the learned candidate on `1/9`; the 10/category probe selected exact
+local-refine on `18/30` and learned local-refine on `1/30`, with improved
+selected BVS/MOV/TOV and vIoU. This mode is intentionally more expensive and
+should stay opt-in.
 Evaluate the generated gated stage from its manifest:
 
 ```bash

@@ -640,11 +640,14 @@ Not promoted to default:
   cat3 probe
   `runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json` kept `9/9`
   successes, ran `18` candidate refinements, selected input on `5/9`, exact
-  local-refine on `3/9`, and learned local-refine on `1/9`. The selected
+  local-refine on `3/9`, and learned local-refine on `1/9`. The larger cat10
+  probe `runs/bench_exact/local_refine_multi_guard_cat10_v005_top1.json` kept
+  `30/30` successes, ran `60` candidate refinements, selected input on `11/30`,
+  exact local-refine on `18/30`, and learned local-refine on `1/30`. The selected
   non-input outputs improved mean BVS/MOV/TOV/vIoU by
-  `-0.120/-0.356/-0.104/+0.054` with `-0.000055` mean `Covered` drift. This is
-  quality-oriented research mode, not a default speed profile, because it runs
-  two local-refine candidates per mesh.
+  `-0.069/-0.237/-0.061/+0.031` with effectively unchanged `Covered`
+  (`+0.000002`). This is quality-oriented research mode, not a default speed
+  profile, because it runs two local-refine candidates per mesh.
 
 ## Next Work
 

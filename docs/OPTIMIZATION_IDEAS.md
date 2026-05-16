@@ -1022,6 +1022,8 @@ tables are deferred until after exact parity is locked.
 	   `--include-exact-local-refine --selection-objective quality_score`. The
 	   first 3/category probe selected exact local-refine on `3/9` cases and the
 	   learned candidate on `1/9`, while keeping `9/9` successful guarded outputs.
+	   The 10/category probe kept `30/30` successful guarded outputs, selected
+	   exact local-refine on `18/30`, and selected learned local-refine on `1/30`.
 	   This is the right quality-evaluation harness for RL/local-search ideas:
 	   learned candidates are allowed to beat the legacy search, but only after
 	   exact metric verification.

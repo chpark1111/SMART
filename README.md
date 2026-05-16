@@ -1280,14 +1280,14 @@ python3 scripts/run_quality_guarded_local_refine.py \
   --quality-weights Avg_BVS=1,Avg_MOV=0.25,Avg_TOV=0.25,Avg_Covered=2,Avg_vIoU=1
 ```
 
-The first 3/category probe
-`runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json` produced `9/9`
-successes, ran `18` local-refine candidates, selected input on `5/9`, exact
-local-refine on `3/9`, and the learned candidate on `1/9`. The selected
-non-input outputs improved mean BVS/MOV/TOV/vIoU by `-0.120/-0.356/-0.104/+0.054`
-with only `-0.000055` mean `Covered` drift. This is a quality research mode,
-not a default, because it intentionally runs two local-refine candidates per
-mesh.
+The 10/category probe
+`runs/bench_exact/local_refine_multi_guard_cat10_v005_top1.json` produced
+`30/30` successes, ran `60` local-refine candidates, selected input on `11/30`,
+exact local-refine on `18/30`, and the learned candidate on `1/30`. The selected
+non-input outputs improved mean BVS/MOV/TOV/vIoU by
+`-0.069/-0.237/-0.061/+0.031` with effectively unchanged `Covered`
+(`+0.000002`). This is a quality research mode, not a default, because it
+intentionally runs two local-refine candidates per mesh.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

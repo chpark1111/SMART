@@ -434,6 +434,10 @@ refinement.
   chooses the best non-worse output. On
   `runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json`, this selected
   input on `5/9`, exact local-refine on `3/9`, and learned local-refine on
-  `1/9`. The learned model therefore has at least one exact-metric win under the
-  same final guard, but the mode doubles candidate local-refine launches and
-  needs a larger 20-50/category benchmark before it can be recommended.
+  `1/9`. The larger cat10 probe
+  `runs/bench_exact/local_refine_multi_guard_cat10_v005_top1.json` selected input
+  on `11/30`, exact local-refine on `18/30`, and learned local-refine on `1/30`,
+  with selected mean BVS/MOV/TOV/vIoU gains of `-0.069/-0.237/-0.061/+0.031`.
+  The learned model therefore has at least one exact-metric win under the same
+  final guard, but the mode doubles candidate local-refine launches and needs a
+  larger 20-50/category benchmark before it can be recommended.
