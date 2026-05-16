@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 
 import smart
@@ -11,7 +12,10 @@ from scripts.run_quality_guarded_mcts import (
     _select_category_meshes,
 )
 from scripts.run_quality_guarded_local_refine import (
+    _aggregate_records as _local_refine_aggregate_records,
+    _append_final_return_trace_rows,
     _final_return_quality_score as _local_refine_final_return_quality_score,
+    _select_local_refine,
 )
 from smart.quality import compare_quality, quality_gain_score, select_quality_guarded_run
 
@@ -190,6 +194,104 @@ def test_local_refine_final_return_score_penalizes_guard_failure() -> None:
         not_worse=False,
         worse_metrics=comparison["worse_metrics"],
     ) < 0
+
+
+def test_local_refine_multicandidate_selects_best_quality_score() -> None:
+    args = Namespace(
+        metric_tolerance=1e-9,
+        covered_tolerance=0.0,
+        selection_mode="improved",
+        selection_objective="quality_score",
+    )
+    selection = _select_local_refine(
+        args,
+        {
+            "input": _run(_summary(), elapsed=0.0),
+            "local_refine_exact": _run(_summary(Avg_BVS=1.7), elapsed=2.0),
+            "local_refine": _run(_summary(Avg_TOV=0.78), elapsed=1.0),
+        },
+        ["local_refine_exact", "local_refine"],
+        {"Avg_BVS": 1.0, "Avg_TOV": 1.0},
+    )
+
+    assert selection.selected_label == "local_refine_exact"
+    assert selection.reason == "candidate_quality_score_improved"
+    assert set(selection.comparisons) == {"local_refine_exact", "local_refine"}
+
+
+def test_local_refine_multicandidate_trace_rows_keep_candidate_labels(tmp_path) -> None:
+    exact_trace = tmp_path / "exact.jsonl"
+    learned_trace = tmp_path / "learned.jsonl"
+    output = tmp_path / "final.jsonl"
+    exact_trace.write_text(json.dumps({"record_type": "local_refine_action", "reward": 0.1}) + "\n", encoding="utf-8")
+    learned_trace.write_text(json.dumps({"record_type": "local_refine_action", "reward": 0.2}) + "\n", encoding="utf-8")
+    runs = {
+        "input": _run(_summary(), elapsed=0.0),
+        "local_refine_exact": {
+            **_run(_summary(Avg_BVS=1.7), elapsed=2.0),
+            "trace_actions_path": str(exact_trace),
+        },
+        "local_refine": {
+            **_run(_summary(Avg_TOV=0.78), elapsed=1.0),
+            "trace_actions_path": str(learned_trace),
+        },
+    }
+    selection = select_quality_guarded_run(
+        runs,
+        baseline_label="input",
+        candidate_labels=["local_refine_exact", "local_refine"],
+        selection_objective="quality_score",
+    ).to_dict()
+
+    rows_written = _append_final_return_trace_rows(
+        output,
+        category="airplane",
+        mesh_id="mesh-a",
+        runs=runs,
+        selection=selection,
+        candidate_labels=["local_refine_exact", "local_refine"],
+        quality_weights={},
+    )
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+
+    assert rows_written == 2
+    assert [row["run_label"] for row in rows] == ["local_refine_exact", "local_refine"]
+    assert rows[0]["selected_run"] is True
+    assert rows[1]["selected_run"] is False
+    assert rows[0]["selection_label"] == "local_refine_exact"
+
+
+def test_local_refine_aggregate_counts_exact_and_learned_candidates() -> None:
+    selection = select_quality_guarded_run(
+        {
+            "input": _run(_summary(), elapsed=0.0),
+            "local_refine_exact": _run(_summary(Avg_BVS=1.7), elapsed=2.0),
+            "local_refine": _run(_summary(Avg_TOV=0.78), elapsed=1.0),
+        },
+        baseline_label="input",
+        candidate_labels=["local_refine_exact", "local_refine"],
+        selection_objective="quality_score",
+    )
+    aggregate = _local_refine_aggregate_records(
+        {
+            "airplane/a": {
+                "category": "airplane",
+                "runs": {
+                    "input": _run(_summary(), elapsed=0.0),
+                    "local_refine_exact": _run(_summary(Avg_BVS=1.7), elapsed=2.0),
+                    "local_refine": _run(_summary(Avg_TOV=0.78), elapsed=1.0),
+                },
+                "candidate_labels": ["local_refine_exact", "local_refine"],
+                "selection": selection.to_dict(),
+                "guarded_record": {"status": "success"},
+            }
+        }
+    )
+
+    assert aggregate["candidate_runs_executed"] == 2
+    assert aggregate["selected_counts"] == {"local_refine_exact": 1}
+    assert aggregate["categories"]["airplane"]["exact_selected"] == 1
+    assert aggregate["categories"]["airplane"]["learned_selected"] == 0
 
 
 def test_adaptive_guard_stops_only_after_quality_improvement() -> None:

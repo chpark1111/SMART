@@ -427,3 +427,13 @@ refinement.
   `19/30`. Runtime was only slightly better (`2.90s` versus `2.94s` mean
   local-refine time), so this is a working research hook, not a promoted
   algorithm yet.
+- The next quality-focused bridge is now implemented:
+  `scripts/run_quality_guarded_local_refine.py --include-exact-local-refine
+  --selection-objective quality_score` runs unbiased exact local-refine and
+  learned policy/value local-refine side by side, exact-evaluates both, and
+  chooses the best non-worse output. On
+  `runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json`, this selected
+  input on `5/9`, exact local-refine on `3/9`, and learned local-refine on
+  `1/9`. The learned model therefore has at least one exact-metric win under the
+  same final guard, but the mode doubles candidate local-refine launches and
+  needs a larger 20-50/category benchmark before it can be recommended.

@@ -1254,6 +1254,40 @@ local-refine and had `30/30` identical guarded selections. Mean local-refine tim
 was `2.90s` versus `2.94s` for exact local-refine on the same 30 cases, so this
 is a working proposal hook but not yet a meaningful default speed or quality
 upgrade.
+
+For quality-oriented research runs, the guarded local-refine runner can now
+launch both an unbiased exact local-refine candidate and a learned policy/value
+candidate, exact-evaluate both, and select the best non-worse output by scalar
+quality score:
+
+```bash
+python3 scripts/run_quality_guarded_local_refine.py \
+  --config configs/expanded_200.yaml \
+  --from-input-manifest \
+  --input-stage mcts \
+  --stage local_refine_multi_guard_cat3_v005_top1 \
+  --categories airplane,chair,table \
+  --per-category-limit 3 \
+  --max-step 50 \
+  --action-unit 0.005 \
+  --include-exact-local-refine \
+  --action-prior-path smart/assets/priors/local_refine_policy_value_final_return_cat10.json \
+  --action-value-weight 0.05 \
+  --action-prior-top-k 1 \
+  --selection-mode improved \
+  --selection-objective quality_score \
+  --covered-tolerance 0.001 \
+  --quality-weights Avg_BVS=1,Avg_MOV=0.25,Avg_TOV=0.25,Avg_Covered=2,Avg_vIoU=1
+```
+
+The first 3/category probe
+`runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json` produced `9/9`
+successes, ran `18` local-refine candidates, selected input on `5/9`, exact
+local-refine on `3/9`, and the learned candidate on `1/9`. The selected
+non-input outputs improved mean BVS/MOV/TOV/vIoU by `-0.120/-0.356/-0.104/+0.054`
+with only `-0.000055` mean `Covered` drift. This is a quality research mode,
+not a default, because it intentionally runs two local-refine candidates per
+mesh.
 A Rust `TetClippingState` backend is also available behind
 `reward_backend=tet_clipping`, but it is experimental and not the default:
 smoke parity is close (`<=2e-5` in checked records), while tiny cases can be

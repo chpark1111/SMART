@@ -1017,6 +1017,14 @@ tables are deferred until after exact parity is locked.
 	   `local_refine.action_prior_top_k`. The first cat10 probe matched exact
 	   local-refine selections on `30/30` meshes and measured only `1.015x` mean
 	   local-refine speedup, so the hook works but is not a promoted accelerator.
+	   The guarded runner can now also run exact local-refine and learned
+	   local-refine as competing candidates with
+	   `--include-exact-local-refine --selection-objective quality_score`. The
+	   first 3/category probe selected exact local-refine on `3/9` cases and the
+	   learned candidate on `1/9`, while keeping `9/9` successful guarded outputs.
+	   This is the right quality-evaluation harness for RL/local-search ideas:
+	   learned candidates are allowed to beat the legacy search, but only after
+	   exact metric verification.
 	   The next concrete improvement is a better post-MCTS local-search
 	   action/value proposer plus the existing exact quality guard, not replacing
 	   exact SMART reward.

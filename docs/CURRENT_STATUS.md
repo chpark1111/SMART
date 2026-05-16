@@ -633,6 +633,18 @@ Not promoted to default:
   local-refine trace. This proves the proposal hook works, but the speedup is only
   `1.015x` and selected metric deltas are slightly weaker, so it remains
   research-only.
+- `scripts/run_quality_guarded_local_refine.py` now supports
+  `--include-exact-local-refine` plus `--selection-objective quality_score`.
+  This runs an unbiased exact local-refine candidate and a learned policy/value
+  candidate, exact-evaluates both, and keeps the best non-worse output. The first
+  cat3 probe
+  `runs/bench_exact/local_refine_multi_guard_cat3_v005_top1.json` kept `9/9`
+  successes, ran `18` candidate refinements, selected input on `5/9`, exact
+  local-refine on `3/9`, and learned local-refine on `1/9`. The selected
+  non-input outputs improved mean BVS/MOV/TOV/vIoU by
+  `-0.120/-0.356/-0.104/+0.054` with `-0.000055` mean `Covered` drift. This is
+  quality-oriented research mode, not a default speed profile, because it runs
+  two local-refine candidates per mesh.
 
 ## Next Work
 
@@ -647,23 +659,26 @@ Not promoted to default:
    mesh/category subset. The current cat5 result is robust (`15/15` guarded
    success, `2/15` improved), but promotion needs a larger category-balanced
    improvement rate and bounded runtime overhead.
-5. Collect more MCTS final-return positives and separately expand local-refine
+5. Expand the new multi-candidate local-refine guard from 3/category to
+   20-50/category. Promotion should be based on final exact quality under equal
+   or acceptable wall-clock budget, not metric identity with the legacy search.
+6. Collect more MCTS final-return positives and separately expand local-refine
    final-return traces. The MCTS path still has sparse positives; the local-refine
    path now has a working action/value proposal hook, but it needs larger
    validation and better metric gains before becoming a recommended profile.
-6. Validate adaptive learned-search selection on a larger 20-50 mesh/category
+7. Validate adaptive learned-search selection on a larger 20-50 mesh/category
    subset. The new `--adaptive-prior-weights` and
    `--adaptive-stop-mode not_worse` reduce candidate launches on cat3, but we
    need a larger sweep to quantify how often they miss full multi-weight quality
    improvements.
-7. Collect larger category-specific traces, then compare count, linear, PyTorch
+8. Collect larger category-specific traces, then compare count, linear, PyTorch
    MLP, and PUCT action priors as MCTS ordering policies. Research profiles may
    change search order, and metric identity is not required; promotion requires
    final SMART quality to be not worse and preferably improved under the same
    or lower search budget.
-8. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
+9. Keep a paper-safe reproduction profile with legacy `manifold` defaults, and
    keep faster/learned search profiles behind explicit research flags.
-9. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in
+10. Continue removing PyMesh dependency by keeping `.msh` IO and tet summaries in
    Rust.
-10. Keep RL/deep-learning work as action-prior or proposal ordering only, with
+11. Keep RL/deep-learning work as action-prior or proposal ordering only, with
    exact Manifold reward verification.

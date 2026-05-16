@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-prior-weight", type=float, default=0.0)
     parser.add_argument("--action-value-weight", type=float, default=0.0)
     parser.add_argument("--action-prior-top-k", type=int, default=0)
+    parser.add_argument(
+        "--include-exact-local-refine",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Also run an unbiased exact local-refine candidate before the learned proposal candidate.",
+    )
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--eval-timeout", type=int, default=120)
     parser.add_argument("--chamfer-points", type=int, default=0)
@@ -72,6 +78,12 @@ def parse_args() -> argparse.Namespace:
         choices=("improved", "not_worse"),
         default="improved",
         help="Select local_refine only when it improves quality, or also when it is merely not worse.",
+    )
+    parser.add_argument(
+        "--selection-objective",
+        choices=("legacy", "quality_score"),
+        default="legacy",
+        help="How to choose among exact-evaluated local-refine candidates.",
     )
     parser.add_argument("--run-tag", default="")
     parser.add_argument("--output", default="runs/bench_exact/quality_guarded_local_refine.json")
@@ -134,10 +146,12 @@ def main() -> int:
         "action_prior_weight": args.action_prior_weight,
         "action_value_weight": args.action_value_weight,
         "action_prior_top_k": args.action_prior_top_k,
+        "include_exact_local_refine": args.include_exact_local_refine,
         "reuse_local_refine": args.reuse_local_refine,
         "gate_path": args.gate_path,
         "gate_threshold": args.gate_threshold,
         "final_return_trace_output": str(final_trace_output) if final_trace_output is not None else "",
+        "selection_objective": args.selection_objective,
         "run_tag": run_tag,
         "categories": sorted(category_meshes),
         "meshes": category_meshes,
@@ -165,20 +179,61 @@ def main() -> int:
                     "reused": True,
                     "gate": gate_decision,
                 }
+                runs = {"input": baseline, "local_refine": refined}
+                candidate_labels = ["local_refine"]
             else:
-                trace_path = _local_refine_trace_path(trace_actions_dir, mesh_tag)
-                refined = _run_local_refine(args, category=category_name, mesh_id=mesh_id, exp_tag=mesh_tag, trace_path=trace_path)
+                runs = {"input": baseline}
+                candidate_labels = []
+                if args.include_exact_local_refine and args.action_prior_path:
+                    exact_trace_path = _local_refine_trace_path(trace_actions_dir, f"{mesh_tag}_exact")
+                    exact = _run_local_refine(
+                        args,
+                        category=category_name,
+                        mesh_id=mesh_id,
+                        exp_tag=f"{mesh_tag}_exact",
+                        trace_path=exact_trace_path,
+                        action_prior_path="",
+                        action_prior_weight=0.0,
+                        action_value_weight=0.0,
+                        action_prior_top_k=0,
+                    )
+                    exact["gate"] = gate_decision
+                    if exact.get("returncode") == 0:
+                        exact.update(
+                            _run_eval(
+                                args,
+                                category=category_name,
+                                mesh_id=mesh_id,
+                                stage="local_refine",
+                                exp_tag=f"{mesh_tag}_exact_local_refine",
+                            )
+                        )
+                    runs["local_refine_exact"] = exact
+                    candidate_labels.append("local_refine_exact")
+                trace_path = _local_refine_trace_path(trace_actions_dir, f"{mesh_tag}_learned")
+                refined = _run_local_refine(
+                    args,
+                    category=category_name,
+                    mesh_id=mesh_id,
+                    exp_tag=mesh_tag,
+                    trace_path=trace_path,
+                )
                 refined["gate"] = gate_decision
+                runs["local_refine"] = refined
+                candidate_labels.append("local_refine")
             if refined.get("returncode") == 0 and not refined.get("skipped_by_gate"):
                 refined.update(_run_eval(args, category=category_name, mesh_id=mesh_id, stage="local_refine", exp_tag=f"{mesh_tag}_local_refine"))
-            runs = {"input": baseline, "local_refine": refined}
-            selection = _select_local_refine(args, runs)
+            if gate_decision.get("skip_local_refine"):
+                runs = {"input": baseline, "local_refine": refined}
+                candidate_labels = ["local_refine"]
+            selection = _select_local_refine(args, runs, candidate_labels, quality_weights)
             final_trace_rows = _append_final_return_trace_rows(
                 final_trace_output,
                 category=category_name,
                 mesh_id=mesh_id,
                 runs=runs,
                 selection=selection.to_dict(),
+                candidate_labels=candidate_labels,
                 quality_weights=quality_weights,
             )
             selected_run = runs.get(selection.selected_label, {})
@@ -209,6 +264,7 @@ def main() -> int:
                     "selected_source_bbox": selected_bbox,
                     "input_summary": baseline.get("summary"),
                     "local_refine_summary": refined.get("summary"),
+                    "candidate_labels": candidate_labels,
                     "local_refine_elapsed_sec": refined.get("elapsed_sec"),
                     "local_refine_reused": bool(refined.get("reused")),
                     "local_refine_skipped_by_gate": bool(refined.get("skipped_by_gate")),
@@ -222,6 +278,7 @@ def main() -> int:
                 "category": category_name,
                 "mesh_id": mesh_id,
                 "runs": runs,
+                "candidate_labels": candidate_labels,
                 "selection": selection.to_dict(),
                 "final_return_trace_rows": final_trace_rows,
                 "guarded_record": asdict(record),
@@ -243,7 +300,15 @@ def _run_local_refine(
     mesh_id: str,
     exp_tag: str,
     trace_path: Path | None = None,
+    action_prior_path: str | None = None,
+    action_prior_weight: float | None = None,
+    action_value_weight: float | None = None,
+    action_prior_top_k: int | None = None,
 ) -> dict[str, Any]:
+    prior_path = args.action_prior_path if action_prior_path is None else action_prior_path
+    prior_weight = args.action_prior_weight if action_prior_weight is None else action_prior_weight
+    value_weight = args.action_value_weight if action_value_weight is None else action_value_weight
+    prior_top_k = args.action_prior_top_k if action_prior_top_k is None else action_prior_top_k
     command = [
         args.python,
         "-m",
@@ -265,17 +330,17 @@ def _run_local_refine(
         "--set",
         f"local_refine.exp_tag={exp_tag}",
     ]
-    if args.action_prior_path:
+    if prior_path:
         command.extend(
             [
                 "--set",
-                f"local_refine.action_prior_path={args.action_prior_path}",
+                f"local_refine.action_prior_path={prior_path}",
                 "--set",
-                f"local_refine.action_prior_weight={args.action_prior_weight}",
+                f"local_refine.action_prior_weight={prior_weight}",
                 "--set",
-                f"local_refine.action_value_weight={args.action_value_weight}",
+                f"local_refine.action_value_weight={value_weight}",
                 "--set",
-                f"local_refine.action_prior_top_k={args.action_prior_top_k}",
+                f"local_refine.action_prior_top_k={prior_top_k}",
                 "--set",
                 "local_refine.allow_search_order_changes=true",
             ]
@@ -511,60 +576,63 @@ def _append_final_return_trace_rows(
     mesh_id: str,
     runs: dict[str, dict[str, Any]],
     selection: dict[str, Any],
+    candidate_labels: list[str],
     quality_weights: dict[str, float],
 ) -> int:
     if output is None:
         return 0
-    run = runs.get("local_refine", {})
-    trace_path = str(run.get("trace_actions_path", "") or "")
-    if not trace_path:
-        return 0
-    path = Path(trace_path)
-    if not path.exists():
-        return 0
-    comparison = selection.get("comparisons", {}).get("local_refine") or {}
-    final_not_worse = bool(comparison.get("not_worse", False))
-    final_improved = bool(comparison.get("improved", False))
-    final_deltas = dict(comparison.get("deltas", {}))
-    final_worse_metrics = list(comparison.get("worse_metrics", []))
-    final_improved_metrics = list(comparison.get("improved_metrics", []))
-    quality_score = _final_return_quality_score(
-        comparison,
-        weights=quality_weights,
-        not_worse=final_not_worse,
-        worse_metrics=final_worse_metrics,
-    )
     selected_label = str(selection.get("selected_label", ""))
     rows_written = 0
+    labels = candidate_labels or ["local_refine"]
     with output.open("a", encoding="utf-8") as out_file:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
+        for label in labels:
+            run = runs.get(label, {})
+            trace_path = str(run.get("trace_actions_path", "") or "")
+            if not trace_path:
                 continue
-            row = json.loads(line)
-            action_reward = float(row.get("reward", 0.0) or 0.0)
-            row.update(
-                {
-                    "schema_version": 4,
-                    "record_type": "local_refine_final_return",
-                    "original_record_type": str(row.get("record_type", "")),
-                    "category": str(row.get("category", category) or category),
-                    "mesh": str(row.get("mesh", mesh_id) or mesh_id),
-                    "run_label": "local_refine",
-                    "selected_run": bool(selected_label == "local_refine"),
-                    "selection_label": selected_label,
-                    "selection_reason": str(selection.get("reason", "")),
-                    "action_reward": action_reward,
-                    "reward": float(quality_score),
-                    "final_quality_score": float(quality_score),
-                    "final_not_worse": final_not_worse,
-                    "final_improved": final_improved,
-                    "final_deltas": final_deltas,
-                    "final_worse_metrics": final_worse_metrics,
-                    "final_improved_metrics": final_improved_metrics,
-                }
+            path = Path(trace_path)
+            if not path.exists():
+                continue
+            comparison = selection.get("comparisons", {}).get(label) or {}
+            final_not_worse = bool(comparison.get("not_worse", False))
+            final_improved = bool(comparison.get("improved", False))
+            final_deltas = dict(comparison.get("deltas", {}))
+            final_worse_metrics = list(comparison.get("worse_metrics", []))
+            final_improved_metrics = list(comparison.get("improved_metrics", []))
+            quality_score = _final_return_quality_score(
+                comparison,
+                weights=quality_weights,
+                not_worse=final_not_worse,
+                worse_metrics=final_worse_metrics,
             )
-            out_file.write(json.dumps(row, sort_keys=True) + "\n")
-            rows_written += 1
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                action_reward = float(row.get("reward", 0.0) or 0.0)
+                row.update(
+                    {
+                        "schema_version": 4,
+                        "record_type": "local_refine_final_return",
+                        "original_record_type": str(row.get("record_type", "")),
+                        "category": str(row.get("category", category) or category),
+                        "mesh": str(row.get("mesh", mesh_id) or mesh_id),
+                        "run_label": label,
+                        "selected_run": bool(selected_label == label),
+                        "selection_label": selected_label,
+                        "selection_reason": str(selection.get("reason", "")),
+                        "action_reward": action_reward,
+                        "reward": float(quality_score),
+                        "final_quality_score": float(quality_score),
+                        "final_not_worse": final_not_worse,
+                        "final_improved": final_improved,
+                        "final_deltas": final_deltas,
+                        "final_worse_metrics": final_worse_metrics,
+                        "final_improved_metrics": final_improved_metrics,
+                    }
+                )
+                out_file.write(json.dumps(row, sort_keys=True) + "\n")
+                rows_written += 1
     return rows_written
 
 
@@ -619,38 +687,41 @@ def _compact_report(report: dict[str, Any], output: Path) -> dict[str, Any]:
         "action_prior_weight": report.get("action_prior_weight"),
         "action_value_weight": report.get("action_value_weight"),
         "action_prior_top_k": report.get("action_prior_top_k"),
+        "include_exact_local_refine": report.get("include_exact_local_refine"),
         "selection_mode": report.get("selection_mode"),
+        "selection_objective": report.get("selection_objective"),
         "final_return_trace_output": report.get("final_return_trace_output"),
         "run_tag": report.get("run_tag"),
         "aggregate": report.get("aggregate", {}),
     }
 
 
-def _select_local_refine(args: argparse.Namespace, runs: dict[str, dict[str, Any]]) -> GuardedSelection:
+def _select_local_refine(
+    args: argparse.Namespace,
+    runs: dict[str, dict[str, Any]],
+    candidate_labels: list[str],
+    quality_weights: dict[str, float],
+) -> GuardedSelection:
     selection = select_quality_guarded_run(
         runs,
         baseline_label="input",
-        candidate_labels=["local_refine"],
+        candidate_labels=candidate_labels,
         tolerance=args.metric_tolerance,
         metric_tolerances=_metric_tolerances(args),
+        selection_objective=args.selection_objective,
+        quality_score_weights=quality_weights,
     )
     if args.selection_mode == "not_worse":
         return selection
 
-    comparison = selection.comparisons.get("local_refine", {})
-    if comparison.get("improved"):
-        return GuardedSelection(
-            selected_label="local_refine",
-            baseline_label=selection.baseline_label,
-            eligible_labels=selection.eligible_labels,
-            rejected_labels=selection.rejected_labels,
-            reason="candidate_quality_improved",
-            comparisons=selection.comparisons,
-        )
+    selected_comparison = selection.comparisons.get(selection.selected_label, {})
+    if selection.selected_label != "input" and selected_comparison.get("improved"):
+        return selection
 
     rejected = {key: list(value) for key, value in selection.rejected_labels.items()}
-    if "local_refine" not in rejected:
-        rejected["local_refine"] = ["not_improved"]
+    for label in candidate_labels:
+        if label not in rejected:
+            rejected[label] = ["not_improved"]
     return GuardedSelection(
         selected_label="input",
         baseline_label=selection.baseline_label,
@@ -710,8 +781,11 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
     local_improved = 0
     local_worse = 0
     local_times: list[float] = []
+    selected_local_times: list[float] = []
     local_deltas: list[dict[str, float]] = []
     selected_local_deltas: list[dict[str, float]] = []
+    candidate_runs_executed = 0
+    candidate_runs_failed = 0
     gate_scored = 0
     gate_skipped = 0
     gate_probabilities: list[float] = []
@@ -721,37 +795,61 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
         status = str(guarded.get("status", "unknown"))
         status_counts[status] = status_counts.get(status, 0) + 1
         category = str(record.get("category", "unknown"))
-        cat = categories.setdefault(category, {"total": 0, "success": 0, "local_selected": 0, "input_selected": 0})
+        cat = categories.setdefault(
+            category,
+            {
+                "total": 0,
+                "success": 0,
+                "local_selected": 0,
+                "input_selected": 0,
+                "exact_selected": 0,
+                "learned_selected": 0,
+            },
+        )
         cat["total"] += 1
         if status == "success":
             cat["success"] += 1
         selection = record.get("selection", {})
         selected = str(selection.get("selected_label", "unknown"))
         selected_counts[selected] = selected_counts.get(selected, 0) + 1
-        if selected == "local_refine":
+        candidate_labels = record.get("candidate_labels") or ["local_refine"]
+        if selected in candidate_labels:
             cat["local_selected"] += 1
+        if selected == "local_refine_exact":
+            cat["exact_selected"] += 1
+        if selected == "local_refine":
+            cat["learned_selected"] += 1
         if selected == "input":
             cat["input_selected"] += 1
         reason = str(selection.get("reason", "unknown"))
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        comparison = selection.get("comparisons", {}).get("local_refine")
-        if isinstance(comparison, dict):
-            deltas = comparison.get("deltas")
-            if isinstance(deltas, dict):
-                numeric_deltas = {key: float(value) for key, value in deltas.items()}
-                local_deltas.append(numeric_deltas)
-                if selected == "local_refine":
-                    selected_local_deltas.append(numeric_deltas)
-            if comparison.get("not_worse"):
-                local_not_worse += 1
-            if comparison.get("improved"):
-                local_improved += 1
-            if not comparison.get("not_worse"):
-                local_worse += 1
-        local_time = float(record.get("runs", {}).get("local_refine", {}).get("elapsed_sec", 0.0) or 0.0)
-        if local_time > 0.0:
-            local_times.append(local_time)
-        gate = record.get("runs", {}).get("local_refine", {}).get("gate")
+        runs = record.get("runs", {})
+        for label in candidate_labels:
+            run = runs.get(label, {})
+            if run.get("returncode") == 0:
+                candidate_runs_executed += 1
+            elif run:
+                candidate_runs_failed += 1
+            comparison = selection.get("comparisons", {}).get(label)
+            if isinstance(comparison, dict):
+                deltas = comparison.get("deltas")
+                if isinstance(deltas, dict):
+                    numeric_deltas = {key: float(value) for key, value in deltas.items()}
+                    local_deltas.append(numeric_deltas)
+                    if selected == label:
+                        selected_local_deltas.append(numeric_deltas)
+                if comparison.get("not_worse"):
+                    local_not_worse += 1
+                if comparison.get("improved"):
+                    local_improved += 1
+                if not comparison.get("not_worse"):
+                    local_worse += 1
+            local_time = float(run.get("elapsed_sec", 0.0) or 0.0)
+            if local_time > 0.0:
+                local_times.append(local_time)
+                if selected == label:
+                    selected_local_times.append(local_time)
+        gate = runs.get("local_refine", {}).get("gate")
         if isinstance(gate, dict) and gate.get("enabled"):
             gate_scored += 1
             if gate.get("skip_local_refine"):
@@ -766,7 +864,12 @@ def _aggregate_records(records: dict[str, Any]) -> dict[str, Any]:
         "local_not_worse": local_not_worse,
         "local_improved": local_improved,
         "local_worse": local_worse,
+        "candidate_runs_executed": candidate_runs_executed,
+        "candidate_runs_failed": candidate_runs_failed,
         "mean_local_refine_elapsed_sec": sum(local_times) / len(local_times) if local_times else None,
+        "mean_selected_local_refine_elapsed_sec": (
+            sum(selected_local_times) / len(selected_local_times) if selected_local_times else None
+        ),
         "gate_scored": gate_scored,
         "gate_skipped": gate_skipped,
         "mean_gate_probability": sum(gate_probabilities) / len(gate_probabilities) if gate_probabilities else None,
