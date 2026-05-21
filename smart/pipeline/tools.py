@@ -203,6 +203,15 @@ def _native_thread_link_args() -> list[str]:
     return []
 
 
+def _pybind_include_dir() -> Path:
+    try:
+        import pybind11  # type: ignore[import-not-found]
+
+        return Path(pybind11.get_include())
+    except Exception:
+        return REPO_ROOT / "smart/vendor/manifold/bindings/python/third_party/pybind11/include"
+
+
 def _macos_arm64_compile_flags() -> list[str]:
     if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
         return ["-arch", "arm64"]
@@ -753,7 +762,7 @@ def build_cpp_extension(
         else os.environ.get("CXX")
         or "c++"
     )
-    pybind_include = REPO_ROOT / "smart/vendor/manifold/bindings/python/third_party/pybind11/include"
+    pybind_include = _pybind_include_dir()
     manifold_root = REPO_ROOT / "smart/vendor/manifold"
     manifold_lib_dir = manifold_root / "build/src/manifold"
     default_manifold_lib = manifold_lib_dir / "libmanifold.a"

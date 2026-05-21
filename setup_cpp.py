@@ -13,7 +13,7 @@ from setuptools.command.build_py import build_py as _build_py
 
 ROOT = Path(__file__).resolve().parent
 MANIFOLD_ROOT = ROOT / "smart/vendor/manifold"
-PYBIND_INCLUDE = MANIFOLD_ROOT / "bindings/python/third_party/pybind11/include"
+VENDORED_PYBIND_INCLUDE = MANIFOLD_ROOT / "bindings/python/third_party/pybind11/include"
 MANIFOLD_LIB = MANIFOLD_ROOT / "build/src/manifold/libmanifold.a"
 
 
@@ -53,6 +53,15 @@ _ensure_macos_build_env()
 
 def _native_executable_name() -> str:
     return "smart-cpp-native.exe" if os.name == "nt" else "smart-cpp-native"
+
+
+def _pybind_include() -> Path:
+    try:
+        import pybind11  # type: ignore[import-not-found]
+
+        return Path(pybind11.get_include())
+    except Exception:
+        return VENDORED_PYBIND_INCLUDE
 
 
 def _first_pymanifold_binary(path: Path) -> Path | None:
@@ -134,7 +143,7 @@ def _include_dirs() -> list[str]:
     return [
         include,
         platinclude,
-        str(PYBIND_INCLUDE),
+        str(_pybind_include()),
         str(ROOT / "cpp"),
         str(MANIFOLD_ROOT / "src/manifold/include"),
         str(MANIFOLD_ROOT / "src/utilities/include"),
@@ -147,10 +156,11 @@ def _include_dirs() -> list[str]:
 
 def _extension() -> Extension:
     manifold_lib = _find_manifold_lib()
+    pybind_include = _pybind_include()
     missing = [
         path
         for path in [
-            PYBIND_INCLUDE / "pybind11/pybind11.h",
+            pybind_include / "pybind11/pybind11.h",
             manifold_lib or MANIFOLD_LIB,
             ROOT / "cpp/smart_cpp_module.cpp",
             ROOT / "cpp/smart_native_core.cpp",

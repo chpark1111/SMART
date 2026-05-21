@@ -335,7 +335,7 @@ def test_pyproject_classifiers_match_release_python_matrix() -> None:
 def test_cibuildwheel_runtime_import_test_uses_packaged_config_and_numpy() -> None:
     text = Path("pyproject.toml").read_text(encoding="utf-8")
 
-    assert 'test-requires = ["PyYAML", "numpy"]' in text
+    assert 'test-requires = ["PyYAML", "numpy<2.4"]' in text
     assert "diagnose_environment(load_config('smoke_5.yaml'))" in text
     assert "smart.native as sn" in text
     assert "assert sn.using_cpp()" in text
