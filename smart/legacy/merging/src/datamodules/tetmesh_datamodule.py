@@ -6,7 +6,7 @@ import typing as t
 from typing import List
 
 import numpy as np
-import pymesh
+import smart.pymesh_compat as pymesh
 from typing_extensions import Literal
 
 

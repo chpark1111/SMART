@@ -7,7 +7,7 @@ from typing import List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pymanifold
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 
@@ -16,9 +16,9 @@ from ..utils.l2_preseg import distance_based_partition, farthest_point_sampling
 from ..utils.preseg import presegmentation
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
 
 
 class TetMeshEnv:
@@ -112,6 +112,8 @@ class TetMeshEnv:
         self.part_bmesh = [None for _ in range(len(self.partition))]
         self.part_bman = [None for _ in range(len(self.partition))]
         self.part_ov = [0 for _ in range(len(self.partition))]
+        self.native_part_box_bounds = [None for _ in range(len(self.partition))]
+        self.native_part_box_rotations = [None for _ in range(len(self.partition))]
         self.part_samples = [
             np.zeros((1 + self.args.sample_part * 3)) for _ in range(len(self.partition))
         ]
@@ -125,9 +127,9 @@ class TetMeshEnv:
                     part[self.partition[i][j]] = i
 
         part_summaries = None
-        if smart_rust is not None:
+        if smart_native is not None:
             try:
-                part_summaries = smart_rust.partition_summaries(
+                part_summaries = smart_native.partition_summaries(
                     self.tetmsh.vertices.tolist(),
                     self.tetmsh.voxels.tolist(),
                     self.volume.tolist(),
@@ -642,8 +644,8 @@ class TetMeshEnv:
         left_volume = self.part_bbox_volume(first_idx)
         right_volume = self.part_bbox_volume(second_idx)
         merged_volume = self.merged_bbox_volume(first_idx, second_idx)
-        if smart_rust is not None:
-            return smart_rust.merge_bavf_reward(
+        if smart_native is not None:
+            return smart_native.merge_bavf_reward(
                 prev_bvs, left_volume, right_volume, merged_volume, self.volume_sum
             )
 
@@ -755,6 +757,8 @@ class TetMeshEnv:
         self.part_bmesh[left] = None
         self.part_bman[left] = None
         self.part_ov[left] = 0
+        self.native_part_box_bounds[left] = None
+        self.native_part_box_rotations[left] = None
         self.tetinf[left].volume += self.tetinf[right].volume
 
         for i in range(6):
@@ -783,6 +787,8 @@ class TetMeshEnv:
         self.part_bmesh[right] = None
         self.part_bman[right] = None
         self.part_ov[right] = 0
+        self.native_part_box_bounds[right] = None
+        self.native_part_box_rotations[right] = None
         self.left_part.remove(right)
         self.left_part_set.discard(right)
         self.partition[right] = np.array([])
@@ -904,6 +910,9 @@ class TetMeshEnv:
         return ret
 
     def part_bbox_volume(self, idx) -> float:
+        native_bounds = self._native_part_bounds(idx)
+        if native_bounds is not None:
+            return _bounds_volume(native_bounds)
         if self.part_bmesh[idx] is None:
             self.part_bmesh[idx], self.part_bman[idx] = self.get_part_bmesh_bman(
                 idx, manifold=(self.args.mov or self.args.tov)
@@ -917,8 +926,8 @@ class TetMeshEnv:
 
         left_box = self.tetinf[left].box
         right_box = self.tetinf[right].box
-        if smart_rust is not None:
-            return smart_rust.bbox_union_volume([left_box, right_box])
+        if smart_native is not None:
+            return smart_native.bbox_union_volume([left_box, right_box])
         merged = [
             min(left_box[0], right_box[0]),
             min(left_box[1], right_box[1]),
@@ -971,6 +980,16 @@ class TetMeshEnv:
         return ret
 
     def get_part_bmesh_bman(self, idx, manifold=False, pym=False):
+        native_bounds = self._native_part_bounds(idx)
+        native_rotation = self._native_part_rotation(idx)
+        if native_bounds is not None and native_rotation is not None:
+            return _box_from_bounds_rotation(
+                native_bounds,
+                native_rotation,
+                manifold=manifold,
+                pym=pym,
+            )
+
         pts = self.part_pts[idx]
 
         if self.args.tilted:
@@ -978,6 +997,24 @@ class TetMeshEnv:
         else:
             bbx_mesh, bbx_man = axis_bbox(pts, manifold=manifold, pym=pym)
         return bbx_mesh, bbx_man
+
+    def _native_part_bounds(self, idx):
+        bounds = getattr(self, "native_part_box_bounds", None)
+        if bounds is None or idx >= len(bounds):
+            return None
+        value = bounds[idx]
+        if value is None:
+            return None
+        return np.asarray(value, dtype=float).reshape(-1)
+
+    def _native_part_rotation(self, idx):
+        rotations = getattr(self, "native_part_box_rotations", None)
+        if rotations is None or idx >= len(rotations):
+            return None
+        value = rotations[idx]
+        if value is None:
+            return None
+        return np.asarray(value, dtype=float).reshape(-1)
 
 
 def _manifold_mesh_volume(manifold_obj):
@@ -991,6 +1028,80 @@ def _manifold_mesh_volume(manifold_obj):
     crosses = np.cross(vectors[:, 0], vectors[:, 1])
     f1 = triangles[:, 0, :] + triangles[:, 1, :] + triangles[:, 2, :]
     return float(np.sum(crosses[:, 0] * f1[:, 0]) / 6.0)
+
+
+def _bounds_volume(bounds):
+    bounds = np.asarray(bounds, dtype=float).reshape(-1)
+    if len(bounds) != 6:
+        return 0.0
+    return float(
+        max(0.0, bounds[3] - bounds[0])
+        * max(0.0, bounds[4] - bounds[1])
+        * max(0.0, bounds[5] - bounds[2])
+    )
+
+
+def _box_from_bounds_rotation(bounds, rotation, manifold=False, pym=False):
+    bounds = np.asarray(bounds, dtype=float).reshape(-1)
+    rotation = np.asarray(rotation, dtype=float).reshape(-1)
+    lengths = [
+        max(1e-9, float(bounds[3] - bounds[0])),
+        max(1e-9, float(bounds[4] - bounds[1])),
+        max(1e-9, float(bounds[5] - bounds[2])),
+    ]
+    base = [
+        float(bounds[0] * rotation[0] + bounds[1] * rotation[3] + bounds[2] * rotation[6]),
+        float(bounds[0] * rotation[1] + bounds[1] * rotation[4] + bounds[2] * rotation[7]),
+        float(bounds[0] * rotation[2] + bounds[1] * rotation[5] + bounds[2] * rotation[8]),
+    ]
+    if smart_native is not None and hasattr(smart_native, "native_box_mesh"):
+        vertices, faces = smart_native.native_box_mesh(
+            base[0],
+            base[1],
+            base[2],
+            lengths[0],
+            lengths[1],
+            lengths[2],
+            rotation.tolist(),
+        )
+    else:
+        rot = rotation.reshape((3, 3))
+        vertices = []
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    vertices.append(
+                        np.array(base)
+                        + rot[0] * i * lengths[0]
+                        + rot[1] * j * lengths[1]
+                        + rot[2] * k * lengths[2]
+                    )
+        faces = [
+            [1, 3, 0],
+            [1, 5, 7],
+            [4, 6, 7],
+            [0, 2, 6],
+            [2, 3, 7],
+            [0, 5, 1],
+            [3, 2, 0],
+            [1, 7, 3],
+            [4, 7, 5],
+            [0, 6, 4],
+            [2, 7, 6],
+            [0, 4, 5],
+        ]
+    box_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    trimesh.repair.fix_normals(box_mesh)
+    if pym:
+        box_mesh = pymesh.form_mesh(vertices=box_mesh.vertices, faces=box_mesh.faces)
+    if manifold:
+        mesh = pymanifold.Mesh(
+            vert_pos=np.array(box_mesh.vertices), tri_verts=np.array(box_mesh.faces)
+        )
+        box_man = pymanifold.Manifold()
+        box_man = box_man.from_mesh(mesh)
+        return box_mesh, box_man
+    return box_mesh, None
 
 
 class TetInfo:

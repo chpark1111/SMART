@@ -771,7 +771,7 @@ def build_policy_gradient_action_prior_from_traces(
     }
     candidate_rewards_by_group: dict[str, list[float]] = defaultdict(list)
     for record in records:
-        if str(record.get("record_type", "")) != "mcts_candidate":
+        if not _is_action_candidate_record(record):
             continue
         candidate_rewards_by_group[_candidate_group_key(record)].append(float(record.get("reward", 0.0)))
     candidate_baseline_by_group = {
@@ -829,7 +829,7 @@ def build_policy_gradient_action_prior_from_traces(
         else:
             baseline_key = str(record.get("category", ""))
         reward = float(record.get("reward", 0.0))
-        if str(record.get("record_type", "")) == "mcts_candidate":
+        if _is_action_candidate_record(record):
             group_key = _candidate_group_key(record)
             raw_advantages.append(reward - candidate_baseline_by_group.get(group_key, global_baseline))
             weight = float(candidate_weight)
@@ -1031,6 +1031,12 @@ def build_policy_value_action_prior_from_traces(
     value_positive_weight: float = 1.0,
     value_negative_weight: float = 1.0,
     value_zero_weight: float = 1.0,
+    value_auto_balance: bool = False,
+    value_group_balance: bool = False,
+    value_pairwise_weight: float = 0.0,
+    value_pairwise_margin: float = 0.1,
+    value_pairwise_max_pairs: int = 200000,
+    value_validation_mesh_fraction: float = 0.0,
 ) -> dict[str, Any]:
     """Train an action-level policy prior plus an action-value head.
 
@@ -1092,21 +1098,52 @@ def build_policy_value_action_prior_from_traces(
         value_positive_weight=value_positive_weight,
         value_negative_weight=value_negative_weight,
         value_zero_weight=value_zero_weight,
+        value_auto_balance=value_auto_balance,
+        value_group_balance=value_group_balance,
     )
     if not examples["features"]:
         raise ValueError("no trainable action-value examples found")
 
+    expected_feature_dim = len(payload.get("action_input_weights", []))
+    if expected_feature_dim > 0:
+        examples["features"] = _fixed_feature_width(
+            examples["features"],
+            expected_feature_dim,
+        )
+
+    train_indices, validation_indices = _value_train_validation_indices(
+        examples.get("mesh_ids", []),
+        validation_fraction=float(value_validation_mesh_fraction),
+    )
+
     torch = _import_torch()
     torch_device = _select_torch_device(torch, device)
-    features = torch.tensor(examples["features"], dtype=torch.float32, device=torch_device)
-    targets = torch.tensor(examples["targets"], dtype=torch.float32, device=torch_device)
-    weights = torch.tensor(examples["weights"], dtype=torch.float32, device=torch_device)
+    all_features = torch.tensor(examples["features"], dtype=torch.float32, device=torch_device)
+    all_targets = torch.tensor(examples["targets"], dtype=torch.float32, device=torch_device)
+    all_weights = torch.tensor(examples["weights"], dtype=torch.float32, device=torch_device)
+    train_index_tensor = torch.tensor(train_indices, dtype=torch.long, device=torch_device)
+    features = all_features.index_select(0, train_index_tensor)
+    targets = all_targets.index_select(0, train_index_tensor)
+    weights = all_weights.index_select(0, train_index_tensor)
     weight_sum = torch.clamp(weights.sum(), min=1.0e-12)
     input_w = torch.tensor(payload["action_input_weights"], dtype=torch.float32, device=torch_device)
     hidden_b = torch.tensor(payload["action_hidden_bias"], dtype=torch.float32, device=torch_device)
     hidden_size = max(int(payload.get("hidden_size", hidden_size) or hidden_size), 1)
     value_w = torch.zeros(hidden_size, dtype=torch.float32, device=torch_device, requires_grad=True)
     value_b = torch.tensor(0.0, dtype=torch.float32, device=torch_device, requires_grad=True)
+    pairwise_pairs = _value_pairwise_pairs(
+        examples.get("targets", []),
+        examples.get("group_keys", []),
+        train_indices,
+        max_pairs=int(value_pairwise_max_pairs),
+    )
+    if pairwise_pairs:
+        pair_high = torch.tensor([item[0] for item in pairwise_pairs], dtype=torch.long, device=torch_device)
+        pair_low = torch.tensor([item[1] for item in pairwise_pairs], dtype=torch.long, device=torch_device)
+        pair_weights = torch.tensor([item[2] for item in pairwise_pairs], dtype=torch.float32, device=torch_device)
+        pair_weight_sum = torch.clamp(pair_weights.sum(), min=1.0e-12)
+    else:
+        pair_high = pair_low = pair_weights = pair_weight_sum = None
     optimizer = torch.optim.Adam(
         [value_w, value_b],
         lr=float(value_learning_rate if value_learning_rate is not None else learning_rate),
@@ -1115,9 +1152,37 @@ def build_policy_value_action_prior_from_traces(
         hidden = torch.tanh(features.matmul(input_w) + hidden_b)
         values = hidden.matmul(value_w) + value_b
         loss = ((values - targets).square() * weights).sum() / weight_sum + float(l2) * value_w.square().mean()
+        if (
+            float(value_pairwise_weight) > 0.0
+            and pair_high is not None
+            and pair_low is not None
+            and pair_weights is not None
+            and pair_weight_sum is not None
+        ):
+            pair_margin = torch.relu(float(value_pairwise_margin) - (values.index_select(0, pair_high) - values.index_select(0, pair_low)))
+            ranking_loss = (pair_margin * pair_weights).sum() / pair_weight_sum
+            loss = loss + float(value_pairwise_weight) * ranking_loss
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+    with torch.no_grad():
+        all_hidden = torch.tanh(all_features.matmul(input_w) + hidden_b)
+        all_values = all_hidden.matmul(value_w) + value_b
+        train_metrics = _value_prediction_metrics(
+            all_values,
+            all_targets,
+            all_weights,
+            train_indices,
+            torch=torch,
+        )
+        validation_metrics = _value_prediction_metrics(
+            all_values,
+            all_targets,
+            all_weights,
+            validation_indices,
+            torch=torch,
+        )
 
     payload["policy_type"] = "action_policy_value_prior"
     payload["action_value_output_weights"] = value_w.detach().cpu().tolist()
@@ -1128,14 +1193,32 @@ def build_policy_value_action_prior_from_traces(
         "trace_files": [str(path) for path in trace_paths],
         "value_trace_files": [str(path) for path in trace_paths],
         "policy_base_prior": str(policy_base_prior or ""),
+        "records_seen": int(examples["records_used"]),
+        "records_used": int(examples["records_used"]),
+        "candidate_records_used": int(examples["candidate_records_used"]),
         "value_records_used": int(examples["records_used"]),
         "value_candidate_records_used": int(examples["candidate_records_used"]),
+        "value_categories": list(examples.get("categories_used", [])),
         "value_epochs": int(value_epochs if value_epochs is not None else epochs),
         "value_learning_rate": float(value_learning_rate if value_learning_rate is not None else learning_rate),
         "value_clip": float(value_clip),
+        "value_advantage_baseline": str(advantage_baseline),
         "value_positive_weight": float(value_positive_weight),
         "value_negative_weight": float(value_negative_weight),
         "value_zero_weight": float(value_zero_weight),
+        "value_auto_balance": bool(value_auto_balance),
+        "value_group_balance": bool(value_group_balance),
+        "value_class_multipliers": dict(examples.get("class_multipliers", {})),
+        "value_group_balance_groups": int(examples.get("group_balance_groups", 0)),
+        "value_pairwise_weight": float(value_pairwise_weight),
+        "value_pairwise_margin": float(value_pairwise_margin),
+        "value_pairwise_max_pairs": int(value_pairwise_max_pairs),
+        "value_pairwise_pairs": int(len(pairwise_pairs)),
+        "value_validation_mesh_fraction": float(value_validation_mesh_fraction),
+        "value_train_examples": int(len(train_indices)),
+        "value_validation_examples": int(len(validation_indices)),
+        "value_train_metrics": train_metrics,
+        "value_validation_metrics": validation_metrics,
         "value_target_mean": float(examples["target_mean"]),
         "value_target_std": float(examples["target_std"]),
         "value_positive_examples": int(examples["positive_examples"]),
@@ -1162,15 +1245,27 @@ def coord_scale_keys(num_action_scale: int) -> list[str]:
 
 
 def load_action_prior(path: str | Path, *, inference_device: str = "json") -> "LoadedActionPrior":
-    with Path(path).open("r", encoding="utf-8") as file:
-        return LoadedActionPrior(json.load(file), inference_device=inference_device)
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as file:
+        return LoadedActionPrior(json.load(file), inference_device=inference_device, base_dir=path.parent)
 
 
 class LoadedActionPrior:
-    def __init__(self, payload: dict[str, Any], *, inference_device: str = "json") -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        inference_device: str = "json",
+        base_dir: str | Path | None = None,
+    ) -> None:
         self.payload = payload
         self.policy_type = str(payload.get("policy_type") or payload.get("type") or "coord_scale_count_prior")
+        self.base_dir = Path(base_dir) if base_dir is not None else Path(".")
         self.default_logit = float(payload.get("default_logit", 0.0))
+        self.category_priors: dict[str, LoadedActionPrior] = {}
+        self.fallback_prior: LoadedActionPrior | None = None
+        if self.policy_type == "category_dispatch_prior":
+            self._init_category_dispatch(payload, inference_device=inference_device)
         self.coord_scale_logits = {
             str(key): float(value)
             for key, value in payload.get("coord_scale_logits", payload.get("priors", {})).items()
@@ -1223,8 +1318,43 @@ class LoadedActionPrior:
         self._torch_action_output_bias = None
         self._torch_action_value_output_weights = None
         self._torch_action_value_output_bias = None
-        if self.inference_device.lower() not in {"", "json", "python"}:
+        self._cpp_action_policy = None
+        if self.inference_device.lower() not in {"", "json", "python", "cpp", "native", "c++"}:
             self._init_torch_inference(self.inference_device)
+
+    def _init_category_dispatch(self, payload: dict[str, Any], *, inference_device: str) -> None:
+        prior_paths = payload.get("category_prior_paths", {})
+        if not isinstance(prior_paths, dict):
+            raise ValueError("category_dispatch_prior requires category_prior_paths")
+        for category, prior_path in prior_paths.items():
+            path = self._resolve_child_prior_path(str(prior_path))
+            with path.open("r", encoding="utf-8") as file:
+                self.category_priors[str(category).lower()] = LoadedActionPrior(
+                    json.load(file),
+                    inference_device=inference_device,
+                    base_dir=path.parent,
+                )
+        fallback_path = str(payload.get("fallback_prior_path", "") or "")
+        if fallback_path:
+            path = self._resolve_child_prior_path(fallback_path)
+            with path.open("r", encoding="utf-8") as file:
+                self.fallback_prior = LoadedActionPrior(
+                    json.load(file),
+                    inference_device=inference_device,
+                    base_dir=path.parent,
+                )
+
+    def _resolve_child_prior_path(self, prior_path: str) -> Path:
+        path = Path(prior_path)
+        if path.is_absolute():
+            return path
+        return self.base_dir / path
+
+    def _dispatch_prior(self, context: dict[str, Any]) -> "LoadedActionPrior | None":
+        category = str(context.get("category", "") or "").lower()
+        if category and category in self.category_priors:
+            return self.category_priors[category]
+        return self.fallback_prior
 
     def action_logits_for(
         self,
@@ -1234,7 +1364,23 @@ class LoadedActionPrior:
         context: dict[str, Any] | None = None,
     ) -> list[float]:
         actions = [int(action) for action in actions]
+        if self.policy_type == "category_dispatch_prior":
+            prior = self._dispatch_prior(context or {})
+            if prior is None:
+                return [self.default_logit for _ in actions]
+            return prior.action_logits_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context or {},
+            )
         if self.policy_type in {"action_mlp_prior", "action_policy_value_prior"}:
+            cpp_values = self._action_mlp_logits_values_for_cpp(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context or {},
+            )
+            if cpp_values is not None:
+                return cpp_values[0]
             torch_logits = self._action_mlp_logits_for_torch(
                 actions,
                 num_action_scale=int(num_action_scale),
@@ -1270,8 +1416,24 @@ class LoadedActionPrior:
         context: dict[str, Any] | None = None,
     ) -> list[float]:
         actions = [int(action) for action in actions]
+        if self.policy_type == "category_dispatch_prior":
+            prior = self._dispatch_prior(context or {})
+            if prior is None:
+                return [0.0 for _ in actions]
+            return prior.action_values_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context or {},
+            )
         if not self.action_value_output_weights:
             return [0.0 for _ in actions]
+        cpp_values = self._action_mlp_logits_values_for_cpp(
+            actions,
+            num_action_scale=int(num_action_scale),
+            context=context or {},
+        )
+        if cpp_values is not None:
+            return cpp_values[1]
         torch_values = self._action_values_for_torch(
             actions,
             num_action_scale=int(num_action_scale),
@@ -1295,6 +1457,48 @@ class LoadedActionPrior:
                 value += hidden_value * self.action_value_output_weights[hidden_idx]
             out.append(float(value))
         return out
+
+    def action_logits_values_for(
+        self,
+        actions: Iterable[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[list[float], list[float]]:
+        actions = [int(action) for action in actions]
+        context = context or {}
+        if self.policy_type == "category_dispatch_prior":
+            prior = self._dispatch_prior(context)
+            if prior is None:
+                return [self.default_logit for _ in actions], [0.0 for _ in actions]
+            return prior.action_logits_values_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context,
+            )
+        if self.policy_type in {"action_mlp_prior", "action_policy_value_prior"}:
+            cpp_values = self._action_mlp_logits_values_for_cpp(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context,
+            )
+            if cpp_values is not None:
+                logits, values = cpp_values
+                if not self.action_value_output_weights:
+                    values = [0.0 for _ in actions]
+                return logits, values
+        return (
+            self.action_logits_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context,
+            ),
+            self.action_values_for(
+                actions,
+                num_action_scale=int(num_action_scale),
+                context=context,
+            ),
+        )
 
     def _class_logits(self, context: dict[str, Any]) -> dict[str, float]:
         if self.policy_type == "coord_scale_mlp_prior":
@@ -1395,6 +1599,63 @@ class LoadedActionPrior:
         )
         _, hidden = _mlp_hidden(features, self.action_input_weights, self.action_hidden_bias)
         return hidden
+
+    def _action_mlp_logits_values_for_cpp(
+        self,
+        actions: list[int],
+        *,
+        num_action_scale: int,
+        context: dict[str, Any],
+    ) -> tuple[list[float], list[float]] | None:
+        if self.inference_device.lower() not in {"", "json", "cpp", "native", "c++"}:
+            return None
+        if (
+            not self.action_input_weights
+            or not self.action_hidden_bias
+            or not self.action_output_weights
+        ):
+            return None
+        try:
+            from . import cpp as smart_cpp
+        except Exception:
+            return None
+        if not smart_cpp.using_cpp():
+            return None
+        try:
+            if self._cpp_action_policy is None:
+                policy_cls = getattr(smart_cpp, "ActionMlpPolicy", None)
+                if policy_cls is None:
+                    return smart_cpp.native_action_mlp_logits_values(
+                        actions,
+                        action_num_action_scale=int(num_action_scale),
+                        model_num_action_scale=max(self.model_num_action_scale, int(num_action_scale), 1),
+                        context=context,
+                        categories=self.categories,
+                        action_input_weights=self.action_input_weights,
+                        action_hidden_bias=self.action_hidden_bias,
+                        action_output_weights=self.action_output_weights,
+                        action_output_bias=self.action_output_bias,
+                        action_value_output_weights=self.action_value_output_weights,
+                        action_value_output_bias=self.action_value_output_bias,
+                    )
+                self._cpp_action_policy = policy_cls(
+                    self.categories,
+                    self.action_input_weights,
+                    self.action_hidden_bias,
+                    self.action_output_weights,
+                    self.action_output_bias,
+                    self.action_value_output_weights,
+                    self.action_value_output_bias,
+                )
+            logits, values = self._cpp_action_policy.logits_values(
+                actions,
+                int(num_action_scale),
+                max(self.model_num_action_scale, int(num_action_scale), 1),
+                context,
+            )
+            return [float(value) for value in logits], [float(value) for value in values]
+        except Exception:
+            return None
 
     def _init_torch_inference(self, device: str) -> None:
         if self.policy_type not in {"action_mlp_prior", "action_policy_value_prior"}:
@@ -1546,6 +1807,9 @@ def linear_feature_names(categories: list[str]) -> list[str]:
         "num_bbox_scaled",
         "cover_penalty_scaled",
         "pen_rate",
+        "mcts_not_updated_fraction",
+        "mcts_best_reward",
+        "mcts_escape_active",
     ] + [f"category={category}" for category in categories]
 
 
@@ -1558,6 +1822,15 @@ def linear_features(record: dict[str, Any], categories: list[str]) -> list[float
     action_unit = float(record.get("action_unit", 0.0) or 0.0)
     cover_penalty = float(record.get("cover_penalty", 100.0) or 100.0)
     pen_rate = float(record.get("pen_rate", 1.0) or 1.0)
+    mcts_not_updated = float(
+        record.get("mcts_not_updated", record.get("not_updated", 0.0)) or 0.0
+    )
+    mcts_best_reward = float(
+        record.get("mcts_best_reward", record.get("best_reward", 0.0)) or 0.0
+    )
+    mcts_escape_active = 1.0 if bool(
+        record.get("mcts_escape_active", record.get("escape_active", False))
+    ) else 0.0
     category = str(record.get("category", ""))
     features = [
         1.0,
@@ -1569,6 +1842,9 @@ def linear_features(record: dict[str, Any], categories: list[str]) -> list[float
         num_bbox / 32.0,
         cover_penalty / 100.0,
         pen_rate,
+        mcts_not_updated / max(max_step, 1.0),
+        mcts_best_reward,
+        mcts_escape_active,
     ]
     features.extend(1.0 if category == item else 0.0 for item in categories)
     return features
@@ -1589,6 +1865,25 @@ def action_feature_names(categories: list[str], num_action_scale: int) -> list[s
             "signed_scale_norm",
             "abs_scale_norm",
             "scale_idx_norm",
+            "is_min_bound",
+            "is_max_bound",
+            "bbox_valid_feature",
+            "bbox_dim_x",
+            "bbox_dim_y",
+            "bbox_dim_z",
+            "bbox_volume_ratio",
+            "bbox_log_volume_ratio",
+            "bbox_center_x",
+            "bbox_center_y",
+            "bbox_center_z",
+            "bbox_extent_ratio",
+            "action_delta",
+            "action_delta_abs",
+            "action_shrinks_box",
+            "action_expands_box",
+            "action_new_volume_ratio",
+            "action_volume_delta_ratio",
+            "action_invalid_after",
         ]
     )
     names.extend([f"axis={axis}" for axis in ("x", "y", "z")])
@@ -1640,11 +1935,121 @@ def action_features(
             scale_idx_norm,
         ]
     )
+    features.extend(
+        _bbox_action_geometry_features(
+            record,
+            bbox_idx=bbox_idx,
+            coord_idx=coord_idx,
+            signed_delta=signed_scale * float(record.get("action_unit", 0.0) or 0.0),
+        )
+    )
     axis_idx = coord_idx // 2 if coord_idx < 6 else -1
     features.extend(1.0 if axis_idx == idx else 0.0 for idx in range(3))
     features.extend(1.0 if coord_idx == idx else 0.0 for idx in range(7))
     features.extend(1.0 if scale_idx == idx and coord_idx < 6 else 0.0 for idx in range(model_num_action_scale))
     return features
+
+
+def _bbox_action_geometry_features(
+    record: dict[str, Any],
+    *,
+    bbox_idx: int,
+    coord_idx: int,
+    signed_delta: float,
+) -> list[float]:
+    bounds = _record_bbox_bounds(record, bbox_idx)
+    volume_sum = max(float(record.get("volume_sum", 0.0) or 0.0), 1.0e-12)
+    if bounds is None:
+        dims = [
+            float(record.get("bbox_dim_x", 0.0) or 0.0),
+            float(record.get("bbox_dim_y", 0.0) or 0.0),
+            float(record.get("bbox_dim_z", 0.0) or 0.0),
+        ]
+        center = [
+            float(record.get("bbox_center_x", 0.0) or 0.0),
+            float(record.get("bbox_center_y", 0.0) or 0.0),
+            float(record.get("bbox_center_z", 0.0) or 0.0),
+        ]
+        bbox_volume = float(record.get("bbox_volume", 0.0) or 0.0)
+        valid = 1.0 if bbox_volume > 0.0 and all(dim > 0.0 for dim in dims) else 0.0
+        new_volume = float(record.get("action_new_bbox_volume", bbox_volume) or 0.0)
+        invalid_after = 1.0 if bool(record.get("action_invalid_after", False)) else 0.0
+    else:
+        dims = [
+            max(0.0, bounds[3] - bounds[0]),
+            max(0.0, bounds[4] - bounds[1]),
+            max(0.0, bounds[5] - bounds[2]),
+        ]
+        center = [
+            0.5 * (bounds[0] + bounds[3]),
+            0.5 * (bounds[1] + bounds[4]),
+            0.5 * (bounds[2] + bounds[5]),
+        ]
+        bbox_volume = dims[0] * dims[1] * dims[2]
+        valid = 1.0 if bbox_volume > 0.0 else 0.0
+        candidate = list(bounds)
+        if 0 <= coord_idx < 6:
+            candidate[coord_idx] += float(signed_delta)
+        new_dims = [
+            candidate[3] - candidate[0],
+            candidate[4] - candidate[1],
+            candidate[5] - candidate[2],
+        ]
+        invalid_after = 1.0 if any(dim <= 0.0 for dim in new_dims) else 0.0
+        new_volume = 0.0 if invalid_after else float(new_dims[0] * new_dims[1] * new_dims[2])
+    min_dim = min(dims) if dims else 0.0
+    max_dim = max(dims) if dims else 0.0
+    extent_ratio = min_dim / max(max_dim, 1.0e-12)
+    bbox_volume_ratio = bbox_volume / volume_sum
+    new_volume_ratio = new_volume / volume_sum
+    action_delta = float(signed_delta) if 0 <= coord_idx < 6 else 0.0
+    shrinks = 0.0
+    expands = 0.0
+    if 0 <= coord_idx < 3:
+        shrinks = 1.0 if action_delta > 0.0 else 0.0
+        expands = 1.0 if action_delta < 0.0 else 0.0
+    elif 3 <= coord_idx < 6:
+        shrinks = 1.0 if action_delta < 0.0 else 0.0
+        expands = 1.0 if action_delta > 0.0 else 0.0
+    return [
+        1.0 if 0 <= coord_idx < 3 else 0.0,
+        1.0 if 3 <= coord_idx < 6 else 0.0,
+        valid,
+        float(dims[0] if len(dims) > 0 else 0.0),
+        float(dims[1] if len(dims) > 1 else 0.0),
+        float(dims[2] if len(dims) > 2 else 0.0),
+        float(bbox_volume_ratio),
+        float(math.log1p(max(bbox_volume_ratio, 0.0))),
+        float(center[0] if len(center) > 0 else 0.0),
+        float(center[1] if len(center) > 1 else 0.0),
+        float(center[2] if len(center) > 2 else 0.0),
+        float(extent_ratio),
+        float(action_delta),
+        float(abs(action_delta)),
+        shrinks,
+        expands,
+        float(new_volume_ratio),
+        float(new_volume_ratio - bbox_volume_ratio),
+        invalid_after,
+    ]
+
+
+def _record_bbox_bounds(record: dict[str, Any], bbox_idx: int) -> list[float] | None:
+    if all(key in record for key in ("bbox_min_x", "bbox_min_y", "bbox_min_z", "bbox_max_x", "bbox_max_y", "bbox_max_z")):
+        return [
+            float(record.get("bbox_min_x", 0.0) or 0.0),
+            float(record.get("bbox_min_y", 0.0) or 0.0),
+            float(record.get("bbox_min_z", 0.0) or 0.0),
+            float(record.get("bbox_max_x", 0.0) or 0.0),
+            float(record.get("bbox_max_y", 0.0) or 0.0),
+            float(record.get("bbox_max_z", 0.0) or 0.0),
+        ]
+    bounds = record.get("bbox_bounds")
+    if isinstance(bounds, list) and 0 <= int(bbox_idx) < len(bounds):
+        row = bounds[int(bbox_idx)]
+        if isinstance(row, (list, tuple)) and len(row) >= 6:
+            return [float(value) for value in row[:6]]
+    return None
 
 
 def _action_scale_value(scale_idx: int, num_action_scale: int) -> float:
@@ -1664,6 +2069,33 @@ def _record_coord_scale_key(record: dict[str, Any]) -> str:
 
 
 def _candidate_group_key(record: dict[str, Any]) -> str:
+    record_type = str(record.get("record_type", ""))
+    original_record_type = str(record.get("original_record_type", ""))
+    if str(record.get("record_type", "")) == "local_refine_branch_final_return":
+        branch_group = str(record.get("branch_group", ""))
+        if branch_group:
+            return branch_group
+        return "|".join(
+            [
+                str(record.get("category", "")),
+                str(record.get("mesh", "")),
+                "local_refine_branch",
+                str(record.get("source", "")),
+            ]
+        )
+    if record_type == "local_refine_candidate" or (
+        record_type == "local_refine_final_return"
+        and original_record_type == "local_refine_candidate"
+    ):
+        return "|".join(
+            [
+                str(record.get("category", "")),
+                str(record.get("mesh", "")),
+                "local_refine",
+                str(record.get("step", "")),
+                str(record.get("source", "")),
+            ]
+        )
     return "|".join(
         [
             str(record.get("category", "")),
@@ -1672,6 +2104,21 @@ def _candidate_group_key(record: dict[str, Any]) -> str:
             str(record.get("rollout_step", "")),
             str(record.get("node_id", "")),
         ]
+    )
+
+
+def _is_action_candidate_record(record: dict[str, Any]) -> bool:
+    record_type = str(record.get("record_type", ""))
+    original_record_type = str(record.get("original_record_type", ""))
+    if record_type in {
+        "mcts_candidate",
+        "local_refine_candidate",
+        "local_refine_branch_final_return",
+    }:
+        return True
+    return (
+        record_type in {"mcts_final_return", "local_refine_final_return"}
+        and original_record_type in {"mcts_candidate", "local_refine_candidate"}
     )
 
 
@@ -1690,6 +2137,8 @@ def _action_value_examples(
     value_positive_weight: float = 1.0,
     value_negative_weight: float = 1.0,
     value_zero_weight: float = 1.0,
+    value_auto_balance: bool = False,
+    value_group_balance: bool = False,
 ) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for trace_path in trace_paths:
@@ -1725,7 +2174,7 @@ def _action_value_examples(
 
     candidate_rewards_by_group: dict[str, list[float]] = defaultdict(list)
     for record in records:
-        if str(record.get("record_type", "")) == "mcts_candidate":
+        if _is_action_candidate_record(record):
             candidate_rewards_by_group[_candidate_group_key(record)].append(float(record.get("reward", 0.0)))
     candidate_baseline_by_group = {
         key: sum(values) / len(values)
@@ -1736,7 +2185,10 @@ def _action_value_examples(
     features: list[list[float]] = []
     raw_targets: list[float] = []
     weights: list[float] = []
+    target_signs: list[str] = []
     example_categories: list[str] = []
+    mesh_ids: list[str] = []
+    group_keys: list[str] = []
     candidate_records_used = 0
     positive_examples = 0
     negative_examples = 0
@@ -1760,7 +2212,7 @@ def _action_value_examples(
         else:
             baseline_key = str(record.get("category", ""))
         reward = float(record.get("reward", 0.0))
-        if str(record.get("record_type", "")) == "mcts_candidate":
+        if _is_action_candidate_record(record):
             target = reward - candidate_baseline_by_group.get(_candidate_group_key(record), global_baseline)
             weight = float(candidate_weight)
             if bool(record.get("selected", False)):
@@ -1772,12 +2224,15 @@ def _action_value_examples(
         if target > 1.0e-12:
             weight *= float(value_positive_weight)
             positive_examples += 1
+            target_sign = "positive"
         elif target < -1.0e-12:
             weight *= float(value_negative_weight)
             negative_examples += 1
+            target_sign = "negative"
         else:
             weight *= float(value_zero_weight)
             zero_examples += 1
+            target_sign = "zero"
         feature_record = dict(record)
         feature_record["num_bbox"] = num_bbox
         features.append(
@@ -1791,7 +2246,10 @@ def _action_value_examples(
         )
         raw_targets.append(target)
         weights.append(max(weight, 0.0))
+        target_signs.append(target_sign)
         example_categories.append(str(record.get("category", "")))
+        mesh_ids.append(str(record.get("mesh", "")))
+        group_keys.append(_value_pairwise_group_key(record))
 
     if not raw_targets:
         return {
@@ -1805,6 +2263,11 @@ def _action_value_examples(
             "zero_examples": 0,
             "target_mean": 0.0,
             "target_std": 1.0,
+            "mesh_ids": [],
+            "group_keys": [],
+            "categories_used": [],
+            "class_multipliers": {"positive": 1.0, "negative": 1.0, "zero": 1.0},
+            "group_balance_groups": 0,
         }
 
     target_mean = sum(raw_targets) / len(raw_targets)
@@ -1814,6 +2277,43 @@ def _action_value_examples(
         max(-float(advantage_clip), min(float(advantage_clip), (value - target_mean) / target_std))
         for value in raw_targets
     ]
+    class_counts = {
+        "positive": positive_examples,
+        "negative": negative_examples,
+        "zero": zero_examples,
+    }
+    class_multipliers = {"positive": 1.0, "negative": 1.0, "zero": 1.0}
+    if value_auto_balance and weights:
+        active_counts = {name: count for name, count in class_counts.items() if count > 0}
+        active_total = sum(active_counts.values())
+        active_class_count = max(len(active_counts), 1)
+        for name, count in active_counts.items():
+            class_multipliers[name] = active_total / max(active_class_count * count, 1)
+        weights = [
+            weight * class_multipliers.get(sign, 1.0)
+            for weight, sign in zip(weights, target_signs)
+        ]
+    group_balance_groups = 0
+    if value_group_balance and weights:
+        group_weight_sums: dict[str, float] = defaultdict(float)
+        for group_key, weight in zip(group_keys, weights):
+            group_weight_sums[str(group_key)] += float(weight)
+        nonzero_groups = {
+            group_key: total
+            for group_key, total in group_weight_sums.items()
+            if total > 0.0
+        }
+        group_balance_groups = len(nonzero_groups)
+        if group_balance_groups:
+            target_group_weight = sum(nonzero_groups.values()) / group_balance_groups
+            weights = [
+                (
+                    weight * (target_group_weight / nonzero_groups[str(group_key)])
+                    if nonzero_groups.get(str(group_key), 0.0) > 0.0
+                    else weight
+                )
+                for weight, group_key in zip(weights, group_keys)
+            ]
     if category_balance and weights:
         category_counts = Counter(example_categories)
         category_count = max(len(category_counts), 1)
@@ -1836,7 +2336,179 @@ def _action_value_examples(
         "zero_examples": zero_examples,
         "target_mean": target_mean,
         "target_std": target_std,
+        "mesh_ids": mesh_ids,
+        "group_keys": group_keys,
+        "categories_used": sorted({category for category in example_categories if category}),
+        "class_multipliers": class_multipliers,
+        "group_balance_groups": group_balance_groups,
     }
+
+
+def _value_train_validation_indices(
+    mesh_ids: list[str],
+    *,
+    validation_fraction: float,
+) -> tuple[list[int], list[int]]:
+    total = len(mesh_ids)
+    if total == 0:
+        return [], []
+    meshes = sorted({mesh for mesh in mesh_ids if mesh})
+    if validation_fraction <= 0.0 or len(meshes) < 2:
+        return list(range(total)), []
+    validation_count = int(round(len(meshes) * min(max(float(validation_fraction), 0.0), 0.9)))
+    validation_count = min(max(validation_count, 1), len(meshes) - 1)
+    validation_meshes = set(meshes[-validation_count:])
+    train = [idx for idx, mesh in enumerate(mesh_ids) if mesh not in validation_meshes]
+    validation = [idx for idx, mesh in enumerate(mesh_ids) if mesh in validation_meshes]
+    if not train or not validation:
+        return list(range(total)), []
+    return train, validation
+
+
+def _value_pairwise_group_key(record: dict[str, Any]) -> str:
+    record_type = str(record.get("record_type", ""))
+    original_record_type = str(record.get("original_record_type", ""))
+    if record_type == "local_refine_branch_final_return":
+        branch_group = str(record.get("branch_group", ""))
+        if branch_group:
+            return branch_group
+        return "|".join(
+            [
+                str(record.get("category", "")),
+                str(record.get("mesh", "")),
+                "local_refine_branch",
+                str(record.get("source", "")),
+            ]
+        )
+    if record_type == "local_refine_candidate" or (
+        record_type == "local_refine_final_return"
+        and original_record_type == "local_refine_candidate"
+    ):
+        return "|".join(
+            [
+                str(record.get("category", "")),
+                str(record.get("mesh", "")),
+                "local_refine",
+                str(record.get("step", "")),
+                str(record.get("source", "")),
+            ]
+        )
+    if record_type == "mcts_candidate" or (
+        record_type == "mcts_final_return"
+        and original_record_type == "mcts_candidate"
+    ):
+        return "|".join(
+            [
+                str(record.get("category", "")),
+                str(record.get("mesh", "")),
+                str(record.get("mcts_iter", "")),
+                str(record.get("rollout_step", "")),
+                str(record.get("node_id", "")),
+            ]
+        )
+    return "|".join(
+        [
+            str(record.get("category", "")),
+            str(record.get("mesh", "")),
+        ]
+    )
+
+
+def _value_pairwise_pairs(
+    targets: list[float],
+    group_keys: list[str],
+    indices: list[int],
+    *,
+    max_pairs: int,
+) -> list[tuple[int, int, float]]:
+    if max_pairs <= 0 or not indices:
+        return []
+    old_to_local = {int(old_idx): local_idx for local_idx, old_idx in enumerate(indices)}
+    by_group: dict[str, list[int]] = defaultdict(list)
+    for old_idx in indices:
+        if old_idx >= len(group_keys) or old_idx >= len(targets):
+            continue
+        by_group[str(group_keys[old_idx])].append(old_idx)
+    pairs: list[tuple[int, int, float]] = []
+    for _, group_indices in sorted(by_group.items()):
+        positive = [
+            idx
+            for idx in group_indices
+            if float(targets[idx]) > 1.0e-12
+        ]
+        non_positive = [
+            idx
+            for idx in group_indices
+            if float(targets[idx]) <= 1.0e-12
+        ]
+        if not positive or not non_positive:
+            continue
+        positive.sort(key=lambda idx: float(targets[idx]), reverse=True)
+        non_positive.sort(key=lambda idx: float(targets[idx]))
+        for high in positive:
+            high_target = float(targets[high])
+            for low in non_positive:
+                diff = high_target - float(targets[low])
+                if diff <= 1.0e-12:
+                    continue
+                pairs.append((old_to_local[high], old_to_local[low], diff))
+                if len(pairs) >= max_pairs:
+                    return pairs
+    return pairs
+
+
+def _value_prediction_metrics(
+    values: Any,
+    targets: Any,
+    weights: Any,
+    indices: list[int],
+    *,
+    torch: Any,
+) -> dict[str, float | int | None]:
+    if not indices:
+        return {
+            "examples": 0,
+            "weighted_mse": None,
+            "weighted_mae": None,
+            "sign_accuracy": None,
+        }
+    index_tensor = torch.tensor(indices, dtype=torch.long, device=values.device)
+    selected_values = values.index_select(0, index_tensor)
+    selected_targets = targets.index_select(0, index_tensor)
+    selected_weights = weights.index_select(0, index_tensor)
+    weight_sum = torch.clamp(selected_weights.sum(), min=1.0e-12)
+    errors = selected_values - selected_targets
+    weighted_mse = (errors.square() * selected_weights).sum() / weight_sum
+    weighted_mae = (errors.abs() * selected_weights).sum() / weight_sum
+    non_zero = selected_targets.abs() > 1.0e-12
+    if bool(non_zero.any().detach().cpu().item()):
+        sign_accuracy = (
+            (torch.sign(selected_values[non_zero]) == torch.sign(selected_targets[non_zero]))
+            .to(dtype=torch.float32)
+            .mean()
+        )
+        sign_accuracy_value: float | None = float(sign_accuracy.detach().cpu().item())
+    else:
+        sign_accuracy_value = None
+    return {
+        "examples": int(len(indices)),
+        "weighted_mse": float(weighted_mse.detach().cpu().item()),
+        "weighted_mae": float(weighted_mae.detach().cpu().item()),
+        "sign_accuracy": sign_accuracy_value,
+    }
+
+
+def _fixed_feature_width(features: list[list[float]], expected_dim: int) -> list[list[float]]:
+    expected_dim = max(int(expected_dim), 0)
+    if expected_dim == 0:
+        return features
+    out = []
+    for row in features:
+        if len(row) < expected_dim:
+            out.append(list(row) + [0.0] * (expected_dim - len(row)))
+        else:
+            out.append(list(row[:expected_dim]))
+    return out
 
 
 def _linear_logits(features: list[float], weights: list[list[float]], bias: list[float]) -> list[float]:

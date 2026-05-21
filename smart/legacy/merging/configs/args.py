@@ -126,6 +126,26 @@ def get_parser() -> ArgumentParser:
         action="store_true",
         help="only allow nearby merging",
     )
+    parser.add_argument(
+        "--merge_backend",
+        type=str,
+        default="legacy_python",
+        choices=["legacy_python", "cpp_native"],
+        help=(
+            "greedy merge runner backend. cpp_native moves candidate selection "
+            "and ordered-delta priority updates into smart._cpp NativeSmartEngine."
+        ),
+    )
+    parser.add_argument(
+        "--cpp_native_merge_allow_tilted_axis",
+        default=False,
+        action="store_true",
+        help=(
+            "deprecated compatibility flag. cpp_native now supports native "
+            "partition/PCA tilted merge scoring when --tilted is set; the "
+            "paper-parity tilted path remains legacy_python until validated."
+        ),
+    )
 
     parser.add_argument("--lr", type=float, default=1e-5, help="initial learning rate")
     parser.add_argument(

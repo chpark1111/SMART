@@ -5,7 +5,7 @@ from typing import List, Optional, Set, Tuple, Type, Union
 
 import numpy as np
 import pymanifold
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 from matplotlib.style import available

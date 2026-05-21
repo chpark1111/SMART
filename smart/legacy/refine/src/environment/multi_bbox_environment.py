@@ -5,16 +5,16 @@ from typing import List, Optional, Set, Tuple, Type, Union
 
 import numpy as np
 import pymanifold
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 
 from .bbox_environment import BBox, MeshBBoxEnv
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
 
 
 class MultiMeshBBoxEnv(MeshBBoxEnv):
@@ -47,8 +47,8 @@ class MultiMeshBBoxEnv(MeshBBoxEnv):
         self.num_actions = 0
         self.action_unit = args.action_unit
         self.num_action_scale = args.num_action_scale * 2
-        if smart_rust is not None:
-            self.action_scale = smart_rust.action_scales(self.num_action_scale)
+        if smart_native is not None:
+            self.action_scale = smart_native.action_scales(self.num_action_scale)
         else:
             self.action_scale = [
                 -(2**i) for i in range(args.num_action_scale - 1, -1, -1)
@@ -74,8 +74,8 @@ class MultiMeshBBoxEnv(MeshBBoxEnv):
             ((self.max_bboxs, 7, self.num_action_scale)), dtype=int
         )
 
-        if smart_rust is not None:
-            action_rows = smart_rust.action_indices(self.max_bboxs, self.num_action_scale)
+        if smart_native is not None:
+            action_rows = smart_native.action_indices(self.max_bboxs, self.num_action_scale)
         else:
             action_rows = []
             for i in range(self.max_bboxs):

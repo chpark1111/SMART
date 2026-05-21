@@ -13,6 +13,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "run_name": "demo",
     "workspace": "runs/demo",
     "data_root": "data",
+    "engine": "cpp_native",
     "python": None,
     "gpu": "0",
     "categories": [],
@@ -31,10 +32,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ftetwild_bin": "external/mesh2tet/fTetWild/build/FloatTetwild_bin",
         "blender_bin": None,
         "mesh2tet_external_root": "external/mesh2tet",
-        "rust_target": None,
+        "coacd_external_root": "external/CoACD",
+        "coacd_bin": "external/CoACD/python/package/bin/coacd",
+        "coacd_build": False,
+        "smart_cpp_native_bin": "build/smart-cpp-native",
+    },
+    "native_pipeline": {
+        "timeout_sec": None,
     },
     "normalization": {
         "enabled": True,
+        "backend": "cpp_native_executable",
+        "native_executable_required": False,
         "mode": "bbox_diagonal",
         "target": 1.0,
         "center": "bbox",
@@ -50,8 +59,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_single_component": False,
         "min_tetra_count": 20,
         "min_surface_faces": 20,
+        "input_repair": {
+            "enabled": True,
+            "basic_cleanup": True,
+            "fix_normals": True,
+            "fill_holes": False,
+            "keep_largest_component": False,
+        },
         "retry": {
             "enabled": True,
+            "fine_retry": {
+                "enabled": True,
+                "epsilon_scale": 0.5,
+                "edge_length_scale": 0.5,
+                "coarsen": False,
+                "timeout_sec": 600,
+            },
             "epsilon_scale": 2.0,
             "edge_length_scale": 2.0,
             "coarsen": True,
@@ -77,8 +100,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "preseg": {
+        "backend": "auto",
         "type": "coacd",
         "timeout_sec": 1800,
+        "write_partition_metadata": True,
+        "partition_metadata_backend": "cpp_native",
+        "partition_metadata_required": False,
+        "coacd_cli_required": False,
         "coacd": {
             "threshold": 0.05,
             "max_convex_hull": 64,
@@ -95,6 +123,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "merge": {
+        "backend": "legacy_python",
         "init_type": "coacd",
         "tilted": True,
         "merge_eps": 0.02,
@@ -108,6 +137,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "refine": {
         "backend": "auto",
         "bbox_init": "grd_merged",
+        "path_to_bbox": "",
         "action_unit": 0.01,
         "num_action_scale": 1,
         "max_step": 2000,
@@ -115,29 +145,46 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "score_cache_size": 4096,
         "candidate_backend": "exact",
         "candidate_top_k": 8,
+        "candidate_require_exact_fallback": True,
+        "candidate_pruned_categories": "",
+        "candidate_pruned_max_aspect_mean": 0.0,
+        "candidate_pruned_min_fill_ratio": 0.0,
+        "candidate_bypass_on_exact_fallback": False,
         "manifold_volume_method": "mesh",
         "stateful_union_cache": True,
         "stateful_cache_capacity": 65536,
+        "strict_legacy_bbox_params": True,
         "stateful_unscored_apply": False,
+        "native_axis_rollout_step": False,
+        "native_axis_rollout_segment": False,
         "render_initial": False,
         "render_partition": False,
         "summary_metrics": False,
+        "candidate_trace_path": "",
+        "candidate_trace_top_k": 0,
+        "forced_first_action": -1,
+        "forced_action_sequence": "",
+        "forced_first_action_min_reward": 0.0,
         "timeout_sec": 10800,
         "worker": 0,
     },
     "mcts": {
         "backend": "auto",
         "bbox_init": "bbox_direct",
+        "path_to_bbox": "",
         "action_unit": 0.02,
         "max_step": 150,
         "cover_penalty": 100,
         "mcts_iter": 3000,
+        "seed": 7777,
         "exp_w": 0.001,
         "grdexp": True,
         "pns": True,
         "skip_rate": 0.9,
         "transposition_table": False,
         "transposition_table_size": 8192,
+        "cpp_rng": False,
+        "cpp_rng_seed": 7777,
         "allow_search_order_changes": False,
         "action_prior_path": "",
         "action_prior_device": "json",
@@ -145,14 +192,28 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "puct_prior_weight": 0.0,
         "action_value_weight": 0.0,
         "action_prior_top_k": 0,
+        "action_prior_select": "legacy",
+        "action_prior_select_temperature": 1.0,
+        "action_prior_keep_upper": True,
+        "escape_policy": False,
+        "escape_after_no_update": 20,
+        "escape_action_top_k": 0,
+        "escape_probability": 0.5,
         "candidate_trace_path": "",
         "candidate_trace_top_k": 0,
+        "candidate_trace_node_top_k": 0,
         "score_cache_size": 4096,
         "candidate_backend": "exact",
         "candidate_top_k": 8,
+        "candidate_require_exact_fallback": True,
+        "candidate_pruned_categories": "",
+        "candidate_pruned_max_aspect_mean": 0.0,
+        "candidate_pruned_min_fill_ratio": 0.0,
+        "candidate_bypass_on_exact_fallback": False,
         "manifold_volume_method": "mesh",
         "stateful_union_cache": True,
         "stateful_cache_capacity": 65536,
+        "strict_legacy_bbox_params": True,
         "stateful_unscored_apply": False,
         "render_initial": False,
         "render_partition": False,
@@ -172,12 +233,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "score_cache_size": 8192,
         "candidate_backend": "exact",
         "candidate_top_k": 8,
+        "candidate_require_exact_fallback": True,
+        "candidate_pruned_categories": "",
+        "candidate_pruned_max_aspect_mean": 0.0,
+        "candidate_pruned_min_fill_ratio": 0.0,
+        "candidate_bypass_on_exact_fallback": False,
         "allow_search_order_changes": False,
         "action_prior_path": "",
         "action_prior_device": "json",
         "action_prior_weight": 0.0,
         "action_value_weight": 0.0,
         "action_prior_top_k": 0,
+        "action_prior_keep_upper": True,
         "reward_backend": "manifold_stateful",
         "manifold_volume_method": "mesh",
         "stateful_union_cache": True,
@@ -186,11 +253,34 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "render_initial": False,
         "render_partition": False,
         "summary_metrics": False,
+        "candidate_trace_path": "",
+        "candidate_trace_top_k": 0,
+        "forced_first_action": -1,
+        "forced_action_sequence": "",
+        "forced_first_action_min_reward": 0.0,
         "timeout_sec": 10800,
         "worker": 0,
     },
+    "local_refine_gate": {
+        "enabled": False,
+        "gate_path": "",
+        "gate_threshold": 0.5,
+        "input_stage": "mcts_guarded",
+        "stage": "local_refine_guarded",
+        "from_input_manifest": False,
+        "categories": "",
+        "per_category_limit": None,
+        "max_step": 100,
+        "action_unit": 0.005,
+        "covered_tolerance": 0.0,
+        "metric_tolerance": 1e-6,
+        "selection_mode": "improved",
+        "selection_objective": "legacy",
+        "reuse_local_refine": False,
+        "output": "runs/bench_exact/quality_guarded_local_refine.json",
+    },
     "render": {
-        "backend": "blender",
+        "backend": "fallback",
         "input_stage": "mcts",
         "joint_mesh": False,
         "fallback": True,
@@ -248,9 +338,45 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     text = config_path.read_text(encoding="utf-8")
     loaded = _load_mapping(text, config_path)
     cfg = deep_update(DEFAULT_CONFIG, loaded)
+    _apply_engine_defaults(cfg, loaded)
     cfg["_config_path"] = str(config_path)
     cfg["_repo_root"] = str(REPO_ROOT)
     return cfg
+
+
+def _apply_engine_defaults(cfg: dict[str, Any], loaded: dict[str, Any]) -> None:
+    if cfg.get("engine") != "cpp_native":
+        return
+    merge_loaded = loaded.get("merge", {}) if isinstance(loaded.get("merge"), dict) else {}
+    refine_loaded = loaded.get("refine", {}) if isinstance(loaded.get("refine"), dict) else {}
+    mcts_loaded = loaded.get("mcts", {}) if isinstance(loaded.get("mcts"), dict) else {}
+    preseg_loaded = loaded.get("preseg", {}) if isinstance(loaded.get("preseg"), dict) else {}
+    normalization_loaded = loaded.get("normalization", {}) if isinstance(loaded.get("normalization"), dict) else {}
+    if "backend" not in merge_loaded:
+        cfg["merge"]["backend"] = "cpp_native"
+    if "backend" not in refine_loaded:
+        cfg["refine"]["backend"] = "cpp_native"
+    if "backend" not in mcts_loaded:
+        cfg["mcts"]["backend"] = "cpp_native"
+    if cfg["merge"].get("backend") == "cpp_native" and "direct_file_runner_required" not in merge_loaded:
+        cfg["merge"]["direct_file_runner_required"] = True
+    if cfg["refine"].get("backend") == "cpp_native" and "direct_file_runner_required" not in refine_loaded:
+        cfg["refine"]["direct_file_runner_required"] = True
+    if cfg["mcts"].get("backend") == "cpp_native" and "direct_file_runner_required" not in mcts_loaded:
+        cfg["mcts"]["direct_file_runner_required"] = True
+    if cfg["normalization"].get("backend") == "cpp_native_executable" and "native_executable_required" not in normalization_loaded:
+        cfg["normalization"]["native_executable_required"] = True
+    if str(cfg["preseg"].get("type", "coacd")) == "coacd":
+        if "backend" not in preseg_loaded:
+            cfg["preseg"]["backend"] = "coacd_cli"
+        if "partition_metadata_backend" not in preseg_loaded:
+            cfg["preseg"]["partition_metadata_backend"] = "cpp_native"
+        if "partition_metadata_required" not in preseg_loaded:
+            cfg["preseg"]["partition_metadata_required"] = True
+    if "reward_backend" not in refine_loaded:
+        cfg["refine"]["reward_backend"] = "manifold_stateful"
+    if "reward_backend" not in mcts_loaded:
+        cfg["mcts"]["reward_backend"] = "manifold_stateful"
 
 
 def _load_mapping(text: str, path: Path) -> dict[str, Any]:
@@ -280,8 +406,13 @@ def repo_path(value: str | Path | None) -> Path | None:
 
 
 def workspace_path(cfg: dict[str, Any], *parts: str) -> Path:
-    workspace = repo_path(cfg["workspace"])
-    assert workspace is not None
+    workspace_value = Path(str(cfg["workspace"])).expanduser()
+    if workspace_value.is_absolute():
+        workspace = workspace_value
+    else:
+        cwd_candidate = Path.cwd() / workspace_value
+        repo_candidate = REPO_ROOT / workspace_value
+        workspace = repo_candidate if repo_candidate.exists() else cwd_candidate
     return workspace.joinpath(*parts)
 
 
@@ -289,6 +420,12 @@ def category_mesh_root(category: dict[str, Any]) -> Path:
     root = category.get("mesh_root")
     if root is None:
         raise KeyError(f"Category {category.get('name', '<unknown>')} lacks mesh_root")
+    root_path = Path(str(root)).expanduser()
+    if root_path.is_absolute():
+        return root_path
+    cwd_candidate = Path.cwd() / root_path
+    if cwd_candidate.exists():
+        return cwd_candidate
     resolved = repo_path(root)
     assert resolved is not None
     return resolved

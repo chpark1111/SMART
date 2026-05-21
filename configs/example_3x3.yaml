@@ -1,0 +1,98 @@
+{
+  "run_name": "example_3x3",
+  "workspace": "examples/runs/example_3x3",
+  "data_root": "examples/sample_shapes",
+  "normalization": {
+    "enabled": true,
+    "mode": "bbox_diagonal",
+    "target": 1.0,
+    "center": "bbox"
+  },
+  "categories": [
+    {
+      "name": "airplane",
+      "mesh_root": "examples/sample_shapes/shapenet_airplane",
+      "meshes": [
+        "1f5537f4747ec847622c69c3abc6f80",
+        "260305219d81f745623cba1f26a8e885",
+        "172764bea108bbcceae5a783c313eb36"
+      ],
+      "tetra": {"epsilon": 0.002, "edge_length": 0.1}
+    },
+    {
+      "name": "chair",
+      "mesh_root": "examples/sample_shapes/shapenet_chair",
+      "meshes": [
+        "11b7c86fc42306ec7e7e25239e7b8f85",
+        "17883ea5a837f5731250f48219951972",
+        "23acbdfee13b407ce42d6c2ea750090e"
+      ],
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    },
+    {
+      "name": "table",
+      "mesh_root": "examples/sample_shapes/shapenet_table",
+      "meshes": [
+        "1692563658149377630047043c6a0c50",
+        "1804dd6f5c827c1a4bf8d5f43e57b138",
+        "2e2894138df855b26f88aa1b7f7cc6c6"
+      ],
+      "tetra": {"epsilon": 0.004, "edge_length": 0.2}
+    }
+  ],
+  "stages": {
+    "normalize": true,
+    "tetra": true,
+    "preseg": true,
+    "merge": true,
+    "refine": true,
+    "mcts": true,
+    "render": true
+  },
+  "tetra": {
+    "manifold_timeout_sec": 600,
+    "ftetwild_timeout_sec": 1200,
+    "ftetwild_threads": 8
+  },
+  "preseg": {
+    "coacd": {
+      "threshold": 0.05,
+      "max_convex_hull": 32,
+      "resolution": 1000,
+      "mcts_nodes": 10,
+      "mcts_iterations": 40,
+      "mcts_max_depth": 3,
+      "seed": 7777
+    }
+  },
+  "refine": {
+    "max_step": 50,
+    "cover_penalty": 100,
+    "action_unit": 0.01,
+    "score_cache_size": 4096,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "mcts": {
+    "mcts_iter": 10,
+    "max_step": 5,
+    "cover_penalty": 100,
+    "action_unit": 0.02,
+    "exp_w": 0.001,
+    "grdexp": true,
+    "pns": true,
+    "skip_rate": 0.9,
+    "score_cache_size": 4096,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "render": {
+    "backend": "fallback",
+    "input_stage": "mcts",
+    "joint_mesh": false,
+    "fallback": true,
+    "transparent": true
+  }
+}

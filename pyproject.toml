@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-bbox"
@@ -8,28 +8,29 @@ version = "0.1.0"
 description = "Official SMART pipeline for tight 3D bounding boxes"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "CC-BY-NC-SA-4.0"}
+license = "CC-BY-NC-SA-4.0"
 authors = [
   {name = "Chanhyeok Park"},
 ]
-keywords = ["3d", "bounding-boxes", "shape-abstraction", "mesh", "mcts", "rust"]
+keywords = ["3d", "bounding-boxes", "shape-abstraction", "mesh", "mcts", "c++"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: Free for non-commercial use",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
-  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: C++",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
+  "numpy",
   "PyYAML",
 ]
 
 [project.optional-dependencies]
 pipeline = [
-  "numpy",
   "scipy",
   "scikit-learn",
   "trimesh",
@@ -43,59 +44,31 @@ pipeline = [
 ]
 dev = [
   "pytest",
-  "maturin>=1.7",
+  "cibuildwheel>=2.22",
+  "twine",
+  "wheel",
 ]
 
 [project.scripts]
 smart = "smart.cli:main"
+smart-cpp-native = "smart.native_executable:main"
+smart-audit-wheel = "scripts.audit_release_wheel:main"
+smart-smoke-console-scripts = "scripts.smoke_console_scripts:main"
+smart-release-preflight = "scripts.release_preflight:main"
+smart-quickstart = "scripts.quickstart_reproduce:main"
 
 [project.urls]
 Homepage = "https://github.com/chpark1111/SMART"
 Repository = "https://github.com/chpark1111/SMART"
 Paper = "https://arxiv.org/abs/2304.04336"
 
-[tool.maturin]
-manifest-path = "rust/smart-core/Cargo.toml"
-module-name = "smart._rust"
-bindings = "pyo3"
-features = ["extension-module"]
-python-source = "."
-include = [
-  {path = "pymesh.py", format = "wheel"},
-  {path = "smart/py.typed", format = "wheel"},
-  {path = "smart/configs/*.yaml", format = "wheel"},
-  {path = "smart/assets/priors/*.json", format = "wheel"},
-  {path = "smart/assets/gates/*.json", format = "wheel"},
-  {path = "smart/legacy/renderer/*.blend", format = "wheel"},
-  {path = "smart/legacy/renderer/*.txt", format = "wheel"},
-  {path = "configs/*.yaml", format = "sdist"},
-  {path = "docs/*.md", format = "sdist"},
-  {path = "scripts/*.py", format = "sdist"},
-  {path = "smart/assets/priors/*.json", format = "sdist"},
-  {path = "smart/assets/gates/*.json", format = "sdist"},
-  {path = "Cargo.lock", format = "sdist"},
-  {path = "rust/smart-core/Cargo.lock", format = "sdist"},
-]
-exclude = [
-  ".git/**",
-  ".pytest_cache/**",
-  "**/__pycache__/**",
-  "**/*.pyc",
-  ".DS_Store",
-  "data/**",
-  "dist/**",
-  "external/**",
-  "past_codes/**",
-  "runs/**",
-  "rust/smart-core/target/**",
-  {path = "smart/vendor/manifold/**", format = "wheel"},
-  "smart/vendor/manifold/build/**",
-  "smart/vendor/manifold/docs/**",
-  "smart/vendor/manifold/samples/**",
-  "smart/vendor/manifold/test/**",
-  "smart/vendor/manifold/wasm/**",
-]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["past_codes", "smart/vendor", "runs", "external"]
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-*"
+skip = "pp* *-musllinux* *-win32 *-win_amd64"
+before-build = "python -m pip install PyYAML cmake && python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding"
+test-requires = ["PyYAML", "numpy"]
+test-command = "cd {project}/.. && python -c \"import smart, smart.native as sn, smart.cpp as sc, smart.pymesh_compat as compat, pymesh; from smart.pipeline.config import load_config; from smart.pipeline.tools import diagnose_environment; status = diagnose_environment(load_config('smoke_5.yaml')); checks = {c['name']: c for c in status['checks']}; assert sn.using_cpp(); assert sc.using_cpp(); assert smart.cpp_native_available(); assert smart.NativeSmartEngine is sc.NativeSmartEngine; assert smart.native_executable_path() is not None; assert compat.form_mesh is pymesh.form_mesh; assert checks['pymanifold']['ok']; assert checks['SMART_MANIFOLD_PYTHON']['ok']; assert checks['smart-cpp-extension']['ok']; assert checks['smart-cpp-native']['ok']\""

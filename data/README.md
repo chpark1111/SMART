@@ -51,21 +51,13 @@ data/expanded/shapenet_chair/<model_id>/model.obj
 data/expanded/shapenet_table/<model_id>/model.obj
 ```
 
-`configs/expanded_full.yaml` uses every mesh found in that layout. The smaller
-`configs/expanded_200.yaml` profile keeps a 200-per-category cap for
-optimization/evaluation sweeps that should not launch over the full local set.
-
-To expand MCTS/RL action-prior traces from a configured dataset without manually
-choosing mesh IDs, run:
-
-```bash
-python3 scripts/collect_action_traces.py \
-  --config configs/expanded_200.yaml \
-  --categories airplane,chair,table \
-  --batch-size 5 \
-  --max-batches-per-category 4
-```
+`configs/expanded_full.yaml` uses every mesh found in that layout. Large
+optimization and RL experiments should live under the ignored `experiments/`
+directory, not in the public release package.
 
 Run `smart --config configs/demo.yaml check-data` after changing the data
 layout. The command reports category counts and a sample bbox diagonal so you
 can verify that normalization inputs are in the expected ShapeNet-style scale.
+
+Only this `data/README.md` file is intended to be committed. The actual
+ShapeNet mesh folders under `data/` are local assets and are ignored by Git.

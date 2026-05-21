@@ -17,16 +17,16 @@ from ..environment.bbox_environment import MeshBBoxEnv
 from ..utils.utils import calculate_reward, set_random_seed
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
 
 try:
     from smart.action_prior import load_action_prior
 except ImportError:
     load_action_prior = None
 
-_RUST_VECTOR_MIN = 128
+_NATIVE_VECTOR_MIN = 128
 
 
 class MCTSNode:
@@ -68,9 +68,9 @@ class MCTSNode:
         self.child_actions.append(action)
 
     def get_untried(self):
-        if _using_rust_backend() and len(self.action_mask) >= _RUST_VECTOR_MIN:
+        if _using_native_backend() and len(self.action_mask) >= _NATIVE_VECTOR_MIN:
             try:
-                return [int(action) for action in smart_rust.untried_actions(self.action_mask)]
+                return [int(action) for action in smart_native.untried_actions(self.action_mask)]
             except Exception:
                 pass
         return np.flatnonzero(~self.action_mask).astype(int).tolist()
@@ -143,12 +143,26 @@ class MCTSTreeSearch:
         self.puct_prior_weight = float(getattr(args, "puct_prior_weight", 0.0) or 0.0)
         self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
         self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior_select = str(getattr(args, "action_prior_select", "legacy") or "legacy").lower()
+        if self.action_prior_select not in {"legacy", "best", "softmax"}:
+            self.action_prior_select = "legacy"
+        self.action_prior_select_temperature = max(
+            float(getattr(args, "action_prior_select_temperature", 1.0) or 1.0),
+            1.0e-6,
+        )
+        self.escape_policy = bool(getattr(args, "escape_policy", False))
+        self.escape_after_no_update = max(0, int(getattr(args, "escape_after_no_update", 20) or 0))
+        self.escape_action_top_k = max(0, int(getattr(args, "escape_action_top_k", 0) or 0))
+        self.escape_probability = float(np.clip(float(getattr(args, "escape_probability", 0.5) or 0.0), 0.0, 1.0))
         self.action_prior_device = str(getattr(args, "action_prior_device", "json") or "json")
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
         self.action_prior_logits = self._action_prior_logits_for(range(self.num_actions))
         self.prior_pruned_nodes = 0
         self.prior_pruned_actions = 0
         self.prior_kept_actions = 0
+        self.escape_pruned_nodes = 0
+        self.escape_kept_actions = 0
+        self.escape_choices = 0
 
         self.root_id = 0
         self.id2Node.append(
@@ -177,6 +191,9 @@ class MCTSTreeSearch:
         self.skip_summary_metrics = bool(getattr(args, "skip_summary_metrics", False))
         self.candidate_trace_path = str(getattr(args, "candidate_trace_path", "") or "")
         self.candidate_trace_top_k = max(0, int(getattr(args, "candidate_trace_top_k", 0) or 0))
+        self.candidate_trace_node_top_k = max(
+            0, int(getattr(args, "candidate_trace_node_top_k", 0) or 0)
+        )
         self._mcts_iter_index = 0
         self._rollout_step_index = 0
         if self.candidate_trace_path:
@@ -237,21 +254,35 @@ class MCTSTreeSearch:
         return _LegacyActionPrior(payload)
 
     def _prior_context(self):
+        context = None
         if hasattr(self.env, "action_prior_context"):
             try:
-                return self.env.action_prior_context()
+                context = self.env.action_prior_context()
             except Exception:
                 pass
-        return {
-            "category": str(getattr(self.args, "category", "")),
-            "step": int(getattr(self.env, "step_cnt", 0)),
-            "max_step": int(getattr(self.args, "max_step", 0)),
-            "num_bbox": int(self.num_bbox),
-            "num_action_scale": int(self.num_action_scale),
-            "action_unit": float(getattr(self.args, "action_unit", 0.0)),
-            "cover_penalty": float(getattr(self.args, "cover_penalty", 100.0)),
-            "pen_rate": float(getattr(self.env, "pen_rate", 1.0)),
-        }
+        if not isinstance(context, dict):
+            context = {
+                "category": str(getattr(self.args, "category", "")),
+                "step": int(getattr(self.env, "step_cnt", 0)),
+                "max_step": int(getattr(self.args, "max_step", 0)),
+                "num_bbox": int(self.num_bbox),
+                "num_action_scale": int(self.num_action_scale),
+                "action_unit": float(getattr(self.args, "action_unit", 0.0)),
+                "cover_penalty": float(getattr(self.args, "cover_penalty", 100.0)),
+                "pen_rate": float(getattr(self.env, "pen_rate", 1.0)),
+            }
+        context = dict(context)
+        context.update(
+            {
+                "mcts_iter": int(getattr(self, "_mcts_iter_index", 0)),
+                "mcts_not_updated": int(getattr(self, "not_updated", 0)),
+                "mcts_best_reward": float(getattr(self, "best_reward", 0.0)),
+                "mcts_escape_active": bool(self._escape_active()),
+                "mcts_escape_policy": bool(self.escape_policy),
+                "mcts_action_prior_top_k": int(self.action_prior_top_k),
+            }
+        )
+        return context
 
     def _action_prior_logits_for(self, actions):
         actions = [int(action) for action in actions]
@@ -297,10 +328,42 @@ class MCTSTreeSearch:
         actions = [int(action) for action in actions]
         if not actions:
             return np.zeros(0, dtype=float)
-        scores = np.zeros(len(actions), dtype=float)
         prior_scale = self.action_prior_weight
         if prior_scale == 0.0 and self.puct_prior_weight != 0.0:
             prior_scale = self.puct_prior_weight
+        if (
+            _using_native_backend()
+            and len(actions) >= _NATIVE_VECTOR_MIN
+            and hasattr(smart_native, "native_weighted_action_scores")
+        ):
+            try:
+                prior_logits = (
+                    self._action_prior_logits_for(actions)
+                    if prior_scale != 0.0
+                    else np.zeros(len(actions), dtype=float)
+                )
+                value_logits = (
+                    self._action_values_for(actions)
+                    if self.action_value_weight != 0.0
+                    else np.zeros(len(actions), dtype=float)
+                )
+                scores = smart_native.native_weighted_action_scores(
+                    np.zeros(len(actions), dtype=float).tolist(),
+                    np.asarray(prior_logits, dtype=float).tolist(),
+                    np.asarray(value_logits, dtype=float).tolist(),
+                    0.0,
+                    float(prior_scale),
+                    float(self.action_value_weight),
+                )
+                return np.nan_to_num(
+                    np.asarray(scores, dtype=float),
+                    nan=-np.inf,
+                    posinf=np.inf,
+                    neginf=-np.inf,
+                )
+            except Exception:
+                pass
+        scores = np.zeros(len(actions), dtype=float)
         if prior_scale != 0.0:
             scores = scores + prior_scale * self._action_prior_logits_for(actions)
         if self.action_value_weight != 0.0:
@@ -318,6 +381,75 @@ class MCTSTreeSearch:
             )
         )
 
+    def _action_prior_select_active(self):
+        return (
+            self.action_prior_select in {"best", "softmax"}
+            and self.action_prior is not None
+            and (
+                self.action_prior_weight != 0.0
+                or self.puct_prior_weight != 0.0
+                or self.action_value_weight != 0.0
+            )
+        )
+
+    def _escape_active(self):
+        return (
+            self.escape_policy
+            and self.escape_action_top_k > 0
+            and int(getattr(self, "not_updated", 0)) >= self.escape_after_no_update
+            and self._action_top_k_active()
+        )
+
+    def _diverse_escape_actions(self, actions, scores, primary_keep):
+        if not self._escape_active():
+            return []
+        if (
+            _using_native_backend()
+            and len(actions) >= _NATIVE_VECTOR_MIN
+            and hasattr(smart_native, "native_diverse_escape_actions")
+        ):
+            try:
+                return [
+                    int(action)
+                    for action in smart_native.native_diverse_escape_actions(
+                        [int(action) for action in actions],
+                        np.asarray(scores, dtype=float).tolist(),
+                        [int(action) for action in primary_keep],
+                        int(self.num_action_scale),
+                        int(self.escape_action_top_k),
+                    )
+                ]
+            except Exception:
+                pass
+        primary = set(int(action) for action in primary_keep)
+        ordered = sorted(
+            range(len(actions)),
+            key=lambda idx: (-float(scores[idx]), int(actions[idx])),
+        )
+        out = []
+        used_bboxes = {self._action_trace_fields(action)[0] for action in primary}
+        used_coords = {self._action_trace_fields(action)[1] for action in primary}
+        for idx in ordered:
+            action = int(actions[idx])
+            if action in primary:
+                continue
+            bbox_idx, coord_idx, _scale_idx = self._action_trace_fields(action)
+            if bbox_idx in used_bboxes and coord_idx in used_coords and len(out) + 1 < self.escape_action_top_k:
+                continue
+            out.append(action)
+            used_bboxes.add(bbox_idx)
+            used_coords.add(coord_idx)
+            if len(out) >= self.escape_action_top_k:
+                return out
+        for idx in ordered:
+            action = int(actions[idx])
+            if action in primary or action in out:
+                continue
+            out.append(action)
+            if len(out) >= self.escape_action_top_k:
+                break
+        return out
+
     def _prune_node_untried_actions(self, node):
         if not self._action_top_k_active():
             return
@@ -325,11 +457,34 @@ class MCTSTreeSearch:
         if len(actions) <= self.action_prior_top_k:
             return
         scores = self._action_proposal_scores_for(actions)
-        order = sorted(
-            range(len(actions)),
-            key=lambda idx: (-float(scores[idx]), int(actions[idx])),
-        )
-        keep = [actions[idx] for idx in order[: self.action_prior_top_k]]
+        keep = None
+        if (
+            _using_native_backend()
+            and len(actions) >= _NATIVE_VECTOR_MIN
+            and hasattr(smart_native, "native_top_k_actions")
+        ):
+            try:
+                keep = [
+                    int(action)
+                    for action in smart_native.native_top_k_actions(
+                        actions,
+                        np.asarray(scores, dtype=float).tolist(),
+                        int(self.action_prior_top_k),
+                    )
+                ]
+            except Exception:
+                keep = None
+        if keep is None:
+            order = sorted(
+                range(len(actions)),
+                key=lambda idx: (-float(scores[idx]), int(actions[idx])),
+            )
+            keep = [actions[idx] for idx in order[: self.action_prior_top_k]]
+        escape_keep = self._diverse_escape_actions(actions, scores, keep)
+        if escape_keep:
+            keep.extend(action for action in escape_keep if action not in keep)
+            self.escape_pruned_nodes += 1
+            self.escape_kept_actions += len(escape_keep)
         keep_set = set(keep)
         node.untried_actions = keep
         pruned = len(actions) - len(keep)
@@ -342,6 +497,59 @@ class MCTSTreeSearch:
                 if 0 <= int(action) < len(new_mask):
                     new_mask[int(action)] = False
             node.action_mask = new_mask
+
+    def _choose_untried_action(self, actions):
+        actions = [int(action) for action in actions]
+        if self._escape_active() and len(actions) > self.action_prior_top_k and np.random.rand() < self.escape_probability:
+            escape_actions = actions[self.action_prior_top_k :]
+            action = int(escape_actions[np.random.randint(len(escape_actions), size=1)[0]])
+            self.escape_choices += 1
+            return action
+        if self._action_prior_select_active():
+            scores = self._action_proposal_scores_for(actions)
+            if self.action_prior_select == "best":
+                if (
+                    _using_native_backend()
+                    and hasattr(smart_native, "native_best_score_action")
+                ):
+                    try:
+                        tie_pick = int(np.random.randint(2**31 - 1, size=1)[0])
+                        return int(
+                            smart_native.native_best_score_action(
+                                actions,
+                                np.asarray(scores, dtype=float).tolist(),
+                                tie_pick,
+                            )
+                        )
+                    except Exception:
+                        pass
+                best_score = float(np.max(scores))
+                best_indices = [
+                    idx
+                    for idx, score in enumerate(scores)
+                    if float(score) == best_score
+                ]
+                return int(actions[best_indices[np.random.randint(len(best_indices), size=1)[0]]])
+            if self.action_prior_select == "softmax":
+                scaled = np.asarray(scores, dtype=float) / float(self.action_prior_select_temperature)
+                scaled = np.nan_to_num(scaled, nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+                finite = np.isfinite(scaled)
+                if finite.any():
+                    shifted = scaled - np.max(scaled[finite])
+                    probs = np.exp(np.where(finite, shifted, -np.inf))
+                    total = probs.sum()
+                    if total > 0.0:
+                        return int(np.random.choice(actions, size=1, p=probs / total)[0])
+        if self.args.pns:
+            return int(
+                np.random.choice(
+                    actions,
+                    size=1,
+                    p=self.get_exp_prob(actions),
+                )[0]
+            )
+        sample_id = np.random.randint(len(actions), size=1)[0]
+        return int(actions[sample_id])
 
     def _state_key(self):
         if hasattr(self.env, "_state_cache_key"):
@@ -377,11 +585,25 @@ class MCTSTreeSearch:
 
     def _build_opposite_actions(self):
         actions = np.arange(self.num_actions, dtype=int)
-        if smart_rust is not None:
-            return np.array(
-                smart_rust.opposite_actions(self.num_bbox, self.num_action_scale),
-                dtype=int,
-            )
+        if smart_native is not None:
+            try:
+                if getattr(smart_native, "native_core_available", lambda: False)():
+                    return np.array(
+                        smart_native.native_opposite_actions(
+                            self.num_bbox,
+                            self.num_action_scale,
+                        ),
+                        dtype=int,
+                    )
+            except Exception:
+                pass
+            try:
+                return np.array(
+                    smart_native.opposite_actions(self.num_bbox, self.num_action_scale),
+                    dtype=int,
+                )
+            except Exception:
+                pass
 
         per_bbox = 6 * self.num_action_scale + 1
         local = actions % per_bbox
@@ -399,15 +621,25 @@ class MCTSTreeSearch:
         return mask
 
     def _child_action_mask(self, action, parent_mask=None):
-        if _using_rust_backend() and self.num_actions >= _RUST_VECTOR_MIN:
+        if _using_native_backend() and self.num_actions >= _NATIVE_VECTOR_MIN:
             try:
                 parent_data = (
                     None
                     if parent_mask is None
                     else np.asarray(parent_mask, dtype=bool).tolist()
                 )
+                if getattr(smart_native, "native_core_available", lambda: False)():
+                    return np.array(
+                        smart_native.native_child_action_mask(
+                            self.num_actions,
+                            int(action),
+                            self.num_action_scale,
+                            parent_data,
+                        ),
+                        dtype=bool,
+                    )
                 return np.array(
-                    smart_rust.mcts_child_action_mask(
+                    smart_native.mcts_child_action_mask(
                         self.num_actions,
                         int(action),
                         self.num_action_scale,
@@ -433,20 +665,23 @@ class MCTSTreeSearch:
         return np.clip(prob, 0, self.args.skip_rate)
 
     def get_exp_prob(self, actions, scale=100):
-        if _using_rust_backend() and len(actions) >= _RUST_VECTOR_MIN:
+        if _using_native_backend() and len(actions) >= _NATIVE_VECTOR_MIN:
             try:
-                value_logits = self._action_values_for(actions)
-                values = [
-                    float(self.exp_action_reward[int(action)] * scale)
-                    + self.action_prior_weight * float(prior_logit)
-                    + self.action_value_weight * float(value_logit)
-                    for action, prior_logit, value_logit in zip(
-                        actions,
-                        self._action_prior_logits_for(actions),
-                        value_logits,
-                    )
+                actions = [int(action) for action in actions]
+                base_rewards = [
+                    float(self.exp_action_reward[int(action)])
+                    for action in actions
                 ]
-                return np.array(smart_rust.softmax_scaled(values, 1.0), dtype=float)
+                value_logits = self._action_values_for(actions)
+                values = smart_native.native_weighted_action_scores(
+                    base_rewards,
+                    self._action_prior_logits_for(actions).tolist(),
+                    np.asarray(value_logits, dtype=float).tolist(),
+                    float(scale),
+                    float(self.action_prior_weight),
+                    float(self.action_value_weight),
+                )
+                return np.array(smart_native.softmax_scaled(values, 1.0), dtype=float)
             except Exception:
                 pass
         x = self.exp_action_reward[actions] * scale
@@ -486,17 +721,9 @@ class MCTSTreeSearch:
 
                 node_id = child_id
             else:
-                if self.args.pns:
-                    action = np.random.choice(
-                        self.id2Node[node_id].untried_actions,
-                        size=1,
-                        p=self.get_exp_prob(self.id2Node[node_id].untried_actions),
-                    )[0]
-                else:
-                    sample_id = np.random.randint(
-                        len(self.id2Node[node_id].untried_actions), size=1
-                    )[0]
-                    action = self.id2Node[node_id].untried_actions[sample_id]
+                untried_actions = self.id2Node[node_id].untried_actions
+                action = self._choose_untried_action(untried_actions)
+                self._trace_node_action_candidates(untried_actions, action, node_id)
 
                 r, obs, done = self.env.step(action)
                 rewards.append(r)
@@ -534,16 +761,26 @@ class MCTSTreeSearch:
         child_qs = [self.id2Node[idx].Q for idx in child_ids]
         child_visits = [self.id2Node[idx].num_vis for idx in child_ids]
         if (
-            _using_rust_backend()
-            and len(child_ids) >= _RUST_VECTOR_MIN
+            _using_native_backend()
+            and len(child_ids) >= _NATIVE_VECTOR_MIN
             and self.puct_prior_weight == 0.0
             and self.action_value_weight == 0.0
         ):
             try:
-                best_positions = smart_rust.ucb_best_indices(
-                    parent_visits, child_qs, child_visits, self.exp_weight
-                )
-                next_pos = best_positions[np.random.randint(len(best_positions), size=1)[0]]
+                if getattr(smart_native, "native_core_available", lambda: False)():
+                    tie_pick = int(np.random.randint(2**31 - 1, size=1)[0])
+                    next_pos = smart_native.native_best_ucb_child(
+                        parent_visits,
+                        child_qs,
+                        child_visits,
+                        self.exp_weight,
+                        tie_pick,
+                    )
+                else:
+                    best_positions = smart_native.ucb_best_indices(
+                        parent_visits, child_qs, child_visits, self.exp_weight
+                    )
+                    next_pos = best_positions[np.random.randint(len(best_positions), size=1)[0]]
                 return child_ids[next_pos], self.id2Node[node_id].child_actions[next_pos]
             except Exception:
                 uct_scores = self._python_ucb_scores(parent_visits, child_qs, child_visits)
@@ -587,6 +824,24 @@ class MCTSTreeSearch:
         if len(child_actions) == 0 or parent_visits <= 0:
             return uct_scores
         logits = self._action_prior_logits_for(child_actions)
+        if (
+            _using_native_backend()
+            and len(child_actions) >= _NATIVE_VECTOR_MIN
+            and hasattr(smart_native, "native_add_puct_prior")
+        ):
+            try:
+                return np.array(
+                    smart_native.native_add_puct_prior(
+                        np.asarray(uct_scores, dtype=float).tolist(),
+                        np.asarray(logits, dtype=float).tolist(),
+                        [int(value) for value in child_visits],
+                        int(parent_visits),
+                        float(self.puct_prior_weight),
+                    ),
+                    dtype=float,
+                )
+            except Exception:
+                pass
         logits = logits - np.max(logits)
         probs = np.exp(logits)
         total = probs.sum()
@@ -636,8 +891,7 @@ class MCTSTreeSearch:
         rows = []
         for rank, (bbox_idx, action, reward) in enumerate(ordered):
             decoded_bbox_idx, coord_idx, scale_idx = self._action_trace_fields(action)
-            rows.append(
-                {
+            row = {
                     "schema_version": 3,
                     "record_type": "mcts_candidate",
                     "source": "mcts_rollout_bbox_best",
@@ -667,20 +921,187 @@ class MCTSTreeSearch:
                     "max_step": int(context.get("max_step", 0) or 0),
                     "step": int(context.get("step", 0) or 0),
                 }
-            )
+            row.update(self._action_geometry_trace_fields(context, decoded_bbox_idx, coord_idx, scale_idx))
+            rows.append(row)
         with open(self.candidate_trace_path, "a", encoding="utf-8") as file:
             for row in rows:
                 file.write(json.dumps(row, sort_keys=True) + "\n")
+
+    def _trace_node_action_candidates(self, actions, selected_action, node_id):
+        if (
+            not self.candidate_trace_path
+            or self.candidate_trace_node_top_k <= 0
+            or not actions
+        ):
+            return
+        actions = [int(action) for action in actions]
+        scores = self._action_proposal_scores_for(actions)
+        ordered = sorted(
+            range(len(actions)),
+            key=lambda idx: (-float(scores[idx]), int(actions[idx])),
+        )
+        keep_positions = ordered[: self.candidate_trace_node_top_k]
+        try:
+            selected_pos = actions.index(int(selected_action))
+        except ValueError:
+            selected_pos = -1
+        if selected_pos >= 0 and selected_pos not in keep_positions:
+            keep_positions.append(selected_pos)
+        context = self._prior_context()
+        escape_active = bool(context.get("mcts_escape_active", False))
+        primary_top_k = max(int(self.action_prior_top_k), 0)
+        rows = []
+        for rank, pos in enumerate(keep_positions):
+            action = int(actions[pos])
+            bbox_idx, coord_idx, scale_idx = self._action_trace_fields(action)
+            raw_score = float(scores[pos])
+            if not np.isfinite(raw_score):
+                raw_score = 0.0
+            is_primary = rank < primary_top_k if primary_top_k > 0 else False
+            row = {
+                    "schema_version": 4,
+                    "record_type": "mcts_candidate",
+                    "source": "mcts_node_untried",
+                    "category": str(context.get("category", "")),
+                    "mesh": str(context.get("mesh", "")),
+                    "reward_backend": str(context.get("reward_backend", "")),
+                    "manifold_volume_method": str(context.get("manifold_volume_method", "")),
+                    "mcts_iter": int(self._mcts_iter_index),
+                    "rollout_step": -1,
+                    "node_id": int(node_id),
+                    "rank": int(rank),
+                    "action": int(action),
+                    "bbox_idx": int(bbox_idx),
+                    "candidate_bbox_idx": int(bbox_idx),
+                    "coord_idx": int(coord_idx),
+                    "scale_idx": int(scale_idx),
+                    "num_bbox": int(self.num_bbox),
+                    "num_action_scale": int(self.num_action_scale),
+                    "actions_per_bbox": int(6 * self.num_action_scale + 1),
+                    "action_unit": float(context.get("action_unit", 0.0) or 0.0),
+                    "reward": raw_score,
+                    "proposal_score": raw_score,
+                    "selected": bool(int(action) == int(selected_action)),
+                    "selected_by_escape": bool(
+                        escape_active
+                        and int(action) == int(selected_action)
+                        and primary_top_k > 0
+                        and rank >= primary_top_k
+                    ),
+                    "primary_top_k": bool(is_primary),
+                    "escape_candidate": bool(escape_active and not is_primary),
+                    "escape_active": bool(escape_active),
+                    "escape_after_no_update": int(self.escape_after_no_update),
+                    "escape_action_top_k": int(self.escape_action_top_k),
+                    "escape_probability": float(self.escape_probability),
+                    "mcts_not_updated": int(context.get("mcts_not_updated", 0) or 0),
+                    "mcts_best_reward": float(context.get("mcts_best_reward", 0.0) or 0.0),
+                    "bvs": float(context.get("bvs", 1.0) or 1.0),
+                    "volume_sum": float(context.get("volume_sum", 0.0) or 0.0),
+                    "cover_penalty": float(context.get("cover_penalty", 100.0) or 100.0),
+                    "pen_rate": float(context.get("pen_rate", 1.0) or 1.0),
+                    "max_step": int(context.get("max_step", 0) or 0),
+                    "step": int(context.get("step", 0) or 0),
+                }
+            row.update(self._action_geometry_trace_fields(context, bbox_idx, coord_idx, scale_idx))
+            rows.append(row)
+        with open(self.candidate_trace_path, "a", encoding="utf-8") as file:
+            for row in rows:
+                file.write(json.dumps(row, sort_keys=True) + "\n")
+
+    def _action_geometry_trace_fields(self, context, bbox_idx, coord_idx, scale_idx):
+        bounds = context.get("bbox_bounds", [])
+        if not isinstance(bounds, list) or int(bbox_idx) < 0 or int(bbox_idx) >= len(bounds):
+            return {}
+        box = bounds[int(bbox_idx)]
+        if not isinstance(box, (list, tuple)) or len(box) < 6:
+            return {}
+        box = [float(value) for value in box[:6]]
+        dims = [
+            max(0.0, box[3] - box[0]),
+            max(0.0, box[4] - box[1]),
+            max(0.0, box[5] - box[2]),
+        ]
+        bbox_volume = dims[0] * dims[1] * dims[2]
+        action_delta = 0.0
+        candidate = list(box)
+        if 0 <= int(coord_idx) < 6:
+            action_delta = self._action_scale_value(scale_idx) * float(context.get("action_unit", 0.0) or 0.0)
+            candidate[int(coord_idx)] += action_delta
+        invalid_after = not (candidate[0] < candidate[3] and candidate[1] < candidate[4] and candidate[2] < candidate[5])
+        action_new_volume = (
+            0.0
+            if invalid_after
+            else max(0.0, candidate[3] - candidate[0])
+            * max(0.0, candidate[4] - candidate[1])
+            * max(0.0, candidate[5] - candidate[2])
+        )
+        return {
+            "bbox_min_x": box[0],
+            "bbox_min_y": box[1],
+            "bbox_min_z": box[2],
+            "bbox_max_x": box[3],
+            "bbox_max_y": box[4],
+            "bbox_max_z": box[5],
+            "bbox_dim_x": dims[0],
+            "bbox_dim_y": dims[1],
+            "bbox_dim_z": dims[2],
+            "bbox_center_x": 0.5 * (box[0] + box[3]),
+            "bbox_center_y": 0.5 * (box[1] + box[4]),
+            "bbox_center_z": 0.5 * (box[2] + box[5]),
+            "bbox_volume": float(bbox_volume),
+            "action_delta": float(action_delta),
+            "action_new_bbox_volume": float(action_new_volume),
+            "action_invalid_after": bool(invalid_after),
+        }
+
+    def _action_scale_value(self, scale_idx):
+        scale_idx = int(scale_idx)
+        half = max(int(self.num_action_scale) // 2, 1)
+        if scale_idx < half:
+            return -(half - scale_idx)
+        return scale_idx - half + 1
 
     def _simulate(self, path: List[int], rewards: List[float] = []):
         grd_cnt = 0
         mask_bbox = [1 for _ in range(self.num_bbox)]
         node_id = path[-1]
+        native_axis_rollout_segment = (
+            bool(getattr(self.args, "mcts_native_axis_rollout_segment", False))
+            and hasattr(self.env, "_bridge_mcts_greedy_rollout_segment")
+            and not self.candidate_trace_path
+        )
         fused_rollout_step = (
-            getattr(self.args, "mcts_fused_rollout_step", False)
+            (
+                getattr(self.args, "mcts_fused_rollout_step", False)
+                or getattr(self.args, "mcts_native_axis_rollout_step", False)
+                or native_axis_rollout_segment
+            )
             and hasattr(self.env, "_bridge_mcts_greedy_rollout_step")
         )
         while not self.env.done:
+            if native_axis_rollout_segment:
+                remaining = max(0, int(getattr(self.args, "max_step", 0)) - int(self.env.step_cnt) - 1)
+                segment = self.env._bridge_mcts_greedy_rollout_segment(mask_bbox, remaining)
+                if segment is not None:
+                    segment_actions, segment_rewards, next_mask, done = segment
+                    mask_bbox = next_mask
+                    if not segment_actions:
+                        break
+                    for mx_ac, reward in zip(segment_actions, segment_rewards):
+                        if not np.isfinite(reward) or reward <= 0:
+                            break
+                        self._rollout_step_index += 1
+                        grd_cnt += 1
+                        rewards.append(float(reward))
+                        if self.args.grdexp:
+                            node_id = self._append_greedy_expansion_node(
+                                node_id,
+                                path,
+                                int(mx_ac),
+                                use_current_state_key=False,
+                            )
+                    break
             self._rollout_step_index += 1
             if fused_rollout_step:
                 fused = self.env._bridge_mcts_greedy_rollout_step(mask_bbox)
@@ -729,7 +1150,13 @@ class MCTSTreeSearch:
 
         return path, rewards, grd_cnt
 
-    def _append_greedy_expansion_node(self, node_id, path, action):
+    def _append_greedy_expansion_node(
+        self,
+        node_id,
+        path,
+        action,
+        use_current_state_key=True,
+    ):
         self.id2Node[node_id].untried_actions = [action]
         action_mask = self._single_untried_action_mask(action)
         self.id2Node[node_id].action_mask = np.copy(action_mask)
@@ -740,7 +1167,7 @@ class MCTSTreeSearch:
             self.node_cnt,
             node_id,
             opp_mask,
-            state_key=self._state_key(),
+            state_key=self._state_key() if use_current_state_key else None,
         )
         self._seed_from_transposition(child_node)
         self._prune_node_untried_actions(child_node)
@@ -852,6 +1279,14 @@ class MCTSTreeSearch:
                         "nodes": int(self.prior_pruned_nodes),
                         "actions_pruned": int(self.prior_pruned_actions),
                         "actions_kept": int(self.prior_kept_actions),
+                        "escape_policy": bool(self.escape_policy),
+                        "escape_after_no_update": int(self.escape_after_no_update),
+                        "escape_action_top_k": int(self.escape_action_top_k),
+                        "escape_nodes": int(self.escape_pruned_nodes),
+                        "escape_actions_kept": int(self.escape_kept_actions),
+                        "escape_choices": int(self.escape_choices),
+                        "action_prior_select": str(self.action_prior_select),
+                        "action_prior_select_temperature": float(self.action_prior_select_temperature),
                     },
                     sort_keys=True,
                 )
@@ -866,10 +1301,10 @@ class MCTSTreeSearch:
                 print("MCTS candidate prefilter: %s" % json.dumps(stats, sort_keys=True))
 
     def _single_untried_action_mask(self, action):
-        if _using_rust_backend() and self.num_actions >= _RUST_VECTOR_MIN:
+        if _using_native_backend() and self.num_actions >= _NATIVE_VECTOR_MIN:
             try:
                 return np.array(
-                    smart_rust.single_untried_action_mask(self.num_actions, int(action)),
+                    smart_native.single_untried_action_mask(self.num_actions, int(action)),
                     dtype=bool,
                 )
             except Exception:
@@ -906,5 +1341,7 @@ class _LegacyActionPrior:
         return out
 
 
-def _using_rust_backend():
-    return smart_rust is not None and smart_rust.using_rust()
+def _using_native_backend():
+    return smart_native is not None and getattr(
+        smart_native, "native_core_available", lambda: False
+    )()

@@ -3,10 +3,15 @@ import time
 
 import numpy as np
 import pymanifold
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 from pymanifold import Manifold
+
+try:
+    import smart.native as smart_native
+except ImportError:
+    smart_native = None
 
 
 EPS = 1e-9
@@ -28,7 +33,6 @@ def _safe_lengths(lengths):
 
 
 def pts2box_mesh(x, y, z, lx, ly, lz, rot, pym=False):
-    vertices = []
     faces = [
         [1, 3, 0],
         [1, 5, 7],
@@ -43,15 +47,31 @@ def pts2box_mesh(x, y, z, lx, ly, lz, rot, pym=False):
         [2, 7, 6],
         [0, 4, 5],
     ]
-    for i in range(2):
-        for j in range(2):
-            for k in range(2):
-                vertices.append(
-                    np.array([x, y, z])
-                    + rot[0] * i * lx
-                    + rot[1] * j * ly
-                    + rot[2] * k * lz
-                )
+    vertices = None
+    if smart_native is not None and hasattr(smart_native, "native_box_mesh"):
+        try:
+            vertices, faces = smart_native.native_box_mesh(
+                float(x),
+                float(y),
+                float(z),
+                float(lx),
+                float(ly),
+                float(lz),
+                np.asarray(rot, dtype=float).reshape(-1).tolist(),
+            )
+        except Exception:
+            vertices = None
+    if vertices is None:
+        vertices = []
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    vertices.append(
+                        np.array([x, y, z])
+                        + rot[0] * i * lx
+                        + rot[1] * j * ly
+                        + rot[2] * k * lz
+                    )
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     trimesh.repair.fix_normals(mesh)
 

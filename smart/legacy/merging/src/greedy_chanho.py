@@ -2,7 +2,7 @@ import os
 import time
 
 import numpy as np
-import pymesh
+import smart.pymesh_compat as pymesh
 import torch
 import trimesh
 from tqdm import tqdm

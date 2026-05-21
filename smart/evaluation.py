@@ -157,6 +157,37 @@ def evaluate_mesh(
     if bbox_path is None:
         bbox_path = latest_evaluation_bbox_dir(cfg, category, mesh_id, stage)
 
+    return evaluate_bbox_dir(
+        cfg,
+        category,
+        mesh_id,
+        bbox_path=bbox_path,
+        stage=stage,
+        chamfer_points=chamfer_points,
+    )
+
+
+def evaluate_bbox_dir(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    *,
+    bbox_path: str | Path | None,
+    stage: str = "bbox_path",
+    chamfer_points: int = 2048,
+) -> EvaluationRecord:
+    """Evaluate a specific bbox directory with the paper metrics."""
+
+    started = time.time()
+    source_mesh = normalized_mesh_path(cfg, category, mesh_id)
+    if not source_mesh.exists():
+        source_mesh = Path(category["mesh_root"]) / mesh_id / "model.obj"
+        if not source_mesh.is_absolute():
+            source_mesh = REPO_ROOT / source_mesh
+
+    surface_path = mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh__sf.obj"
+    bbox_dir = Path(bbox_path) if bbox_path is not None else None
+
     record = EvaluationRecord(
         category=str(category["name"]),
         mesh_id=mesh_id,
@@ -165,11 +196,11 @@ def evaluate_mesh(
         elapsed_sec=0.0,
         mesh_path=str(source_mesh),
         surface_path=str(surface_path),
-        bbox_path=str(bbox_path) if bbox_path is not None else None,
+        bbox_path=str(bbox_dir) if bbox_dir is not None else None,
     )
 
     try:
-        if bbox_path is None or not bbox_path.exists():
+        if bbox_dir is None or not bbox_dir.exists():
             raise FileNotFoundError(f"No bbox result found for stage={stage} mesh={mesh_id}")
         if not surface_path.exists():
             raise FileNotFoundError(f"Missing tetra surface OBJ: {surface_path}")
@@ -178,7 +209,7 @@ def evaluate_mesh(
 
         source = _load_mesh(source_mesh)
         surface = _load_mesh(surface_path)
-        boxes = _load_bbox_meshes(bbox_path)
+        boxes = _load_bbox_meshes(bbox_dir)
         metrics = EvaluationMetrics(source, surface, boxes).compute(chamfer_points=chamfer_points)
 
         record.status = "success"
@@ -295,14 +326,29 @@ class EvaluationMetrics:
     def cub_cd(self, *, num_points: int = 2048) -> float:
         if num_points <= 0:
             return 0.0
-        bbox_points = []
-        per_box = [num_points // len(self.bbox_meshes)] * len(self.bbox_meshes)
-        per_box[-1] += num_points - sum(per_box)
-        for bbox, count in zip(self.bbox_meshes, per_box):
-            if count:
-                bbox_points.append(trimesh.sample.sample_surface(bbox, count)[0])
-        source_points = trimesh.sample.sample_surface(self.shapenet_mesh, num_points)[0]
-        return _symmetric_chamfer(np.concatenate(bbox_points), source_points)
+        np_random_state_raw = np.random.get_state()
+        np_random_state = (
+            np_random_state_raw[0],
+            np_random_state_raw[1].copy(),
+            np_random_state_raw[2],
+            np_random_state_raw[3],
+            np_random_state_raw[4],
+        )
+        py_random_state = random.getstate()
+        try:
+            np.random.seed(0)
+            random.seed(0)
+            bbox_points = []
+            per_box = [num_points // len(self.bbox_meshes)] * len(self.bbox_meshes)
+            per_box[-1] += num_points - sum(per_box)
+            for bbox, count in zip(self.bbox_meshes, per_box):
+                if count:
+                    bbox_points.append(trimesh.sample.sample_surface(bbox, count)[0])
+            source_points = trimesh.sample.sample_surface(self.shapenet_mesh, num_points)[0]
+            return _symmetric_chamfer(np.concatenate(bbox_points), source_points)
+        finally:
+            np.random.set_state(np_random_state)
+            random.setstate(py_random_state)
 
     def _merged_bbox_manifold(self):
         merged = self.bbox_manifolds[0]
@@ -336,6 +382,7 @@ def _load_pymanifold():
     candidates = []
     if manifold_python:
         candidates.append(Path(manifold_python).expanduser())
+    candidates.append(REPO_ROOT / "smart" / "pymanifold_runtime")
     candidates.append(REPO_ROOT / "smart" / "vendor" / "manifold" / "build" / "bindings" / "python")
     for candidate in candidates:
         if candidate.exists():
@@ -380,10 +427,10 @@ def _triangle_mesh_volume(vertices: np.ndarray, faces: np.ndarray) -> float:
 
 def _symmetric_chamfer(left: np.ndarray, right: np.ndarray) -> float:
     try:
-        import smart.rust as smart_rust
+        import smart.native as smart_native
 
-        if smart_rust.using_rust():
-            return smart_rust.symmetric_chamfer(left.tolist(), right.tolist())
+        if smart_native.native_core_available():
+            return smart_native.symmetric_chamfer(left.tolist(), right.tolist())
     except Exception:
         pass
 

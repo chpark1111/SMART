@@ -3,16 +3,20 @@ import time
 import math
 
 import numpy as np
-import pymesh
+import smart.pymesh_compat as pymesh
 
 from src.datamodules.tetmesh_datamodule import STM_DataLoader
 from src.environment.bbox_environment import MeshBBoxEnv
 from src.utils.utils import calculate_reward
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
+
+
+NATIVE_BACKENDS = {"auto", "cpp", "cpp_stateful", "cpp_native", "native", "native_stateful"}
+EXPLICIT_NATIVE_BACKENDS = NATIVE_BACKENDS - {"auto"}
 
 
 def _dataset_name(path):
@@ -48,6 +52,9 @@ def greedy(args):
             args.action_unit,
             args.merge_eps,
         )
+        exp_tag = str(getattr(args, "mcts_exp_tag", "") or "").strip()
+        if exp_tag:
+            env.exp_name = env.exp_name + "_%s" % exp_tag
 
         if not getattr(args, "skip_initial_render", False):
             env.render()
@@ -68,23 +75,38 @@ def greedy(args):
         init_bbox = env.num_bbox
 
         backend = getattr(args, "greedy_backend", "auto")
-        use_rust_greedy = (
-            backend in {"auto", "rust", "rust_stateful"}
-            and smart_rust is not None
-            and smart_rust.using_rust()
-            and hasattr(smart_rust, "run_greedy_refine_callbacks")
-        )
-        if use_rust_greedy:
-            try:
-                rewards, cnt = smart_rust.run_greedy_refine_callbacks(args, env)
-            except Exception:
-                if backend in {"rust", "rust_stateful"}:
-                    raise
-                rewards, cnt = _run_python_greedy_refine(args, env)
+        native_engine = None
+        if backend == "cpp_native":
+            native_engine = env.make_native_smart_engine()
+            result = native_engine.run_refine(
+                max(0, int(args.max_step) - int(env.step_cnt)),
+                float(args.cover_penalty),
+                float(env.pen_rate),
+            )
+            rewards = list(result["rewards"])
+            cnt = len(rewards)
+            env.sync_native_smart_engine(native_engine, cnt)
         else:
-            if backend in {"rust", "rust_stateful"}:
-                raise RuntimeError("greedy_backend=rust requested but smart._rust is unavailable")
-            rewards, cnt = _run_python_greedy_refine(args, env)
+            use_native_greedy = (
+                backend in NATIVE_BACKENDS
+                and smart_native is not None
+                and getattr(smart_native, "native_core_available", lambda: False)()
+                and hasattr(smart_native, "run_greedy_refine_callbacks")
+            )
+            if use_native_greedy:
+                try:
+                    rewards, cnt = smart_native.run_greedy_refine_callbacks(args, env)
+                except Exception:
+                    if backend in EXPLICIT_NATIVE_BACKENDS:
+                        raise
+                    rewards, cnt = _run_python_greedy_refine(args, env)
+            else:
+                if backend in EXPLICIT_NATIVE_BACKENDS:
+                    raise RuntimeError(
+                        "greedy_backend=%s requested but no native SMART callback runner is available"
+                        % backend
+                    )
+                rewards, cnt = _run_python_greedy_refine(args, env)
 
         path_to_result = os.path.join(
             os.path.join(os.path.join(args.result_path, env.exp_name), "result/updated0"),
@@ -140,7 +162,14 @@ def greedy(args):
                     time.time() - st,
                 )
             )
-        env.render()
+        if (
+            native_engine is not None
+            and getattr(args, "skip_render_partition", False)
+            and hasattr(native_engine, "export_bbox_dir")
+        ):
+            env.export_native_engine_bbox_dir(native_engine, num_update=0)
+        else:
+            env.render()
 
         avg_reward.append(calculate_reward(rewards, args.gamma))
         avg_covered.append(covered)
@@ -182,6 +211,19 @@ def _run_python_greedy_refine(args, env):
     cnt = 0
     done = 0
     rewards = []
+    forced_actions = _forced_action_sequence(args)
+    min_forced_reward = float(getattr(args, "forced_first_action_min_reward", 0.0) or 0.0)
+    for forced_action in forced_actions:
+        if done or not (0 <= forced_action < env.num_actions):
+            break
+        forced_reward = float(env.step(forced_action, apply=0))
+        if forced_reward < min_forced_reward:
+            break
+        r, obs, done = env.step(forced_action, apply=1)
+        if not args.print_off:
+            print(forced_action, r)
+        rewards.append(r)
+        cnt += 1
 
     while not done:
         ac, rw = env.greedy_sample(True)
@@ -195,3 +237,22 @@ def _run_python_greedy_refine(args, env):
         cnt += 1
 
     return rewards, cnt
+
+
+def _forced_action_sequence(args):
+    text = str(getattr(args, "forced_action_sequence", "") or "").strip()
+    if text:
+        actions = []
+        for item in text.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                actions.append(int(item))
+            except ValueError:
+                continue
+        return actions
+    forced_first_action = int(getattr(args, "forced_first_action", -1) or -1)
+    if forced_first_action >= 0:
+        return [forced_first_action]
+    return []

@@ -1,1 +1,1 @@
-"""Benchmark and maintenance scripts for SMART."""
+"""Supported SMART release and reproduction command modules."""

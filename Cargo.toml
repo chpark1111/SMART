@@ -1,3 +1,0 @@
-[workspace]
-members = ["rust/smart-core"]
-resolver = "2"

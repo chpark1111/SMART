@@ -145,8 +145,19 @@ def get_parser() -> ArgumentParser:
         "--greedy_backend",
         type=str,
         default="auto",
-        choices=["auto", "python", "rust", "rust_stateful"],
-        help="greedy refine runner backend. auto uses Rust callback runner when available.",
+        choices=[
+            "auto",
+            "python",
+            "cpp",
+            "cpp_stateful",
+            "cpp_native",
+            "native",
+            "native_stateful",
+        ],
+        help=(
+            "greedy refine runner backend. auto uses the native C++ callback "
+            "runner when available."
+        ),
     )
     parser.add_argument(
         "--skip_initial_render",
@@ -210,8 +221,19 @@ def get_parser() -> ArgumentParser:
         "--mcts_backend",
         type=str,
         default="auto",
-        choices=["auto", "python", "rust", "rust_stateful"],
-        help="MCTS runner backend. auto uses Rust callback runner when available.",
+        choices=[
+            "auto",
+            "python",
+            "cpp",
+            "cpp_stateful",
+            "cpp_native",
+            "native",
+            "native_stateful",
+        ],
+        help=(
+            "MCTS runner backend. cpp_stateful/native_stateful run the native "
+            "C++ callback runner."
+        ),
     )
     parser.add_argument(
         "--exp_w",
@@ -255,6 +277,22 @@ def get_parser() -> ArgumentParser:
         type=int,
         default=8192,
         help="maximum number of MCTS repeated-state entries to keep",
+    )
+    parser.add_argument(
+        "--mcts_cpp_rng",
+        default=False,
+        action="store_true",
+        help=(
+            "experimental: use the native C++ PRNG inside the C++ MCTS callback "
+            "runner instead of calling numpy.random for every random draw. This "
+            "changes the exact random sequence and therefore search order."
+        ),
+    )
+    parser.add_argument(
+        "--mcts_cpp_rng_seed",
+        type=int,
+        default=7777,
+        help="seed for --mcts_cpp_rng",
     )
     parser.add_argument(
         "--action_prior_path",
@@ -303,6 +341,63 @@ def get_parser() -> ArgumentParser:
             "actions. For MCTS, keep only the top-K policy/value actions per "
             "tree node. 0 evaluates all legacy actions."
         ),
+    )
+    parser.add_argument(
+        "--action_prior_select",
+        type=str,
+        default="legacy",
+        choices=["legacy", "best", "softmax"],
+        help=(
+            "research MCTS expansion policy for untried actions after optional "
+            "top-K pruning. legacy keeps the original random/PNS choice, best "
+            "expands the highest policy/value action, and softmax samples by "
+            "policy/value proposal score."
+        ),
+    )
+    parser.add_argument(
+        "--action_prior_select_temperature",
+        type=float,
+        default=1.0,
+        help="softmax temperature for --action_prior_select softmax",
+    )
+    parser.add_argument(
+        "--action_prior_keep_upper",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "For local_refine action_prior_top_k, also keep top cheap upper-bound "
+            "actions alongside learned actions. Disable only for guarded RL "
+            "research runs where the learned policy should be allowed to change "
+            "the local-search branch more aggressively."
+        ),
+    )
+    parser.add_argument(
+        "--escape_policy",
+        default=False,
+        action="store_true",
+        help=(
+            "research option: after MCTS stagnates, keep extra policy-ranked "
+            "escape actions per node so top-K pruning does not collapse to a "
+            "single local-search branch"
+        ),
+    )
+    parser.add_argument(
+        "--escape_after_no_update",
+        type=int,
+        default=20,
+        help="activate --escape_policy after this many iterations without a best-reward update",
+    )
+    parser.add_argument(
+        "--escape_action_top_k",
+        type=int,
+        default=0,
+        help="number of additional non-primary actions to keep when --escape_policy is active",
+    )
+    parser.add_argument(
+        "--escape_probability",
+        type=float,
+        default=0.5,
+        help="probability of expanding a kept escape action instead of the primary top-K action",
     )
     parser.add_argument(
         "--mcts_exp_tag",
@@ -422,7 +517,7 @@ def get_parser() -> ArgumentParser:
         choices=["exact", "bitset_topk"],
         help=(
             "candidate scoring helper. exact preserves the legacy exhaustive scan; "
-            "bitset_topk uses a Rust centroid bitset proxy to pre-score top-K "
+            "bitset_topk uses the native C++ centroid bitset proxy to pre-score top-K "
             "actions, then still verifies with the exact reward and falls back "
             "to legacy upper-bound scanning when needed."
         ),
@@ -434,15 +529,68 @@ def get_parser() -> ArgumentParser:
         help="number of bitset proxy actions to exact-score before legacy fallback",
     )
     parser.add_argument(
+        "--candidate_require_exact_fallback",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "when candidate_backend=bitset_topk, keep the legacy exact fallback "
+            "scan after top-K proxy actions. Disable only for guarded/search-order "
+            "experiments that intentionally trade exhaustive action parity for fewer "
+            "exact Manifold calls."
+        ),
+    )
+    parser.add_argument(
+        "--candidate_pruned_categories",
+        type=str,
+        default="",
+        help=(
+            "optional comma-separated category allowlist for disabling exact "
+            "fallback. When set and the current category is not listed, "
+            "candidate_backend=bitset_topk keeps the exact fallback even if "
+            "--no-candidate_require_exact_fallback was requested."
+        ),
+    )
+    parser.add_argument(
+        "--candidate_pruned_max_aspect_mean",
+        type=float,
+        default=0.0,
+        help=(
+            "optional geometry guard for no-fallback bitset pruning. When > 0, "
+            "states whose mean bbox aspect ratio is at or above this value keep "
+            "the exact fallback even if pruning was requested."
+        ),
+    )
+    parser.add_argument(
+        "--candidate_pruned_min_fill_ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "optional geometry guard for no-fallback bitset pruning. When > 0, "
+            "states whose bbox volume / total AABB volume is below this value keep "
+            "the exact fallback even if pruning was requested."
+        ),
+    )
+    parser.add_argument(
+        "--candidate_bypass_on_exact_fallback",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "when candidate_backend=bitset_topk and exact fallback is required "
+            "by category or geometry guards, bypass the bitset prefilter entirely "
+            "and use the legacy exact greedy path. This is slower but preserves "
+            "search order for guarded profiles."
+        ),
+    )
+    parser.add_argument(
         "--reward_backend",
         type=str,
         default="manifold",
         choices=["manifold", "manifold_bridge", "manifold_stateful", "tet_clipping"],
         help=(
             "reward metric backend. manifold is the exact legacy default; "
-            "manifold_bridge reuses the fixed C++ Manifold library through Rust; "
-            "manifold_stateful keeps exact Manifold rewards in a stateful Rust/C++ cache; "
-            "tet_clipping is an experimental Rust backend gated by parity tests."
+            "manifold_bridge reuses the fixed C++ Manifold library through the native bridge; "
+            "manifold_stateful keeps exact Manifold rewards in a stateful native cache; "
+            "tet_clipping is an experimental native backend gated by parity tests."
         ),
     )
     parser.add_argument(
@@ -472,7 +620,7 @@ def get_parser() -> ArgumentParser:
         "--stateful_unscored_apply",
         action="store_true",
         help=(
-            "experimental exact path: let rust_stateful MCTS apply unscored axis "
+            "experimental exact path: let native stateful MCTS apply unscored axis "
             "actions through the stateful Manifold bridge instead of legacy env.step"
         ),
     )
@@ -485,12 +633,63 @@ def get_parser() -> ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--mcts_native_axis_rollout_step",
+        action="store_true",
+        help=(
+            "experimental exact path: for reward_backend=manifold_stateful, run the "
+            "axis-only MCTS greedy rollout step inside the C++ Manifold state. "
+            "This intentionally excludes recenter candidates until their parity path "
+            "is ported, so it is search-order-changing and opt-in only."
+        ),
+    )
+    parser.add_argument(
+        "--mcts_native_axis_rollout_segment",
+        action="store_true",
+        help=(
+            "experimental exact path: for reward_backend=manifold_stateful, run "
+            "multiple axis-only MCTS greedy rollout steps inside the C++ Manifold "
+            "state and sync Python once at the end. This is search-order-changing "
+            "because recenter candidates and per-step state keys remain on the "
+            "legacy Python path."
+        ),
+    )
+    parser.add_argument(
         "--mcts_no_reward_stop_after",
         type=int,
         default=101,
         help=(
             "stop MCTS after this many completed iterations when the best rollout "
             "reward is still below 1e-2. Default preserves the legacy late stop."
+        ),
+    )
+    parser.add_argument(
+        "--forced_first_action",
+        type=int,
+        default=-1,
+        help=(
+            "research/local-minimum escape option: apply this action before "
+            "normal greedy or MCTS rollout logic, then continue with the legacy "
+            "search. -1 disables it."
+        ),
+    )
+    parser.add_argument(
+        "--forced_action_sequence",
+        type=str,
+        default="",
+        help=(
+            "comma-separated research/local-minimum escape action prefix. "
+            "When set, these actions are applied before normal greedy/MCTS "
+            "logic and supersede --forced_first_action."
+        ),
+    )
+    parser.add_argument(
+        "--forced_first_action_min_reward",
+        type=float,
+        default=0.0,
+        help=(
+            "minimum immediate reward required before applying "
+            "--forced_first_action. Use a negative value for escape-branch "
+            "data collection."
         ),
     )
     parser.add_argument(
@@ -518,6 +717,16 @@ def get_parser() -> ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--candidate_trace_node_top_k",
+        type=int,
+        default=0,
+        help=(
+            "maximum MCTS node untried-action candidate rows to write before "
+            "expansion. This is intended for local-minimum escape policy/value "
+            "training; 0 disables node-action candidate tracing."
+        ),
+    )
+    parser.add_argument(
         "--category",
         type=str,
         default="",
@@ -527,7 +736,7 @@ def get_parser() -> ArgumentParser:
         "--tet_clipping_max_boxes",
         type=int,
         default=12,
-        help="maximum bbox count accepted by the Rust tet-clipping reward backend",
+        help="maximum bbox count accepted by the native tet-clipping reward backend",
     )
 
     parser.add_argument(

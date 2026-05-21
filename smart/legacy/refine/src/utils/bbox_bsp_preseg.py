@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import List, Optional, Set, Tuple, Union
 
 import numpy as np
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.exchange.export
 import trimesh.proximity

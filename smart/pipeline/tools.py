@@ -4,25 +4,196 @@ import importlib.util
 import os
 import platform
 import subprocess
+import sysconfig
 from pathlib import Path
 from typing import Any
 import shutil
 import sys
-import zipfile
 
 from .config import REPO_ROOT, repo_path
 from .runner import find_executable, run_command
+from ..native_executable import native_executable_path
 
 
 MANIFOLDPLUS_REPO = "https://github.com/hjwdzh/ManifoldPlus.git"
 FTETWILD_REPO = "https://github.com/wildmeshing/fTetWild.git"
+COACD_REPO = "https://github.com/SarahWeiii/CoACD.git"
 FTETWILD_SMART_PATCH = REPO_ROOT / "patches" / "ftetwild_smart_crash_guards.patch"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _nested_get(mapping: dict[str, Any], keys: tuple[str, ...], default: Any = None) -> Any:
+    current: Any = mapping
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def _bool_env_or_config(env_name: str, configured: Any, *, default: bool = False) -> bool:
+    env_value = os.environ.get(env_name)
+    if env_value is not None:
+        return env_value.strip().lower() in _TRUTHY
+    if configured is None:
+        return default
+    if isinstance(configured, bool):
+        return configured
+    return str(configured).strip().lower() in _TRUTHY
+
+
+def _manifold_parallel_backend(cfg: dict[str, Any]) -> str:
+    configured = (
+        _nested_get(cfg, ("build_tools", "manifold_parallel_backend"))
+        or _nested_get(cfg, ("manifold", "parallel_backend"))
+        or _nested_get(cfg, ("tools", "manifold_parallel_backend"))
+    )
+    value = os.environ.get("SMART_MANIFOLD_PAR", configured or "NONE")
+    normalized = str(value).strip().upper()
+    aliases = {
+        "": "NONE",
+        "NO": "NONE",
+        "OFF": "NONE",
+        "FALSE": "NONE",
+        "SERIAL": "NONE",
+        "OPENMP": "OMP",
+        "OMP": "OMP",
+        "TBB": "TBB",
+        "NONE": "NONE",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "Unsupported Manifold parallel backend "
+            f"{value!r}; use NONE, OpenMP/OMP, or TBB"
+        )
+    return aliases[normalized]
+
+
+def _manifold_use_cuda(cfg: dict[str, Any]) -> bool:
+    configured = (
+        _nested_get(cfg, ("build_tools", "manifold_use_cuda"))
+        or _nested_get(cfg, ("manifold", "use_cuda"))
+        or _nested_get(cfg, ("tools", "manifold_use_cuda"))
+    )
+    return _bool_env_or_config("SMART_MANIFOLD_USE_CUDA", configured, default=False)
+
+
+def _optional_tool_prefix(env_name: str, package_name: str) -> Path | None:
+    configured = os.environ.get(env_name)
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.extend(
+        [
+            Path("/opt/homebrew/opt") / package_name,
+            Path("/usr/local/opt") / package_name,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _manifold_parallel_cmake_args(parallel_backend: str) -> list[str]:
+    if sys.platform != "darwin":
+        return []
+    if parallel_backend == "OMP":
+        libomp = _optional_tool_prefix("SMART_LIBOMP_PREFIX", "libomp")
+        if libomp is None:
+            return []
+        include = libomp / "include"
+        library = libomp / "lib" / "libomp.dylib"
+        if not library.exists():
+            return []
+        flags = f"-Xpreprocessor -fopenmp -I{include}"
+        return [
+            f"-DOpenMP_C_FLAGS={flags}",
+            f"-DOpenMP_CXX_FLAGS={flags}",
+            "-DOpenMP_C_LIB_NAMES=omp",
+            "-DOpenMP_CXX_LIB_NAMES=omp",
+            f"-DOpenMP_omp_LIBRARY={library}",
+        ]
+    if parallel_backend == "TBB":
+        tbb = _optional_tool_prefix("SMART_TBB_PREFIX", "tbb")
+        if tbb is None:
+            return []
+        existing = os.environ.get("CMAKE_PREFIX_PATH")
+        prefix_path = f"{tbb};{existing}" if existing else str(tbb)
+        return [f"-DCMAKE_PREFIX_PATH={prefix_path}"]
+    return []
+
+
+def _manifold_cmake_cache_backend(manifold_root: Path) -> str:
+    cache = manifold_root / "build" / "CMakeCache.txt"
+    if not cache.exists():
+        return "NONE"
+    for line in cache.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if line.startswith("MANIFOLD_PAR:"):
+            return line.rsplit("=", 1)[-1].strip().upper()
+    return "NONE"
+
+
+def _manifold_native_link_args(manifold_root: Path) -> list[str]:
+    backend = _manifold_cmake_cache_backend(manifold_root)
+    if backend == "TBB":
+        tbb = _optional_tool_prefix("SMART_TBB_PREFIX", "tbb")
+        if tbb is not None:
+            library = tbb / "lib" / "libtbb.12.dylib"
+            if library.exists():
+                return [str(library)]
+            return ["-L", str(tbb / "lib"), "-ltbb"]
+        return ["-ltbb"]
+    if backend == "OMP":
+        libomp = _optional_tool_prefix("SMART_LIBOMP_PREFIX", "libomp")
+        if libomp is not None:
+            library = libomp / "lib" / "libomp.dylib"
+            if library.exists():
+                return [str(library)]
+            return ["-L", str(libomp / "lib"), "-lomp"]
+        return ["-lomp"]
+    return []
+
+
+def _macos_arm64_compile_flags() -> list[str]:
+    if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
+        return ["-arch", "arm64"]
+    return []
+
+
+def _macos_deployment_target() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    return os.environ.get("MACOSX_DEPLOYMENT_TARGET") or "11.0"
+
+
+def _macos_min_version_flags() -> list[str]:
+    target = _macos_deployment_target()
+    if target is None:
+        return []
+    return [f"-mmacosx-version-min={target}"]
+
+
+def _macos_cmake_platform_args() -> list[str]:
+    target = _macos_deployment_target()
+    if target is None:
+        return []
+    args = [f"-DCMAKE_OSX_DEPLOYMENT_TARGET={target}"]
+    if platform.machine().lower() in {"arm64", "aarch64"}:
+        args.append("-DCMAKE_OSX_ARCHITECTURES=arm64")
+    return args
 
 
 def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     vendored_manifold = REPO_ROOT / "smart" / "vendor" / "manifold"
-    default_manifold_python = vendored_manifold / "build" / "bindings" / "python"
+    packaged_manifold_python = REPO_ROOT / "smart" / "pymanifold_runtime"
+    source_manifold_python = vendored_manifold / "build" / "bindings" / "python"
+    default_manifold_python = (
+        packaged_manifold_python
+        if _first_pymanifold_binary(packaged_manifold_python) is not None
+        else source_manifold_python
+    )
     configured_manifold_python = os.environ.get("SMART_MANIFOLD_PYTHON")
     manifold_python_path = (
         Path(configured_manifold_python).expanduser()
@@ -51,20 +222,29 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
         )
 
     add("python", True, kind="runtime", detail=sys.version.split()[0], path=sys.executable)
-    rust_status = _smart_rust_status()
+    cpp_status = _smart_cpp_status()
     add(
-        "smart-rust-extension",
-        rust_status["ok"],
+        "smart-cpp-extension",
+        cpp_status["ok"],
         kind="python-extension",
-        detail=rust_status["detail"],
-        path=rust_status["path"],
+        detail=cpp_status["detail"],
+        path=cpp_status["path"],
         required_for=[],
+    )
+    compat_spec = importlib.util.find_spec("smart.pymesh_compat")
+    add(
+        "smart-pymesh-compat",
+        compat_spec is not None,
+        kind="python-module",
+        detail="official minimal PyMesh replacement used by SMART legacy runtimes",
+        path=getattr(compat_spec, "origin", None) if compat_spec is not None else None,
+        required_for=["merge", "refine", "mcts"],
     )
 
     for module_name, required_for in [
         ("numpy", ["preseg", "merge", "refine", "mcts", "render"]),
         ("trimesh", ["preseg", "merge", "refine", "mcts", "render"]),
-        ("pymesh", ["merge", "refine", "mcts"]),
+        ("pymesh", []),
         ("pymanifold", ["merge", "refine", "mcts"]),
         ("coacd", ["preseg"]),
         ("torch", ["merge", "refine", "mcts"]),
@@ -74,6 +254,8 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
         ok = spec is not None
         path = getattr(spec, "origin", None) if spec is not None else None
         detail = None
+        if module_name == "pymesh" and spec is not None:
+            detail = "legacy alias for smart.pymesh_compat"
         if module_name == "pymanifold" and spec is None:
             pymanifold_binary = _first_pymanifold_binary(manifold_python_path)
             if pymanifold_binary is not None:
@@ -116,6 +298,27 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
             detail=_git_source_detail(ftetwild_source, expected_remote=FTETWILD_REPO),
             required_for=[],
         )
+    coacd_source = repo_path(tools.get("coacd_external_root", "external/CoACD"))
+    if coacd_source is not None:
+        add(
+            "CoACD-source",
+            _source_ready(coacd_source),
+            kind="source-tree",
+            path=str(coacd_source),
+            detail=_git_source_detail(coacd_source, expected_remote=COACD_REPO),
+            required_for=[],
+        )
+    _check_executable(
+        checks,
+        "CoACD-CLI",
+        _env_or_config_path("SMART_COACD_BIN", tools.get("coacd_bin")),
+        fallback="coacd",
+        required_for=[],
+        extra_candidates=[
+            str(REPO_ROOT / "external" / "CoACD" / "python" / "package" / "bin" / "coacd"),
+            str(REPO_ROOT / "external" / "CoACD" / "build" / "main"),
+        ],
+    )
     _check_executable(
         checks,
         "Blender",
@@ -124,23 +327,21 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
         extra_candidates=["/Applications/Blender.app/Contents/MacOS/blender"],
         required_for=["render"],
     )
+    cpp_native_path = native_executable_path(tools.get("smart_cpp_native_bin"))
+    cpp_native_bin = str(cpp_native_path) if cpp_native_path is not None else None
+    checks.append(
+        {
+            "name": "smart-cpp-native",
+            "kind": "executable",
+            "ok": cpp_native_bin is not None,
+            "detail": None if cpp_native_bin else "not found; run `smart build-cpp`",
+            "path": cpp_native_bin,
+            "required_for": [],
+        }
+    )
     _check_executable(checks, "cmake", None, fallback="cmake", required_for=["build-tools"])
     _check_executable(checks, "git", None, fallback="git", required_for=["build-tools"])
-    _check_executable(
-        checks,
-        "cargo",
-        _env_or_config_path("SMART_CARGO_BIN", tools.get("cargo_bin")),
-        fallback="cargo",
-        required_for=["build-rust"],
-    )
-    _check_executable(
-        checks,
-        "maturin",
-        _env_or_config_path("SMART_MATURIN_BIN", tools.get("maturin_bin")),
-        fallback="maturin",
-        required_for=["build-rust"],
-    )
-
+    pymanifold_runtime_available = _first_pymanifold_binary(default_manifold_python) is not None
     add(
         "vendored-manifold-source",
         (vendored_manifold / "CMakeLists.txt").exists()
@@ -148,7 +349,7 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
         kind="source-tree",
         path=str(vendored_manifold),
         detail="kept as fixed C++ binding source; do not pull or replace",
-        required_for=["build-tools", "merge", "refine", "mcts"],
+        required_for=[] if pymanifold_runtime_available else ["build-tools"],
     )
 
     if configured_manifold_python:
@@ -165,15 +366,11 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
             default_manifold_python.exists(),
             kind="env-path",
             path=str(default_manifold_python),
-            detail="not set; default vendored build path checked",
+            detail="not set; default pymanifold runtime path checked",
             required_for=["merge", "refine", "mcts"],
         )
 
-    required_failures = [
-        check
-        for check in checks
-        if check["required_for"] and not check["ok"] and "build-rust" not in check["required_for"]
-    ]
+    required_failures = [check for check in checks if check["required_for"] and not check["ok"]]
     optional_failures = [check for check in checks if not check["ok"] and check not in required_failures]
     return {
         "ok": not required_failures,
@@ -183,29 +380,24 @@ def diagnose_environment(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _smart_rust_status() -> dict[str, Any]:
+def _smart_cpp_status() -> dict[str, Any]:
     try:
-        from .. import rust as smart_rust
+        from .. import cpp as smart_cpp
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
-            "detail": f"import failed; Python fallbacks active: {exc}",
+            "detail": f"import failed: {exc}",
             "path": None,
         }
-
-    features = smart_rust.backend_features()
-    available = sum(1 for enabled in features.values() if enabled)
-    total = len(features)
-    if smart_rust.using_rust():
-        missing = [name for name, enabled in features.items() if not enabled]
-        detail = f"loaded; kernels={available}/{total}"
-        if missing:
-            detail += "; missing=" + ",".join(missing)
-        return {"ok": True, "detail": detail, "path": smart_rust.backend_path()}
-
+    if smart_cpp.using_cpp():
+        return {
+            "ok": True,
+            "detail": "loaded; native C++ core and fixed-Manifold bridge available",
+            "path": smart_cpp.backend_path(),
+        }
     return {
         "ok": False,
-        "detail": f"not installed; Python fallbacks active; kernels={available}/{total}",
+        "detail": "not installed; run: smart build-cpp",
         "path": None,
     }
 
@@ -252,7 +444,9 @@ def _git_source_detail(path: Path, *, expected_remote: str | None = None) -> str
 
 
 def build_tools(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
-    root = repo_path(cfg.get("tools", {}).get("mesh2tet_external_root", "external/mesh2tet"))
+    tools = cfg.get("tools", {})
+    assert isinstance(tools, dict)
+    root = repo_path(tools.get("mesh2tet_external_root", "external/mesh2tet"))
     assert root is not None
     if not dry_run:
         root.mkdir(parents=True, exist_ok=True)
@@ -310,6 +504,26 @@ def build_tools(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
         )
     )
 
+    coacd_root = repo_path(tools.get("coacd_external_root", "external/CoACD"))
+    if coacd_root is not None:
+        if not _source_ready(coacd_root):
+            if coacd_root.exists() and not dry_run:
+                shutil.rmtree(coacd_root)
+            result = run_command(
+                ["git", "clone", "--recursive", COACD_REPO, str(coacd_root)],
+                timeout=3600,
+                log_path=log_root / "clone-coacd.log",
+                dry_run=dry_run,
+            )
+            messages.append(_line("CoACD source clone", result.returncode, dry_run))
+        if _bool_env_or_config("SMART_COACD_BUILD", tools.get("coacd_build"), default=False):
+            messages.extend(_cmake_build(coacd_root, log_root, "coacd", dry_run=dry_run))
+        else:
+            messages.append(
+                f"CoACD source checkout: {'dry-run -> ' if dry_run else ''}{coacd_root}; "
+                "runtime uses the upstream CoACD CLI when available"
+            )
+
     messages.extend(build_vendored_manifold_binding(cfg, dry_run=dry_run))
     messages.append(f"Set SMART_MANIFOLDPLUS_BIN={manifoldplus / 'build' / 'manifold'} if it is not on PATH.")
     messages.append(f"Set SMART_FTETWILD_BIN={ftetwild / 'build' / 'FloatTetwild_bin'} if it is not on PATH.")
@@ -337,19 +551,34 @@ def _check_executable(
     path = _resolve_executable(explicit, f"SMART_{name.upper()}_BIN", fallback)
     if path is None:
         for candidate in extra_candidates or []:
-            if Path(candidate).exists():
+            if _is_executable_or_python_script(Path(candidate)):
                 path = candidate
                 break
+    detail = None if path else f"not found; configure tools.{name.lower()}_bin or environment override"
+    if path is not None and not os.access(path, os.X_OK):
+        detail = "Python script without executable bit; SMART will launch it through Python"
     checks.append(
         {
             "name": name,
             "kind": "executable",
             "ok": path is not None,
-            "detail": None if path else f"not found; configure tools.{name.lower()}_bin or environment override",
+            "detail": detail,
             "path": path,
             "required_for": required_for,
         }
     )
+
+
+def _is_executable_or_python_script(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if os.access(path, os.X_OK):
+        return True
+    try:
+        header = path.read_bytes()[:128]
+    except OSError:
+        return False
+    return header.startswith(b"#!") and b"python" in header.lower()
 
 
 def _resolve_executable(explicit: str | None, env_name: str, fallback: str) -> str | None:
@@ -360,7 +589,7 @@ def _resolve_executable(explicit: str | None, env_name: str, fallback: str) -> s
                 return found
         explicit_path = repo_path(explicit)
         assert explicit_path is not None
-        if explicit_path.exists():
+        if _is_executable_or_python_script(explicit_path):
             return str(explicit_path)
         return None
     return find_executable(None, env_name, fallback)
@@ -372,117 +601,246 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
     workspace = repo_path(cfg.get("workspace", "runs/demo"))
     assert workspace is not None
     log_root = workspace / "logs" / "build-tools"
-    return _cmake_build(
+    manifold_parallel = _manifold_parallel_backend(cfg)
+    manifold_use_cuda = _manifold_use_cuda(cfg)
+    cmake_args = [
+        "-DMANIFOLD_PYBIND=ON",
+        "-DMANIFOLD_CBIND=OFF",
+        f"-DMANIFOLD_PAR={manifold_parallel}",
+        f"-DMANIFOLD_USE_CUDA={'ON' if manifold_use_cuda else 'OFF'}",
+        f"-DPython3_EXECUTABLE={sys.executable}",
+        f"-DPYTHON_EXECUTABLE={sys.executable}",
+    ] + _manifold_parallel_cmake_args(manifold_parallel)
+    if sys.platform == "darwin":
+        cmake_args.append(
+            "-DCMAKE_CXX_FLAGS=-D_VSTD=std -Wno-error=missing-template-arg-list-after-template-kw"
+        )
+    messages = _cmake_build(
         source,
         log_root,
         "vendored-manifold",
         build_dir=build,
         build_target="pymanifold",
-        cmake_args=[
-            "-DMANIFOLD_PYBIND=ON",
-            "-DMANIFOLD_CBIND=OFF",
-            "-DMANIFOLD_USE_CUDA=OFF",
-            "-DCMAKE_CXX_FLAGS=-D_VSTD=std -Wno-error=missing-template-arg-list-after-template-kw",
-        ],
+        cmake_args=cmake_args,
         dry_run=dry_run,
     )
-
-
-def build_rust_extension(cfg: dict[str, Any], *, dry_run: bool = False, release: bool = True) -> list[str]:
-    workspace = repo_path(cfg.get("workspace", "runs/demo"))
-    assert workspace is not None
-    log_root = workspace / "logs" / "build-rust"
-    wheel_root = log_root / "wheels"
-    if not dry_run:
-        wheel_root.mkdir(parents=True, exist_ok=True)
-    project = REPO_ROOT
-    root_pyproject = project / "pyproject.toml"
-    root_cargo = project / "Cargo.toml"
-    rust_manifest = project / "rust" / "smart-core" / "Cargo.toml"
-    if not dry_run and not (root_pyproject.exists() and root_cargo.exists() and rust_manifest.exists()):
-        return [
-            "smart-bbox maturin build: failed rc=127",
-            "smart build-rust requires a SMART source checkout; release wheels already bundle smart._rust.",
-        ]
-    tools = cfg.get("tools", {})
-    assert isinstance(tools, dict)
-    maturin = _resolve_executable(
-        _env_or_config_path("SMART_MATURIN_BIN", tools.get("maturin_bin")),
-        "SMART_MATURIN_BIN",
-        "maturin",
+    messages.append(
+        "Vendored Manifold build backend: "
+        f"MANIFOLD_PAR={manifold_parallel}, "
+        f"MANIFOLD_USE_CUDA={'ON' if manifold_use_cuda else 'OFF'}"
     )
-    if maturin is None and not dry_run:
-        return ["smart-bbox maturin build: failed rc=127", "Install maturin, then rerun: smart build-rust"]
-
-    python = str(cfg.get("python") or sys.executable)
-    rust_target = str(tools.get("rust_target") or _default_rust_target())
-    command = [maturin or "maturin", "build", "--interpreter", python, "--out", str(wheel_root)]
-    if rust_target:
-        command.extend(["--target", rust_target])
-    if release:
-        command.append("--release")
-
-    build_result = run_command(
-        command,
-        cwd=project,
-        timeout=3600,
-        log_path=log_root / "maturin-build.log",
-        dry_run=dry_run,
-    )
-    messages = [_line("smart-bbox maturin build", build_result.returncode, dry_run)]
-    if not build_result.ok and not dry_run:
-        messages.append("Install Rust/Cargo and maturin, then rerun: smart build-rust")
-        return messages
-
-    wheels = sorted(wheel_root.glob("smart_bbox-*.whl"), key=lambda path: path.stat().st_mtime)
-    wheel = wheels[-1] if wheels else wheel_root / "smart_bbox-*.whl"
-    install_command = [python, "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel)]
-    install_result = run_command(
-        install_command,
-        timeout=900,
-        log_path=log_root / "pip-install-smart-bbox.log",
-        dry_run=dry_run,
-    )
-    messages.append(_line("smart-bbox pip install", install_result.returncode, dry_run))
-    if install_result.ok or dry_run:
-        extracted = _extract_local_rust_extension(wheel, dry_run=dry_run)
-        if extracted:
-            messages.append(extracted)
+    messages.append(_stage_pymanifold_runtime(build / "bindings" / "python", dry_run=dry_run))
     return messages
 
 
-def _extract_local_rust_extension(wheel: Path, *, dry_run: bool = False) -> str | None:
+def _stage_pymanifold_runtime(source_dir: Path, *, dry_run: bool = False) -> str:
+    destination = REPO_ROOT / "smart" / "pymanifold_runtime"
     if dry_run:
-        return "smart._rust local source extension: dry-run"
-    if not wheel.exists():
-        return None
-    destination = REPO_ROOT / "smart"
-    if not destination.exists():
-        return None
-    with zipfile.ZipFile(wheel) as archive:
-        members = [
-            name
-            for name in archive.namelist()
-            if name.startswith("smart/_rust")
-            and (name.endswith(".so") or name.endswith(".pyd") or name.endswith(".dll"))
+        return f"pymanifold runtime staging: dry-run -> {destination}"
+    binary = _first_pymanifold_binary(source_dir)
+    if binary is None:
+        return f"pymanifold runtime staging: failed; no pymanifold binary in {source_dir}"
+    destination.mkdir(parents=True, exist_ok=True)
+    for pattern in ("pymanifold*.so", "pymanifold*.pyd", "pymanifold*.dylib"):
+        for existing in destination.glob(pattern):
+            existing.unlink()
+    target = destination / binary.name
+    shutil.copy2(binary, target)
+    return f"pymanifold runtime staging: ok -> {target}"
+
+
+def build_cpp_extension(
+    cfg: dict[str, Any],
+    *,
+    dry_run: bool = False,
+    release: bool = True,
+    asan: bool = False,
+) -> list[str]:
+    workspace = repo_path(cfg.get("workspace", "runs/demo"))
+    assert workspace is not None
+    log_root = workspace / "logs" / "build-cpp"
+    if not dry_run:
+        log_root.mkdir(parents=True, exist_ok=True)
+
+    compiler = (
+        str(cfg.get("tools", {}).get("cxx_bin"))
+        if isinstance(cfg.get("tools"), dict) and cfg.get("tools", {}).get("cxx_bin")
+        else os.environ.get("CXX")
+        or "c++"
+    )
+    pybind_include = REPO_ROOT / "smart/vendor/manifold/bindings/python/third_party/pybind11/include"
+    manifold_root = REPO_ROOT / "smart/vendor/manifold"
+    manifold_lib_dir = manifold_root / "build/src/manifold"
+    manifold_lib = manifold_lib_dir / "libmanifold.a"
+    module_source = REPO_ROOT / "cpp/smart_cpp_module.cpp"
+    native_source = REPO_ROOT / "cpp/smart_native_core.cpp"
+    engine_source = REPO_ROOT / "cpp/smart_native_engine.cpp"
+    bridge_source = REPO_ROOT / "cpp/manifold_bridge.cpp"
+    cli_source = REPO_ROOT / "cpp/smart_native_cli.cpp"
+
+    missing = [
+        path
+        for path in [
+            pybind_include / "pybind11/pybind11.h",
+            manifold_lib,
+            module_source,
+            native_source,
+            engine_source,
+            bridge_source,
+            cli_source,
+            REPO_ROOT / "cpp/smart_native_engine.hpp",
         ]
-        if not members:
-            return None
-        for existing in destination.glob("_rust*.so"):
-            existing.unlink()
-        for existing in destination.glob("_rust*.pyd"):
-            existing.unlink()
-        for member in members:
-            target = destination / Path(member).name
-            with archive.open(member) as source, target.open("wb") as sink:
-                shutil.copyfileobj(source, sink)
-    return f"smart._rust local source extension: ok -> {destination}"
+        if not path.exists()
+    ]
+    if missing and not dry_run:
+        return [
+            "smart._cpp C++ build: failed rc=127",
+            "Missing required source/build artifact(s): " + ", ".join(str(path) for path in missing),
+            "Run: smart build-tools --only-manifold-binding",
+        ]
 
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    tmp_output = log_root / f"_cpp{ext_suffix}"
+    destination = REPO_ROOT / "smart" / f"_cpp{ext_suffix}"
 
-def _default_rust_target() -> str | None:
-    if sys.platform == "darwin" and platform.machine() == "arm64":
-        return "aarch64-apple-darwin"
-    return None
+    include_dirs = [
+        Path(sysconfig.get_paths()["include"]),
+        Path(sysconfig.get_paths().get("platinclude") or sysconfig.get_paths()["include"]),
+        pybind_include,
+        REPO_ROOT / "cpp",
+        manifold_root / "src/manifold/include",
+        manifold_root / "src/utilities/include",
+        manifold_root / "src/polygon/include",
+        manifold_root / "src/collider/include",
+        manifold_root / "src/sdf/include",
+        manifold_root / "src/third_party/glm",
+    ]
+    command = [
+        compiler,
+        *_macos_arm64_compile_flags(),
+        *_macos_min_version_flags(),
+        "-std=c++17",
+        "-fPIC",
+        "-shared",
+        "-DNDEBUG",
+        "-O3" if release else "-O0",
+        "-o",
+        str(tmp_output),
+        str(module_source),
+        str(native_source),
+        str(bridge_source),
+    ]
+    for include_dir in include_dirs:
+        command.extend(["-I", str(include_dir)])
+    command.append(str(manifold_lib))
+    command.extend(_manifold_native_link_args(manifold_root))
+    if sys.platform == "darwin":
+        command.extend(["-undefined", "dynamic_lookup"])
+    else:
+        command.append("-lstdc++")
+
+    build_result = run_command(
+        command,
+        cwd=REPO_ROOT,
+        timeout=900,
+        log_path=log_root / "cpp-build.log",
+        dry_run=dry_run,
+    )
+    messages = [_line("smart._cpp C++ build", build_result.returncode, dry_run)]
+    if not build_result.ok and not dry_run:
+        messages.append("Check the C++ build log, then rerun: smart build-cpp")
+        return messages
+
+    cli_output = REPO_ROOT / "build" / "smart-cpp-native"
+    if not dry_run:
+        cli_output.parent.mkdir(parents=True, exist_ok=True)
+    cli_command = [
+        compiler,
+        *_macos_arm64_compile_flags(),
+        *_macos_min_version_flags(),
+        "-std=c++17",
+        "-DNDEBUG",
+        "-O3" if release else "-O0",
+        "-o",
+        str(cli_output),
+        str(cli_source),
+        str(native_source),
+        str(engine_source),
+        str(bridge_source),
+    ]
+    for include_dir in include_dirs:
+        cli_command.extend(["-I", str(include_dir)])
+    cli_command.append(str(manifold_lib))
+    cli_command.extend(_manifold_native_link_args(manifold_root))
+    if sys.platform != "darwin":
+        cli_command.append("-lstdc++")
+    cli_result = run_command(
+        cli_command,
+        cwd=REPO_ROOT,
+        timeout=300,
+        log_path=log_root / "cpp-native-cli-build.log",
+        dry_run=dry_run,
+    )
+    messages.append(_line("smart-cpp-native executable build", cli_result.returncode, dry_run))
+    if not cli_result.ok and not dry_run:
+        messages.append("Check the C++ native executable build log, then rerun: smart build-cpp")
+        return messages
+
+    asan_output = REPO_ROOT / "build" / "smart-cpp-native-asan"
+    if asan:
+        asan_command = [
+            compiler,
+            *_macos_arm64_compile_flags(),
+            *_macos_min_version_flags(),
+            "-std=c++17",
+            "-gline-tables-only",
+            "-O0",
+            "-fno-omit-frame-pointer",
+            "-fsanitize=address",
+            "-o",
+            str(asan_output),
+            str(cli_source),
+            str(native_source),
+            str(engine_source),
+            str(bridge_source),
+        ]
+        for include_dir in include_dirs:
+            asan_command.extend(["-I", str(include_dir)])
+        asan_command.append(str(manifold_lib))
+        asan_command.extend(_manifold_native_link_args(manifold_root))
+        asan_command.append("-fsanitize=address")
+        if sys.platform != "darwin":
+            asan_command.append("-lstdc++")
+        asan_result = run_command(
+            asan_command,
+            cwd=REPO_ROOT,
+            timeout=1200,
+            log_path=log_root / "cpp-native-cli-asan-build.log",
+            dry_run=dry_run,
+        )
+        messages.append(_line("smart-cpp-native ASan executable build", asan_result.returncode, dry_run))
+        if not asan_result.ok and not dry_run:
+            messages.append("Check the C++ ASan native executable build log, then rerun: smart build-cpp --asan")
+            return messages
+
+    if dry_run:
+        messages.append("smart._cpp local source extension: dry-run")
+        messages.append("smart-cpp-native executable: dry-run")
+        if asan:
+            messages.append("smart-cpp-native ASan executable: dry-run")
+        return messages
+
+    for existing in (REPO_ROOT / "smart").glob("_cpp*.so"):
+        existing.unlink()
+    for existing in (REPO_ROOT / "smart").glob("_cpp*.pyd"):
+        existing.unlink()
+    shutil.copy2(tmp_output, destination)
+    messages.append(f"smart._cpp local source extension: ok -> {destination}")
+    messages.append(f"smart-cpp-native executable: ok -> {cli_output}")
+    if asan:
+        asan_output.chmod(asan_output.stat().st_mode | 0o755)
+        messages.append(f"smart-cpp-native ASan executable: ok -> {asan_output}")
+    return messages
 
 
 def _cmake_build(
@@ -505,7 +863,7 @@ def _cmake_build(
         "-B",
         str(build),
         "-DCMAKE_BUILD_TYPE=Release",
-    ] + (cmake_args or [])
+    ] + _macos_cmake_platform_args() + (cmake_args or [])
     result = run_command(
         configure,
         timeout=3600,

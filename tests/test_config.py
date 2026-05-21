@@ -1,163 +1,237 @@
 from __future__ import annotations
 
+import json
 import os
+import sys
+from pathlib import Path
+
+import pytest
 
 from smart.pipeline.config import load_config
 from smart.pipeline.stages import (
+    _run_coacd_cli_preseg,
+    _write_coacd_partition_metadata,
     bbox_dir_for_render,
     inspect_tetra_output,
     latest_bbox_dir,
     list_mesh_ids,
     run_local_refine_mesh,
+    run_merge_mesh,
+    run_refine_mesh,
     run_mcts_mesh,
+    run_native_pipelines,
     validate_tetra_output,
 )
 from smart.pipeline import tools as pipeline_tools
-from smart.pipeline.tools import _first_pymanifold_binary, build_rust_extension, diagnose_environment
-from smart.cli import _apply_override
+from smart.pipeline.tools import (
+    _first_pymanifold_binary,
+    build_cpp_extension,
+    build_vendored_manifold_binding,
+    diagnose_environment,
+)
+from smart.cli import _apply_override, main as smart_main
 from smart.evaluation import EvaluationRecord, summarize_records
 import smart
-
 
 def test_demo_config_loads() -> None:
     cfg = load_config("configs/demo.yaml")
     assert cfg["run_name"] == "demo"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["merge"]["backend"] == "cpp_native"
+    assert cfg["refine"]["backend"] == "cpp_native"
+    assert cfg["mcts"]["backend"] == "cpp_native"
+    assert cfg["normalization"]["backend"] == "cpp_native_executable"
+    assert cfg["normalization"]["native_executable_required"] is True
+    assert cfg["preseg"]["backend"] == "coacd_cli"
+    assert cfg["preseg"]["partition_metadata_backend"] == "cpp_native"
+    assert cfg["preseg"]["partition_metadata_required"] is True
     assert [category["name"] for category in cfg["categories"]] == ["airplane", "chair", "table"]
+    assert cfg["tools"]["coacd_external_root"] == "external/CoACD"
+    assert cfg["tools"]["coacd_build"] is False
+    assert cfg["local_refine_gate"]["enabled"] is False
 
 
-def test_accelerated_search_profile_is_opt_in() -> None:
-    cfg = load_config("configs/accelerated_search_experimental.yaml")
+def test_root_config_profiles_are_packaged_and_synced() -> None:
+    root_profiles = sorted(Path("configs").glob("*.yaml"))
+    packaged_profiles = {path.name: path for path in Path("smart/configs").glob("*.yaml")}
 
-    assert cfg["run_name"] == "accelerated_search_experimental"
-    assert cfg["mcts"]["backend"] == "rust_stateful"
-    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["action_prior_weight"] == 0.1
-    assert cfg["mcts"]["action_prior_path"] == "smart/assets/priors/category_general_expanded_full_mlp_prior.json"
-    assert cfg["mcts"]["allow_search_order_changes"] is True
-
-
-def test_accelerated_exact_profile_keeps_legacy_manifold_reward() -> None:
-    cfg = load_config("configs/accelerated_exact.yaml")
-
-    assert cfg["run_name"] == "accelerated_exact"
-    assert cfg["refine"]["reward_backend"] == "manifold"
-    assert cfg["mcts"]["reward_backend"] == "manifold"
-    assert cfg["refine"]["manifold_volume_method"] == "mesh"
-    assert cfg["mcts"]["manifold_volume_method"] == "mesh"
-    assert cfg["refine"]["backend"] == "auto"
-    assert cfg["mcts"]["backend"] == "auto"
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    assert root_profiles
+    for root_profile in root_profiles:
+        packaged_profile = packaged_profiles.get(root_profile.name)
+        assert packaged_profile is not None, f"missing packaged config: {root_profile.name}"
+        assert root_profile.read_text(encoding="utf-8") == packaged_profile.read_text(encoding="utf-8")
 
 
-def test_stateful_exact_profile_is_experimental_opt_in() -> None:
-    cfg = load_config("configs/stateful_exact_experimental.yaml")
+def test_smart_cli_lists_config_profiles(capsys) -> None:
+    assert smart_main(["configs", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    names = {item["name"] for item in payload}
 
-    assert cfg["run_name"] == "stateful_exact_experimental"
-    assert cfg["refine"]["backend"] == "rust_stateful"
-    assert cfg["mcts"]["backend"] == "auto"
+    assert "smoke_5.yaml" in names
+    assert "example_3x3.yaml" in names
+    assert all("_experimental" not in name for name in names)
+
+
+def test_native_run_dry_run_manifests_monolithic_cpp_pipeline(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+            "tetra": {"epsilon": 0.003, "edge_length": 0.2},
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.stage == "native_pipeline"
+    assert record.status == "dry_run"
+    assert record.command is not None
+    assert "run-pipeline" in record.command
+    assert "--epsilon" in record.command
+    assert record.command[record.command.index("--epsilon") + 1] == "0.003"
+    assert (tmp_path / "runs" / "manifests" / "native_pipeline.jsonl").exists()
+
+
+def test_public_api_lists_config_profiles() -> None:
+    profiles = smart.config_profiles()
+    names = {item["name"] for item in profiles}
+
+    assert "smoke_5.yaml" in names
+    assert "example_3x3.yaml" in names
+    assert all("_experimental" not in name for name in names)
+
+
+def test_public_api_lists_and_resolves_packaged_assets() -> None:
+    gates = smart.asset_profiles("gates")
+    priors = smart.asset_profiles("priors")
+
+    assert gates == []
+    assert priors == []
+    with pytest.raises(FileNotFoundError):
+        smart.asset_path("gates", "rich")
+
+
+def test_smart_cli_lists_packaged_assets(capsys) -> None:
+    assert smart_main(["assets", "--kind", "gates", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == []
+
+
+def test_cpp_native_engine_sets_native_stage_defaults(tmp_path) -> None:
+    config_path = tmp_path / "cpp_native_minimal.yaml"
+    config_path.write_text(
+        """
+run_name: cpp_native_minimal
+workspace: runs/cpp_native_minimal
+engine: cpp_native
+categories: []
+""",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg["merge"]["backend"] == "cpp_native"
+    assert cfg["refine"]["backend"] == "cpp_native"
+    assert cfg["mcts"]["backend"] == "cpp_native"
+    assert cfg["merge"]["direct_file_runner_required"] is True
+    assert cfg["refine"]["direct_file_runner_required"] is True
+    assert cfg["mcts"]["direct_file_runner_required"] is True
+    assert cfg["normalization"]["native_executable_required"] is True
+    assert cfg["preseg"]["backend"] == "coacd_cli"
+    assert cfg["preseg"]["partition_metadata_backend"] == "cpp_native"
+    assert cfg["preseg"]["partition_metadata_required"] is True
     assert cfg["refine"]["reward_backend"] == "manifold_stateful"
     assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["refine"]["stateful_union_cache"] is False
-    assert cfg["mcts"]["stateful_union_cache"] is False
-    assert cfg["mcts"]["allow_search_order_changes"] is False
 
 
-def test_candidate_bitset_profile_keeps_legacy_mcts_tree() -> None:
-    cfg = load_config("configs/candidate_bitset_exact_experimental.yaml")
+def test_cpp_native_engine_preserves_explicit_legacy_stage_backend(tmp_path) -> None:
+    config_path = tmp_path / "cpp_native_explicit_legacy.yaml"
+    config_path.write_text(
+        """
+run_name: cpp_native_explicit_legacy
+workspace: runs/cpp_native_explicit_legacy
+engine: cpp_native
+categories: []
+merge:
+  backend: legacy_python
+refine:
+  backend: legacy_python
+mcts:
+  backend: legacy_python
+""",
+        encoding="utf-8",
+    )
 
-    assert cfg["run_name"] == "candidate_bitset_exact_experimental"
-    assert cfg["refine"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["backend"] == "auto"
-    assert cfg["mcts"]["candidate_backend"] == "bitset_topk"
-    assert cfg["mcts"]["candidate_top_k"] == 8
-    assert cfg["mcts"]["stateful_union_cache"] is False
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    cfg = load_config(config_path)
 
-
-def test_candidate_bitset_fast_profile_uses_smaller_topk() -> None:
-    cfg = load_config("configs/candidate_bitset_fast_experimental.yaml")
-
-    assert cfg["run_name"] == "candidate_bitset_fast_experimental"
-    assert cfg["refine"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["refine"]["candidate_backend"] == "bitset_topk"
-    assert cfg["mcts"]["candidate_backend"] == "bitset_topk"
-    assert cfg["refine"]["candidate_top_k"] == 3
-    assert cfg["mcts"]["candidate_top_k"] == 3
-    assert cfg["mcts"]["backend"] == "auto"
-    assert cfg["mcts"]["allow_search_order_changes"] is False
-
-
-def test_stateful_union_cache_profile_keeps_search_order_locked() -> None:
-    cfg = load_config("configs/stateful_union_cache_experimental.yaml")
-
-    assert cfg["run_name"] == "stateful_union_cache_experimental"
-    assert cfg["refine"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["refine"]["stateful_union_cache"] is True
-    assert cfg["mcts"]["stateful_union_cache"] is True
-    assert cfg["refine"]["candidate_backend"] == "exact"
-    assert cfg["mcts"]["candidate_backend"] == "exact"
-    assert cfg["mcts"]["backend"] == "auto"
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    assert cfg["merge"]["backend"] == "legacy_python"
+    assert cfg["refine"]["backend"] == "legacy_python"
+    assert cfg["mcts"]["backend"] == "legacy_python"
+    assert "direct_file_runner_required" not in cfg["merge"]
+    assert "direct_file_runner_required" not in cfg["refine"]
+    assert "direct_file_runner_required" not in cfg["mcts"]
 
 
-def test_properties_volume_profile_is_opt_in() -> None:
-    cfg = load_config("configs/properties_volume_experimental.yaml")
+def test_manifold_parallel_backend_config_aliases(monkeypatch) -> None:
+    monkeypatch.delenv("SMART_MANIFOLD_PAR", raising=False)
 
-    assert cfg["run_name"] == "properties_volume_experimental"
-    assert cfg["refine"]["reward_backend"] == "manifold_stateful"
-    assert cfg["mcts"]["reward_backend"] == "manifold_stateful"
-    assert cfg["refine"]["manifold_volume_method"] == "properties"
-    assert cfg["mcts"]["manifold_volume_method"] == "properties"
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    assert pipeline_tools._manifold_parallel_backend({}) == "NONE"
+    assert pipeline_tools._manifold_parallel_backend({"build_tools": {"manifold_parallel_backend": "omp"}}) == "OMP"
+    assert pipeline_tools._manifold_parallel_backend({"manifold": {"parallel_backend": "tbb"}}) == "TBB"
+    assert pipeline_tools._manifold_parallel_backend({"tools": {"manifold_parallel_backend": "serial"}}) == "NONE"
 
 
-def test_hybrid_local_search_profile_runs_after_mcts() -> None:
-    cfg = load_config("configs/hybrid_local_search_experimental.yaml")
+def test_manifold_parallel_backend_env_override_and_invalid(monkeypatch) -> None:
+    monkeypatch.setenv("SMART_MANIFOLD_PAR", "OpenMP")
+    assert pipeline_tools._manifold_parallel_backend({"build_tools": {"manifold_parallel_backend": "TBB"}}) == "OMP"
 
-    assert cfg["run_name"] == "hybrid_local_search_experimental"
-    assert cfg["stages"]["local_refine"] is True
-    assert cfg["local_refine"]["input_stage"] == "mcts"
-    assert cfg["local_refine"]["bbox_init"] == "bbox_direct"
-    assert cfg["local_refine"]["action_unit"] == 0.005
-    assert cfg["render"]["input_stage"] == "local_refine"
+    monkeypatch.setenv("SMART_MANIFOLD_PAR", "bad-backend")
+    with pytest.raises(ValueError, match="Unsupported Manifold parallel backend"):
+        pipeline_tools._manifold_parallel_backend({})
 
 
-def test_rl_policy_topk_profile_enables_opt_in_mcts_pruning() -> None:
-    cfg = load_config("configs/rl_policy_topk_experimental.yaml")
+def test_manifold_cuda_config_and_env(monkeypatch) -> None:
+    monkeypatch.delenv("SMART_MANIFOLD_USE_CUDA", raising=False)
 
-    assert cfg["run_name"] == "rl_policy_topk_experimental"
-    assert cfg["mcts"]["action_prior_path"].endswith("category_general_policy_value_agent_prior.json")
-    assert cfg["mcts"]["action_prior_top_k"] == 1
-    assert cfg["mcts"]["puct_prior_weight"] == 0.1
-    assert cfg["mcts"]["action_value_weight"] == 0.05
-    assert cfg["mcts"]["allow_search_order_changes"] is True
+    assert pipeline_tools._manifold_use_cuda({}) is False
+    assert pipeline_tools._manifold_use_cuda({"build_tools": {"manifold_use_cuda": True}}) is True
+    assert pipeline_tools._manifold_use_cuda({"manifold": {"use_cuda": "yes"}}) is True
+    assert pipeline_tools._manifold_use_cuda({"tools": {"manifold_use_cuda": "off"}}) is False
 
-
-def test_expanded_processed_smoke_uses_existing_workspace_and_balanced_meshes() -> None:
-    cfg = load_config("configs/expanded_processed_smoke.yaml")
-
-    assert cfg["run_name"] == "expanded_processed_smoke"
-    assert cfg["workspace"] == "runs/expanded_200"
-    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
-    assert counts == {"airplane": 3, "chair": 3, "table": 3}
-    assert cfg["mcts"]["mcts_iter"] == 20
-    assert cfg["mcts"]["max_step"] == 20
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    monkeypatch.setenv("SMART_MANIFOLD_USE_CUDA", "1")
+    assert pipeline_tools._manifold_use_cuda({"build_tools": {"manifold_use_cuda": False}}) is True
 
 
-def test_expanded_processed_16_uses_all_current_processed_meshes() -> None:
-    cfg = load_config("configs/expanded_processed_16.yaml")
+def test_manifold_parallel_cmake_args_on_darwin(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(pipeline_tools.sys, "platform", "darwin")
+    libomp = tmp_path / "libomp"
+    (libomp / "include").mkdir(parents=True)
+    (libomp / "lib").mkdir()
+    (libomp / "lib" / "libomp.dylib").write_text("", encoding="utf-8")
+    monkeypatch.setenv("SMART_LIBOMP_PREFIX", str(libomp))
 
-    assert cfg["run_name"] == "expanded_processed_16"
-    assert cfg["workspace"] == "runs/expanded_200"
-    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
-    assert counts == {"airplane": 6, "chair": 5, "table": 5}
-    assert cfg["mcts"]["mcts_iter"] == 20
-    assert cfg["mcts"]["max_step"] == 20
-    assert cfg["mcts"]["allow_search_order_changes"] is False
+    omp_args = pipeline_tools._manifold_parallel_cmake_args("OMP")
+    assert "-DOpenMP_C_LIB_NAMES=omp" in omp_args
+    assert any(str(libomp / "include") in arg for arg in omp_args)
+    assert any(str(libomp / "lib" / "libomp.dylib") in arg for arg in omp_args)
+
+    tbb = tmp_path / "tbb"
+    tbb.mkdir()
+    monkeypatch.setenv("SMART_TBB_PREFIX", str(tbb))
+    assert pipeline_tools._manifold_parallel_cmake_args("TBB") == [f"-DCMAKE_PREFIX_PATH={tbb}"]
 
 
 def test_demo_sample_counts_are_limited() -> None:
@@ -170,6 +244,13 @@ def test_smoke_config_uses_explicit_meshes() -> None:
     cfg = load_config("configs/smoke_5.yaml")
     counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
     assert counts == {"airplane": 2, "chair": 2, "table": 1}
+
+
+def test_example_3x3_config_uses_three_meshes_per_category() -> None:
+    cfg = load_config("configs/example_3x3.yaml")
+    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
+    assert counts == {"airplane": 3, "chair": 3, "table": 3}
+    assert cfg["workspace"] == "examples/runs/example_3x3"
 
 
 def test_cli_override_updates_nested_config_values() -> None:
@@ -261,17 +342,564 @@ def test_mcts_action_prior_top_k_requires_search_order_opt_in(tmp_path) -> None:
     assert "action_prior_top_k" in record.error
 
 
-def test_rust_mcts_backend_requires_search_order_opt_in(tmp_path) -> None:
+def test_mcts_escape_policy_requires_search_order_opt_in(tmp_path) -> None:
     cfg = {
         "workspace": str(tmp_path),
         "normalization": {"enabled": False},
-        "mcts": {"backend": "rust_stateful"},
+        "mcts": {"escape_policy": True},
     }
 
     record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
 
     assert record.status == "blocked"
-    assert "backend=rust/rust_stateful" in record.error
+    assert "escape_policy" in record.error
+
+
+def test_mcts_cpp_rng_requires_search_order_opt_in(tmp_path) -> None:
+    cfg = {
+        "workspace": str(tmp_path),
+        "normalization": {"enabled": False},
+        "mcts": {"cpp_rng": True},
+    }
+
+    record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
+
+    assert record.status == "blocked"
+    assert "cpp_rng" in record.error
+
+
+def test_cpp_mcts_backend_requires_search_order_opt_in(tmp_path) -> None:
+    cfg = {
+        "workspace": str(tmp_path),
+        "normalization": {"enabled": False},
+        "mcts": {"backend": "cpp_stateful"},
+    }
+
+    record = run_mcts_mesh(cfg, {"name": "table"}, "mesh-a")
+
+    assert record.status == "blocked"
+    assert "backend=cpp/cpp_stateful/cpp_native/native/native_stateful" in record.error
+
+
+def test_mcts_native_rollout_flags_are_forwarded(tmp_path) -> None:
+    bbox_root = tmp_path / "bbox_input"
+    (bbox_root / "result").mkdir(parents=True)
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "mcts": {
+            "backend": "cpp_stateful",
+            "allow_search_order_changes": True,
+            "path_to_bbox": str(bbox_root),
+            "native_axis_rollout_step": True,
+            "native_axis_rollout_segment": True,
+            "cpp_rng": True,
+            "cpp_rng_seed": 12345,
+        },
+    }
+
+    record = run_mcts_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(tmp_path / "table_meshes")},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert "--mcts_native_axis_rollout_step" in record.command
+    assert "--mcts_native_axis_rollout_segment" in record.command
+    assert "--mcts_cpp_rng" in record.command
+    assert record.command[record.command.index("--mcts_cpp_rng_seed") + 1] == "12345"
+
+
+def test_merge_cpp_native_backend_flags_are_forwarded(tmp_path) -> None:
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    (tetra_dir / "coacd").mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    (tetra_dir / "coacd" / "part_0000.obj").write_text("o part\n", encoding="utf-8")
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {
+            "backend": "cpp_native",
+            "init_type": "coacd",
+            "tilted": True,
+            "cpp_native_allow_tilted_axis": True,
+        },
+    }
+
+    record = run_merge_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert "--merge_backend" in record.command
+    assert record.command[record.command.index("--merge_backend") + 1] == "cpp_native"
+    assert "--cpp_native_merge_allow_tilted_axis" in record.command
+
+
+def test_cpp_native_merge_uses_direct_file_runner_when_partitions_exist(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    (tetra_dir / "coacd").mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    (tetra_dir / "coacd" / "part_0000.obj").write_text("o part\n", encoding="utf-8")
+    (tetra_dir / "coacd_partitions.json").write_text(
+        json.dumps({"partitions": [[0], [1]]}), encoding="utf-8"
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "init_type": "coacd",
+            "tilted": False,
+            "merge_eps": 0.02,
+            "fast_merge": True,
+        },
+    }
+
+    record = run_merge_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart-cpp-native", "merge"]
+    assert record.output_path is not None
+    assert record.output_path.endswith("greedy_segment0_coacd_mgeps0.02_fm.txt")
+
+
+def test_write_coacd_partition_metadata_caches_tet_assignments(tmp_path, monkeypatch) -> None:
+    class DummyManifold:
+        pass
+
+    class DummyMesh:
+        pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pymanifold",
+        type("DummyPyManifold", (), {"Manifold": DummyManifold, "Mesh": DummyMesh})(),
+    )
+    from smart.legacy.merging.src.utils import preseg as preseg_module
+    import smart.pymesh_compat as pymesh
+
+    tet_dir = tmp_path / "tetra" / "mesh-a"
+    (tet_dir / "coacd").mkdir(parents=True)
+    (tet_dir / "coacd" / "part_0000.obj").write_text("o part\n", encoding="utf-8")
+    (tet_dir / "coacd" / "part_0001.obj").write_text("o part\n", encoding="utf-8")
+
+    class FakeTetMesh:
+        voxels = [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4]]
+
+        def enable_connectivity(self) -> None:
+            self.enabled = True
+
+    fake_tetmesh = FakeTetMesh()
+
+    def fake_load_mesh(path):
+        assert Path(path) == tet_dir / "tetra.msh"
+        return fake_tetmesh
+
+    def fake_presegmentation(data_path, tetmsh, preseg_type, path_to_bbox, fn, debug=False):
+        assert Path(data_path) == tet_dir
+        assert tetmsh is fake_tetmesh
+        assert preseg_type == "coacd"
+        assert path_to_bbox == ""
+        assert fn == "mesh-a"
+        assert debug is False
+        return [[1, 0], [2]]
+
+    monkeypatch.setattr(pymesh, "load_mesh", fake_load_mesh)
+    monkeypatch.setattr(preseg_module, "presegmentation", fake_presegmentation)
+
+    metadata = _write_coacd_partition_metadata(tet_dir, "mesh-a", force=True)
+    payload = json.loads((tet_dir / "coacd_partitions.json").read_text(encoding="utf-8"))
+
+    assert metadata["partition_count"] == 2
+    assert metadata["partition_metadata_cached"] is False
+    assert payload["source"] == "smart.pipeline.preseg.coacd_partition_metadata"
+    assert payload["partitions"] == [[0, 1], [2]]
+    assert payload["part_obj_count"] == 2
+
+
+def test_write_coacd_partition_metadata_prefers_cpp_native(monkeypatch, tmp_path) -> None:
+    from smart import native_runner
+
+    tet_dir = tmp_path / "tetra" / "mesh-a"
+    (tet_dir / "coacd").mkdir(parents=True)
+    (tet_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    (tet_dir / "coacd" / "part_0000.obj").write_text("o part\n", encoding="utf-8")
+
+    def fake_available() -> bool:
+        return True
+
+    def fake_run_coacd_partition_from_files(**kwargs):
+        assert Path(kwargs["msh_path"]) == tet_dir / "tetra.msh"
+        assert Path(kwargs["coacd_dir"]) == tet_dir / "coacd"
+        assert Path(kwargs["output_path"]) == tet_dir / "coacd_partitions.json"
+        assert kwargs["mesh_id"] == "mesh-a"
+        Path(kwargs["output_path"]).write_text(
+            json.dumps({"partitions": [[0]], "source": "smart-cpp-native partition-coacd"}),
+            encoding="utf-8",
+        )
+        return {
+            "status": "success",
+            "output_path": Path(kwargs["output_path"]),
+            "metadata": {"backend": "smart-cpp-native"},
+        }
+
+    monkeypatch.setattr(native_runner, "cpp_native_file_runner_available", fake_available)
+    monkeypatch.setattr(native_runner, "run_coacd_partition_from_files", fake_run_coacd_partition_from_files)
+
+    metadata = _write_coacd_partition_metadata(tet_dir, "mesh-a", force=True)
+
+    assert metadata["partition_count"] == 1
+    assert metadata["partition_metadata_backend"] == "smart-cpp-native"
+    assert "partition_metadata_native_error" not in metadata
+
+
+def test_run_coacd_cli_preseg_splits_combined_obj(monkeypatch, tmp_path) -> None:
+    import smart.pipeline.stages as stages
+
+    coacd_bin = tmp_path / "coacd-main"
+    coacd_bin.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '-o' ]; then shift; out=\"$1\"; fi\n"
+        "  shift\n"
+        "done\n"
+        "cat > \"$out\" <<'EOF'\n"
+        "o convex_0\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 1 0\n"
+        "f 1 2 3\n"
+        "EOF\n",
+        encoding="utf-8",
+    )
+    coacd_bin.chmod(0o755)
+    surface = tmp_path / "tetra.msh__sf.obj"
+    surface.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    out_dir = tmp_path / "coacd"
+
+    class Completed:
+        returncode = 0
+        stdout = '{"parts":1}'
+        stderr = ""
+
+    def fake_run_native_command(args):
+        assert args[0] == "split-obj-parts"
+        output_dir = Path(args[args.index("--output_dir") + 1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "part_0000.obj").write_text(
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+            encoding="utf-8",
+        )
+        return Completed()
+
+    monkeypatch.setattr(stages, "native_executable_path", lambda: Path("/tmp/smart-cpp-native"))
+    monkeypatch.setattr(stages, "run_native_command", fake_run_native_command)
+
+    ok, metadata, error = _run_coacd_cli_preseg(
+        {
+            "tools": {"coacd_bin": str(coacd_bin)},
+        },
+        {
+            "timeout_sec": 30,
+            "coacd": {
+                "threshold": 0.05,
+                "max_convex_hull": 64,
+                "preprocess_mode": "auto",
+                "preprocess_resolution": 50,
+                "resolution": 2000,
+                "mcts_nodes": 20,
+                "mcts_iterations": 150,
+                "mcts_max_depth": 3,
+                "seed": 7777,
+            },
+        },
+        surface,
+        out_dir,
+        dry_run=False,
+    )
+
+    assert ok is True
+    assert error is None
+    assert metadata["backend"] == "coacd_cli"
+    assert metadata["parts"] == 1
+    assert (out_dir / "part_0000.obj").exists()
+
+
+def test_write_coacd_partition_metadata_can_require_cpp_native(monkeypatch, tmp_path) -> None:
+    from smart import native_runner
+
+    tet_dir = tmp_path / "tetra" / "mesh-a"
+    (tet_dir / "coacd").mkdir(parents=True)
+    (tet_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    (tet_dir / "coacd" / "part_0000.obj").write_text("o part\n", encoding="utf-8")
+
+    monkeypatch.setattr(native_runner, "cpp_native_file_runner_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="partition-coacd is required"):
+        _write_coacd_partition_metadata(tet_dir, "mesh-a", force=True, require_native=True)
+
+
+def test_cpp_native_file_runner_available_accepts_packaged_executable(monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("/tmp/smart-cpp-native"))
+    monkeypatch.setattr(native_runner, "smart_native", None)
+
+    assert native_runner.cpp_native_file_runner_available() is True
+
+
+def test_cpp_native_refine_uses_direct_file_runner_when_metadata_exists(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    segment = tetra_dir / "greedy_segment0_coacd_mgeps0.02_fm.txt"
+    segment.write_text("1\n0\n", encoding="utf-8")
+    (Path(str(segment) + ".bbox_params.json")).write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {"init_type": "coacd", "merge_eps": 0.02, "fast_merge": True},
+        "refine": {"backend": "cpp_native", "direct_file_runner": True},
+    }
+
+    record = run_refine_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart-cpp-native", "refine"]
+    assert record.output_path is not None
+    assert record.output_path.endswith("bboxs_steps0")
+
+
+def test_cpp_native_mcts_uses_direct_file_runner_when_metadata_exists(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    bbox_dir = tmp_path / "refine" / "table" / "exp" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
+    bbox_dir.mkdir(parents=True)
+    (bbox_dir / "bbox_params.json").write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {},
+        "mcts": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "mcts_iter": 2,
+            "max_step": 1,
+        },
+    }
+
+    record = run_mcts_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart-cpp-native", "mcts"]
+    assert record.output_path is not None
+    assert record.output_path.endswith("bboxs_steps0")
+
+
+def test_cpp_native_mcts_direct_file_runner_accepts_static_prior(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    bbox_dir = tmp_path / "refine" / "table" / "exp" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
+    bbox_dir.mkdir(parents=True)
+    (bbox_dir / "bbox_params.json").write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    prior = tmp_path / "prior.json"
+    prior.write_text(
+        json.dumps(
+            {
+                "policy_type": "coord_scale_count_prior",
+                "coord_scale_logits": {"6:0": 0.0},
+                "default_logit": -1.0,
+                "num_action_scale": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {},
+        "mcts": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "allow_search_order_changes": True,
+            "action_prior_path": str(prior),
+            "action_prior_weight": 0.1,
+            "action_prior_top_k": 1,
+            "mcts_iter": 2,
+            "max_step": 1,
+        },
+    }
+
+    record = run_mcts_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart-cpp-native", "mcts"]
+    assert "--action_prior_path" in record.command
+    assert record.command[record.command.index("--action_prior_weight") + 1] == "0.1"
+    assert record.command[record.command.index("--action_prior_top_k") + 1] == "1"
+
+
+def test_cpp_native_mcts_can_run_combined_refine_mcts_file_runner(tmp_path) -> None:
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    segment = tetra_dir / "greedy_segment0_coacd_mgeps0.02_fm.txt"
+    segment.write_text("1\n0\n", encoding="utf-8")
+    (Path(str(segment) + ".bbox_params.json")).write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {"init_type": "coacd", "merge_eps": 0.02, "fast_merge": True},
+        "refine": {"backend": "cpp_native", "max_step": 0},
+        "mcts": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "combined_refine": True,
+            "allow_search_order_changes": True,
+            "mcts_iter": 2,
+            "max_step": 1,
+        },
+    }
+
+    record = run_mcts_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart-cpp-native", "refine-mcts"]
+    assert record.command[record.command.index("--mcts_iter") + 1] == "2"
+    assert record.command[record.command.index("--mcts_max_step") + 1] == "1"
+    assert record.command[record.command.index("--refine_max_step") + 1] == "0"
+    assert record.output_path is not None
+    assert record.output_path.endswith("bboxs_steps0")
+    assert record.metadata["combined"] is True
+    assert record.metadata["single_mesh_load"] is True
+    assert record.metadata["single_state_bridge"] is True
+    assert "combined_stats_path" not in record.metadata
 
 
 def test_local_refine_stage_skips_when_mcts_output_missing(tmp_path) -> None:
@@ -317,12 +945,21 @@ def test_doctor_reports_runtime_and_vendored_manifold() -> None:
     checks = {check["name"]: check for check in status["checks"]}
 
     assert checks["python"]["ok"] is True
-    assert "smart-rust-extension" in checks
-    assert checks["smart-rust-extension"]["kind"] == "python-extension"
+    assert "smart-rust-extension" not in checks
+    assert checks["smart-cpp-extension"]["kind"] == "python-extension"
+    assert checks["smart-pymesh-compat"]["ok"] is True
+    assert checks["smart-pymesh-compat"]["required_for"] == ["merge", "refine", "mcts"]
+    assert checks["pymesh"]["detail"] == "legacy alias for smart.pymesh_compat"
+    assert checks["pymesh"]["required_for"] == []
     assert "vendored-manifold-source" in checks
     assert checks["vendored-manifold-source"]["detail"] == (
         "kept as fixed C++ binding source; do not pull or replace"
     )
+    assert checks["vendored-manifold-source"]["required_for"] == []
+    assert checks["CoACD-source"]["kind"] == "source-tree"
+    assert checks["CoACD-source"]["required_for"] == []
+    assert "smart-cpp-native" in checks
+    assert checks["smart-cpp-native"]["required_for"] == []
     assert isinstance(status["required_failures"], list)
     assert isinstance(status["optional_failures"], list)
 
@@ -334,13 +971,43 @@ def test_pymanifold_binary_probe(tmp_path) -> None:
     assert _first_pymanifold_binary(tmp_path) == binary
 
 
-def test_build_rust_requires_source_checkout(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(pipeline_tools, "REPO_ROOT", tmp_path / "installed_package")
+def test_build_vendored_manifold_dry_run_stages_runtime(tmp_path) -> None:
+    messages = build_vendored_manifold_binding({"workspace": str(tmp_path / "runs")}, dry_run=True)
 
-    messages = build_rust_extension({"workspace": str(tmp_path / "runs")})
+    assert "vendored-manifold configure: dry-run" in messages
+    assert "vendored-manifold build: dry-run" in messages
+    assert messages[-1].startswith("pymanifold runtime staging: dry-run")
 
-    assert messages[0] == "smart-bbox maturin build: failed rc=127"
-    assert "requires a SMART source checkout" in messages[1]
+
+def test_build_tools_dry_run_fetches_coacd_source(tmp_path) -> None:
+    messages = pipeline_tools.build_tools(
+        {
+            "workspace": str(tmp_path / "runs"),
+            "tools": {
+                "mesh2tet_external_root": str(tmp_path / "external" / "mesh2tet"),
+                "coacd_external_root": str(tmp_path / "external" / "CoACD"),
+            },
+        },
+        dry_run=True,
+    )
+
+    assert "CoACD source clone: dry-run" in messages
+    assert any(message.startswith("CoACD source checkout: dry-run -> ") for message in messages)
+
+
+def test_build_cpp_dry_run_can_request_asan_binary(tmp_path) -> None:
+    messages = build_cpp_extension({"workspace": str(tmp_path / "runs")}, dry_run=True, asan=True)
+
+    assert "smart._cpp C++ build: dry-run" in messages
+    assert "smart-cpp-native executable build: dry-run" in messages
+    assert "smart-cpp-native ASan executable build: dry-run" in messages
+    assert "smart-cpp-native ASan executable: dry-run" in messages
+
+
+def test_cli_build_cpp_accepts_asan_dry_run(capsys) -> None:
+    assert smart_main(["--config", "configs/smoke_5.yaml", "build-cpp", "--asan", "--dry-run"]) == 0
+    captured = capsys.readouterr()
+    assert "smart-cpp-native ASan executable build: dry-run" in captured.out
 
 
 def test_evaluation_summary_averages_successes_only() -> None:
@@ -480,6 +1147,47 @@ def test_public_api_exposes_dry_run_pipeline() -> None:
     assert len(records) == 1
     assert records[0]["stage"] == "normalize"
     assert records[0]["status"] in {"dry_run", "skipped"}
+
+
+def test_cli_global_dry_run_is_not_overridden_by_stage_parser(tmp_path: Path, capsys) -> None:
+    mesh_root = tmp_path / "meshes"
+    mesh_id = "mesh-a"
+    (mesh_root / mesh_id).mkdir(parents=True)
+    (mesh_root / mesh_id / "model.obj").write_text("v 0 0 0\n", encoding="utf-8")
+    workspace = tmp_path / "runs"
+    tetra_dir = workspace / "tetra" / "meshes_raw_e0.004_l0.2" / mesh_id
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh__sf.obj").write_text("v 0 0 0\n", encoding="utf-8")
+    config_path = tmp_path / "dry_run_cli.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "run_name: dry_run_cli",
+                f"workspace: {workspace}",
+                "stages:",
+                "  preseg: true",
+                "tetra:",
+                "  epsilon: 0.004",
+                "  edge_length: 0.2",
+                "preseg:",
+                "  type: coacd",
+                "normalization:",
+                "  enabled: false",
+                "categories:",
+                "  - name: chair",
+                f"    mesh_root: {mesh_root}",
+                "    limit: 1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert smart_main(["--config", str(config_path), "--dry-run", "run"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert summary["preseg"] == {"dry_run": 1}
+    assert not (tetra_dir / "coacd").exists()
 
 
 def test_public_api_doctor_and_data_checks() -> None:

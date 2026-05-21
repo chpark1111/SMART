@@ -92,6 +92,7 @@ def select_quality_guarded_run(
     baseline_label: str = "baseline",
     candidate_labels: list[str] | None = None,
     tolerance: float = 1e-9,
+    quality_score_tolerance: float | None = None,
     metric_tolerances: dict[str, float] | None = None,
     selection_objective: str = "legacy",
     quality_score_weights: dict[str, float] | None = None,
@@ -158,7 +159,7 @@ def select_quality_guarded_run(
             baseline_label,
             eligible,
             comparisons,
-            tolerance=tolerance,
+            tolerance=tolerance if quality_score_tolerance is None else float(quality_score_tolerance),
             quality_score_weights=quality_score_weights,
         )
     else:
@@ -210,7 +211,10 @@ def _successful_run(run: dict[str, Any] | None) -> bool:
         return False
     if run.get("evaluation_returncode") not in (None, 0):
         return False
-    return isinstance(run.get("summary"), dict)
+    summary = run.get("summary")
+    if not isinstance(summary, dict):
+        return False
+    return all(summary.get(key) is not None for key in METRIC_KEYS)
 
 
 def _first_successful_label(runs: dict[str, dict[str, Any]], labels: list[str] | None) -> str | None:

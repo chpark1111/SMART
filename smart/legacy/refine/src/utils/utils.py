@@ -7,9 +7,9 @@ from typing import Iterable, List
 import numpy as np
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
 
 
 def zip_strict(*iterables: Iterable) -> Iterable:
@@ -111,9 +111,11 @@ def set_random_seed(seed: int, using_cuda: bool = False, seed_torch: bool = True
 
 
 def calculate_reward(rewards: List[float], gamma: float) -> float:
-    if smart_rust is not None and len(rewards) >= 128:
+    if smart_native is not None and len(rewards) >= 128:
         try:
-            return smart_rust.discounted_reward(rewards, gamma)
+            if getattr(smart_native, "native_core_available", lambda: False)():
+                return smart_native.native_discounted_reward(rewards, gamma)
+            return smart_native.discounted_reward(rewards, gamma)
         except Exception:
             pass
 

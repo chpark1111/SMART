@@ -58,7 +58,7 @@
     "summary_metrics": false
   },
   "render": {
-    "backend": "blender",
+    "backend": "fallback",
     "input_stage": "mcts",
     "joint_mesh": false,
     "fallback": true,

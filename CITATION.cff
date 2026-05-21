@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use SMART, please cite the 3DV 2024 paper."
+title: "Split, Merge, and Refine: Fitting Tight Bounding Boxes via Over-Segmentation and Iterative Search"
+authors:
+  - family-names: "Park"
+    given-names: "Chanhyeok"
+  - family-names: "Sung"
+    given-names: "Minhyuk"
+year: 2024
+url: "https://github.com/chpark1111/SMART"
+repository-code: "https://github.com/chpark1111/SMART"
+license: "CC-BY-NC-SA-4.0"
+preferred-citation:
+  type: conference-paper
+  title: "Split, Merge, and Refine: Fitting Tight Bounding Boxes via Over-Segmentation and Iterative Search"
+  authors:
+    - family-names: "Park"
+      given-names: "Chanhyeok"
+    - family-names: "Sung"
+      given-names: "Minhyuk"
+  conference:
+    name: "International Conference on 3D Vision"
+  year: 2024
+  url: "https://arxiv.org/abs/2304.04336"

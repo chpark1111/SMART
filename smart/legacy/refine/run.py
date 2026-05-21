@@ -3,8 +3,12 @@ import pathlib
 import sys
 
 _SMART_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_PACKAGED_MANIFOLD_PYTHON = _SMART_ROOT / "pymanifold_runtime"
+_SOURCE_MANIFOLD_PYTHON = _SMART_ROOT / "vendor" / "manifold" / "build" / "bindings" / "python"
 _DEFAULT_MANIFOLD_PYTHON = (
-    _SMART_ROOT / "vendor" / "manifold" / "build" / "bindings" / "python"
+    _PACKAGED_MANIFOLD_PYTHON
+    if any(_PACKAGED_MANIFOLD_PYTHON.glob("pymanifold*"))
+    else _SOURCE_MANIFOLD_PYTHON
 )
 _MANIFOLD_PYTHON = pathlib.Path(
     os.environ.get("SMART_MANIFOLD_PYTHON", str(_DEFAULT_MANIFOLD_PYTHON))

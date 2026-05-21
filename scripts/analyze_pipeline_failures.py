@@ -37,6 +37,14 @@ def classify(record: dict[str, Any]) -> str:
         return "timeout"
     if "missing" in error:
         return "missing_input"
+    if "tetra element count below minimum" in error:
+        return "validation_too_few_tets"
+    if "surface face count below minimum" in error:
+        return "validation_surface_too_small"
+    if "surface is not watertight" in error:
+        return "validation_non_watertight_surface"
+    if "multiple connected components" in error:
+        return "validation_multi_component_surface"
     if "validation failed" in error:
         return "validation"
     attempts = metadata.get("attempts") if isinstance(metadata, dict) else None
@@ -46,6 +54,12 @@ def classify(record: dict[str, Any]) -> str:
             return "crash_sigsegv"
         if "timed out" in joined:
             return "timeout"
+        if "tetra element count below minimum" in joined:
+            return "validation_too_few_tets"
+        if "surface is not watertight" in joined:
+            return "validation_non_watertight_surface"
+        if "multiple connected components" in joined:
+            return "validation_multi_component_surface"
     return "failed_other"
 
 

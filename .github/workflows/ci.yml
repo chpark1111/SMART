@@ -1,0 +1,97 @@
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  python-checks:
+    name: Python checks
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          architecture: arm64
+
+      - name: Install build bootstrap dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML cmake wheel
+
+      - name: Build fixed Manifold Python runtime
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding
+
+      - name: Build native C++ extension
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: python -m smart --config configs/smoke_5.yaml build-cpp
+
+      - name: Install test dependencies
+        run: python -m pip install -e ".[pipeline,dev]"
+
+      - name: Compile Python sources
+        run: python -m compileall -q -x 'smart/vendor/.*' smart scripts tests pymesh.py
+
+      - name: Run focused tests
+        run: |
+          python -m pytest \
+            tests/test_config.py \
+            tests/test_cpp_extension.py \
+            tests/test_native_compat.py \
+            tests/test_evaluation.py \
+            tests/test_candidate_pruning_gate_dataset.py \
+            tests/test_release_wheel_audit.py \
+            -q
+
+  native-package:
+    name: Native C++ package smoke
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          architecture: arm64
+
+      - name: Install native package bootstrap dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML numpy cmake wheel twine
+
+      - name: Build fixed Manifold Python runtime
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding
+
+      - name: Build native C++ extension
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: python -m smart --config configs/smoke_5.yaml build-cpp
+
+      - name: Build and audit native C++ wheel
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          python setup.py bdist_wheel --dist-dir wheelhouse-cpp
+          python scripts/audit_release_wheel.py wheelhouse-cpp/*.whl
+          python -m twine check wheelhouse-cpp/*.whl
+
+      - name: Smoke native C++ install
+        run: |
+          python -m venv --system-site-packages /tmp/smart-cpp-ci-venv
+          /tmp/smart-cpp-ci-venv/bin/python -m pip install --no-deps --force-reinstall wheelhouse-cpp/*.whl
+          /tmp/smart-cpp-ci-venv/bin/python -c "import smart, smart.native as sn, smart.cpp as sc, smart.pymesh_compat as compat, pymesh; from smart.pipeline.config import load_config; from smart.pipeline.tools import diagnose_environment; status = diagnose_environment(load_config('smoke_5.yaml')); checks = {c['name']: c for c in status['checks']}; assert sn.using_cpp(); assert sc.using_cpp(); assert compat.form_mesh is pymesh.form_mesh; assert checks['smart-cpp-extension']['ok']; assert checks['pymanifold']['ok']"
+          /tmp/smart-cpp-ci-venv/bin/smart-smoke-console-scripts --timeout-sec 30

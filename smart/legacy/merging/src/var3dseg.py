@@ -1,7 +1,7 @@
 import os
 
 import numpy as np
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 

@@ -10,21 +10,21 @@ from typing import List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pymanifold
-import pymesh
+import smart.pymesh_compat as pymesh
 import trimesh
 import trimesh.repair
 
 try:
-    import smart.rust as smart_rust
+    import smart.native as smart_native
 except ImportError:
-    smart_rust = None
+    smart_native = None
 
 try:
     from smart.action_prior import load_action_prior
 except ImportError:
     load_action_prior = None
 
-_RUST_ACTION_HELPER_MIN = 128
+_NATIVE_ACTION_HELPER_MIN = 128
 _FINITE_EPS = 1e-9
 
 
@@ -151,7 +151,7 @@ class MeshBBoxEnv:
         self.recenter_params_cache = OrderedDict()
         self.recenter_candidate_cache = OrderedDict()
         self._cached_state_key = None
-        self._rust_bbox_state = None
+        self._native_bbox_state = None
         self.reward_backend = str(getattr(args, "reward_backend", "manifold"))
         self.manifold_volume_method = str(getattr(args, "manifold_volume_method", "mesh"))
         if self.manifold_volume_method not in {"mesh", "properties"}:
@@ -170,21 +170,52 @@ class MeshBBoxEnv:
         self._initial_bbox_cache_misses = 0
         self.candidate_backend = str(getattr(args, "candidate_backend", "exact"))
         self.candidate_top_k = max(0, int(getattr(args, "candidate_top_k", 8)))
+        self.candidate_require_exact_fallback = bool(
+            getattr(args, "candidate_require_exact_fallback", True)
+        )
+        self.candidate_pruned_max_aspect_mean = float(
+            getattr(args, "candidate_pruned_max_aspect_mean", 0.0) or 0.0
+        )
+        self.candidate_pruned_min_fill_ratio = float(
+            getattr(args, "candidate_pruned_min_fill_ratio", 0.0) or 0.0
+        )
+        self.candidate_bypass_on_exact_fallback = bool(
+            getattr(args, "candidate_bypass_on_exact_fallback", False)
+        )
+        pruned_categories = {
+            item.strip()
+            for item in str(getattr(args, "candidate_pruned_categories", "") or "").split(",")
+            if item.strip()
+        }
+        self.candidate_pruned_categories = pruned_categories
+        if (
+            not self.candidate_require_exact_fallback
+            and pruned_categories
+            and str(getattr(args, "category", "")) not in pruned_categories
+        ):
+            self.candidate_require_exact_fallback = True
         self.candidate_prefilter_stats = {
             "calls": 0,
             "actions_total": 0,
             "proxy_candidates": 0,
             "proxy_exact": 0,
             "fallback_exact": 0,
+            "fallback_disabled": 0,
             "upper_pruned": 0,
             "selected_from_proxy": 0,
             "selected_from_fallback": 0,
             "no_action": 0,
+            "guard_exact_fallback": 0,
+            "guard_max_aspect_mean": 0,
+            "guard_min_fill_ratio": 0,
+            "bypass_exact": 0,
+            "entry_bypass_exact": 0,
         }
         self._candidate_bitset_state = None
         self.action_prior_weight = float(getattr(args, "action_prior_weight", 0.0) or 0.0)
         self.action_value_weight = float(getattr(args, "action_value_weight", 0.0) or 0.0)
         self.action_prior_top_k = max(0, int(getattr(args, "action_prior_top_k", 0) or 0))
+        self.action_prior_keep_upper = bool(getattr(args, "action_prior_keep_upper", True))
         self.action_prior_device = str(getattr(args, "action_prior_device", "json") or "json")
         self.action_prior = self._load_action_prior(str(getattr(args, "action_prior_path", "") or ""))
 
@@ -208,11 +239,15 @@ class MeshBBoxEnv:
         self.volume = self.tetmsh.get_attribute("voxel_volume")
         self.volume_sum = np.sum(self.volume)
         if self.reward_backend == "tet_clipping":
-            if smart_rust is None or not smart_rust.using_rust() or smart_rust.TetClippingState is None:
+            if (
+                smart_native is None
+                or not getattr(smart_native, "native_core_available", lambda: False)()
+                or smart_native.TetClippingState is None
+            ):
                 raise RuntimeError(
-                    "reward_backend=tet_clipping requires the smart._rust TetClippingState backend"
+                    "reward_backend=tet_clipping requires the native TetClippingState backend"
                 )
-            self._tet_clipping_state = smart_rust.TetClippingState(
+            self._tet_clipping_state = smart_native.TetClippingState(
                 self.tetmsh.vertices.tolist(),
                 self.tetmsh.voxels.astype(int).tolist(),
                 float(self.volume_sum),
@@ -235,26 +270,39 @@ class MeshBBoxEnv:
         )
         self.manmsh = pymanifold.Manifold()
         self.manmsh = self.manmsh.from_mesh(mesh)
-        if self.reward_backend in {"manifold_bridge", "manifold_stateful"}:
+        if self.reward_backend == "manifold_bridge":
             if (
-                smart_rust is None
-                or not smart_rust.using_rust()
-                or not smart_rust.manifold_bridge_available()
-                or smart_rust.ManifoldBridgeMesh is None
+                smart_native is None
+                or not smart_native.manifold_bridge_available()
+                or smart_native.ManifoldBridgeMesh is None
             ):
                 raise RuntimeError(
-                    "reward_backend=manifold_bridge/manifold_stateful requires smart._rust with the fixed C++ Manifold bridge"
+                    "reward_backend=manifold_bridge requires smart._cpp with the fixed C++ Manifold bridge"
                 )
-            self._manifold_bridge_mesh = smart_rust.ManifoldBridgeMesh(
+            self._manifold_bridge_mesh = smart_native.ManifoldBridgeMesh(
                 np.asarray(self.trimsh.vertices, dtype=float).tolist(),
                 np.asarray(self.trimsh.faces, dtype=int).tolist(),
             )
-            if self.reward_backend == "manifold_stateful" and (
-                not hasattr(smart_rust, "ManifoldState")
-                or smart_rust.ManifoldState is None
+        elif self.reward_backend == "manifold_stateful":
+            if (
+                smart_native is None
+                or not smart_native.manifold_bridge_available()
+                or smart_native.ManifoldState is None
             ):
                 raise RuntimeError(
-                    "reward_backend=manifold_stateful requires smart._rust.ManifoldState"
+                    "reward_backend=manifold_stateful requires smart._cpp ManifoldState with the fixed C++ Manifold bridge"
+                )
+            if smart_native.ManifoldBridgeMesh is not None:
+                self._manifold_bridge_mesh = smart_native.ManifoldBridgeMesh(
+                    np.asarray(self.trimsh.vertices, dtype=float).tolist(),
+                    np.asarray(self.trimsh.faces, dtype=int).tolist(),
+                )
+            if (
+                not hasattr(smart_native, "ManifoldState")
+                or smart_native.ManifoldState is None
+            ):
+                raise RuntimeError(
+                    "reward_backend=manifold_stateful requires smart._cpp ManifoldState"
                 )
 
         if self.args.run_type == "train":
@@ -313,7 +361,7 @@ class MeshBBoxEnv:
 
         self.step_cache = None
         self._cached_state_key = None
-        self._rust_bbox_state = None
+        self._native_bbox_state = None
         if not self._use_manifold_stateful_reward():
             self._manifold_stateful = None
         self._manifold_stateful_key = None
@@ -344,7 +392,7 @@ class MeshBBoxEnv:
             self.bbox_man.append(None)
 
             # Exact bridge/stateful reward backends evaluate from explicit
-            # bounds/rotations in the Rust/C++ bridge. Building Python
+            # bounds/rotations in the native C++ bridge. Building Python
             # pymanifold bbox objects during every MCTS reset is pure overhead
             # unless TOV/legacy metrics or rendering later request them.
             if not (self._use_manifold_bridge_reward() and not bool(self.args.tov)):
@@ -361,10 +409,68 @@ class MeshBBoxEnv:
 
         self.pen_rate = pen_rate
         self.last_bbox_score = self.evaluate_bbox_score()
-        self._rust_bbox_state = None
+        self._native_bbox_state = None
         self._ensure_manifold_stateful_state()
 
         return self.current_observation()
+
+    def _bridge_reset_for_cpp_mcts(self) -> bool:
+        if not self._use_manifold_stateful_reward():
+            return False
+        if self.args.run_type != "mcts":
+            return False
+        if not self._can_cache_initial_bbox_state() or self._initial_bbox_state is None:
+            return False
+
+        self.done = 0
+        self.step_cnt = 0
+        self.last_bbox_score = 0.0
+        self.step_cache = None
+        self._cached_state_key = None
+        self._native_bbox_state = None
+        self._manifold_stateful_key = None
+        self._manifold_stateful_score = None
+        self._bridge_apply_cache = {}
+
+        if len(self.bbox_list) == len(self._initial_bbox_state):
+            for bbox, (box, rot) in zip(self.bbox_list, self._initial_bbox_state):
+                bbox.box = list(map(float, box))
+                bbox.rot = np.asarray(rot, dtype=float).copy()
+        else:
+            self.bbox_list = [
+                BBox(list(map(float, box)), rot=np.asarray(rot, dtype=float).copy())
+                for box, rot in self._initial_bbox_state
+            ]
+
+        self.max_bboxs = len(self.bbox_list)
+        self.num_bbox = len(self.bbox_list)
+        self.bbox_mesh = [None for _ in range(self.num_bbox)]
+        self.bbox_man = [None for _ in range(self.num_bbox)]
+        self.bbox_part_vol = [-1 for _ in range(self.num_bbox)]
+        self.bbox_part_ov = [-1 for _ in range(self.num_bbox)]
+        self.bbox_part_occ = [-1 for _ in range(self.num_bbox)]
+
+        self._refresh_step_vec()
+        self.action_mask = np.zeros(self.num_actions)
+        self.action_mask[self.num_bbox * self._actions_per_bbox :] = 1
+        self.pen_rate = 1.0
+        self._native_bbox_state = None
+        if self._manifold_stateful is not None and hasattr(
+            self._manifold_stateful, "reset_to_initial"
+        ):
+            self._manifold_stateful.reset_to_initial()
+            self.last_bbox_score = float(self._manifold_stateful.last_bbox_score())
+            native_key = self._manifold_stateful_native_cache_key()
+            self._cached_state_key = native_key
+            self._manifold_stateful_key = (
+                native_key if native_key is not None else self._state_cache_key()
+            )
+            self._manifold_stateful_score = float(self.last_bbox_score)
+        else:
+            self.last_bbox_score = self.evaluate_bbox_score()
+            self._ensure_manifold_stateful_state()
+        self._initial_bbox_cache_hits += 1
+        return True
 
     def random_bbox_init(self, num_bbox: int) -> None:
         assert (
@@ -413,6 +519,8 @@ class MeshBBoxEnv:
             ),
         )
         assert os.path.exists(grd_txt), "Initial greedy merged result file does not exist"
+        if self._append_bbox_params_from_metadata(grd_txt + ".bbox_params.json"):
+            return
 
         num_bbox = 0
         part_pts = []
@@ -464,6 +572,8 @@ class MeshBBoxEnv:
             best_step = steps[-1]
 
             mesh_path = os.path.join(bbox_update_path, "bboxs_steps%d" % (best_step))
+            if self._append_bbox_params_from_metadata(mesh_path):
+                return
             bbox_dir = os.listdir(mesh_path)
             bbox_list = []
             for i in range(len(bbox_dir)):
@@ -493,6 +603,8 @@ class MeshBBoxEnv:
             bbox_path = os.path.join(self.args.path_to_bbox, self.name)
             if self.args.baseline == "cubseg":
                 bbox_path = os.path.join(bbox_path, "cube_masked")
+            if self._append_bbox_params_from_metadata(bbox_path):
+                return
             bbox_list = []
             bbox_dir = os.listdir(bbox_path)
             for i in range(len(bbox_dir)):
@@ -536,6 +648,8 @@ class MeshBBoxEnv:
             best_step = steps[-1]
 
             bbox_path = os.path.join(bbox_update_path, "bboxs_steps%d" % (best_step))
+            if self._append_bbox_params_from_metadata(bbox_path):
+                return
 
             bbox_list = []
             bbox_dir = os.listdir(bbox_path)
@@ -559,6 +673,32 @@ class MeshBBoxEnv:
 
                 mn_pt, mx_pt = list(np.min(pts, axis=0)), list(np.max(pts, axis=0))
                 self.bbox_list.append(BBox(mn_pt + mx_pt, rot=rot_mat))
+
+    def _append_bbox_params_from_metadata(self, bbox_path) -> bool:
+        bbox_path = str(bbox_path)
+        metadata_path = (
+            bbox_path
+            if bbox_path.endswith(".json")
+            else os.path.join(bbox_path, "bbox_params.json")
+        )
+        if not os.path.exists(metadata_path):
+            return False
+        with open(metadata_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        boxes = data.get("boxes", [])
+        if not boxes:
+            return False
+        for item in sorted(boxes, key=lambda value: int(value.get("index", 0))):
+            bounds = [float(value) for value in item.get("bounds", [])]
+            rotation = [float(value) for value in item.get("rotation", [])]
+            if len(bounds) != 6:
+                continue
+            if len(rotation) == 9:
+                rot_mat = np.asarray(rotation, dtype=float).reshape((3, 3))
+            else:
+                rot_mat = np.eye(3, dtype=float)
+            self.bbox_list.append(BBox(bounds, rot=_safe_rotation(rot_mat)))
+        return bool(self.bbox_list)
 
     def _can_cache_initial_bbox_state(self):
         # MCTS repeatedly resets to the same deterministic init. Avoid re-reading
@@ -659,6 +799,18 @@ class MeshBBoxEnv:
             for i in range(self.num_bbox):
                 if self.bbox_list[i].valid_bbox():
                     render_axis_bbox(i)
+
+    def export_native_engine_bbox_dir(self, engine, num_update=0):
+        if self.exp_name is None:
+            assert 0, "experiment name not set"
+        f = os.path.join(
+            os.path.join(self.args.result_path, self.exp_name),
+            os.path.join("result", os.path.join("updated%d" % (num_update), self.name)),
+        )
+        step_dir = os.path.join(f, "bboxs_steps%d" % (self.step_cnt))
+        os.makedirs(step_dir, exist_ok=True)
+        engine.export_bbox_dir(step_dir)
+        return step_dir
 
     def current_observation(
         self,
@@ -797,31 +949,55 @@ class MeshBBoxEnv:
             return None
 
     def _use_candidate_prefilter(self):
+        if (
+            self.candidate_pruned_categories
+            and str(getattr(self.args, "category", "")) not in self.candidate_pruned_categories
+        ):
+            return False
+        if self.candidate_bypass_on_exact_fallback and self.candidate_require_exact_fallback:
+            return False
+        if self.candidate_bypass_on_exact_fallback:
+            blocked, reason = self._candidate_pruned_geometry_guard(
+                self._candidate_current_box_bounds()
+            )
+            if blocked:
+                self.candidate_prefilter_stats["entry_bypass_exact"] += 1
+                if reason:
+                    key = "guard_%s" % reason
+                    if key in self.candidate_prefilter_stats:
+                        self.candidate_prefilter_stats[key] += 1
+                return False
         return (
             self.candidate_backend == "bitset_topk"
             and self.candidate_top_k > 0
             and not bool(self.args.tov)
-            and smart_rust is not None
-            and smart_rust.using_rust()
-            and hasattr(smart_rust, "centroid_proxy_axis_rewards")
+            and smart_native is not None
+            and getattr(smart_native, "native_core_available", lambda: False)()
+            and hasattr(smart_native, "centroid_proxy_axis_rewards")
         )
 
     def _bitset_topk_exact_greedy_sample(self, nw_box=-1):
         self.candidate_prefilter_stats["calls"] += 1
+        box_bounds, box_rotations = self._bridge_current_bounds_rotations()
+        require_exact_fallback = self._candidate_exact_fallback_required(box_bounds)
+        if self.candidate_bypass_on_exact_fallback and require_exact_fallback:
+            self.candidate_prefilter_stats["bypass_exact"] += 1
+            return None
+
         actions, upper_rewards = self._candidate_action_order_and_upper(nw_box)
         if not actions:
             self.candidate_prefilter_stats["no_action"] += 1
             return None
 
+        self.candidate_prefilter_stats["actions_total"] += len(actions)
+
         proxy_actions = self._proxy_topk_axis_actions(nw_box, actions)
         if not proxy_actions:
             self.candidate_prefilter_stats["no_action"] += 1
             return None
-        self.candidate_prefilter_stats["actions_total"] += len(actions)
         self.candidate_prefilter_stats["proxy_candidates"] += len(proxy_actions)
         proxy_action_ids = {int(action) for action, _ in proxy_actions}
 
-        box_bounds, box_rotations = self._bridge_current_bounds_rotations()
         exact_rewards = {}
         prefilter_floor = -sys.float_info.max
         for action, _ in proxy_actions:
@@ -832,6 +1008,23 @@ class MeshBBoxEnv:
             self.candidate_prefilter_stats["proxy_exact"] += 1
             if prefilter_floor < reward:
                 prefilter_floor = reward
+
+        if not require_exact_fallback:
+            self.candidate_prefilter_stats["fallback_disabled"] += max(
+                0, len(actions) - len(exact_rewards)
+            )
+            if not exact_rewards:
+                self.candidate_prefilter_stats["no_action"] += 1
+                return None
+            action, max_reward = max(exact_rewards.items(), key=lambda item: item[1])
+            self.candidate_prefilter_stats["selected_from_proxy"] += 1
+            self._trace_local_refine_candidates(
+                exact_rewards,
+                selected_action=action,
+                source="local_refine_bitset_topk_pruned",
+                upper_rewards=upper_rewards,
+            )
+            return int(action), float(max_reward)
 
         action = None
         max_reward = -sys.float_info.max
@@ -856,7 +1049,90 @@ class MeshBBoxEnv:
             self.candidate_prefilter_stats["selected_from_proxy"] += 1
         else:
             self.candidate_prefilter_stats["selected_from_fallback"] += 1
+        self._trace_local_refine_candidates(
+            exact_rewards,
+            selected_action=action,
+            source="local_refine_bitset_topk",
+            upper_rewards=upper_rewards,
+        )
         return action, max_reward
+
+    def _candidate_exact_fallback_required(self, box_bounds=None) -> bool:
+        if self.candidate_require_exact_fallback:
+            return True
+        blocked, reason = self._candidate_pruned_geometry_guard(box_bounds)
+        if not blocked:
+            return False
+        self.candidate_prefilter_stats["guard_exact_fallback"] += 1
+        if reason:
+            key = "guard_%s" % reason
+            if key in self.candidate_prefilter_stats:
+                self.candidate_prefilter_stats[key] += 1
+        return True
+
+    def _candidate_pruned_geometry_guard(self, box_bounds=None):
+        if (
+            self.candidate_pruned_max_aspect_mean <= 0.0
+            and self.candidate_pruned_min_fill_ratio <= 0.0
+        ):
+            return False, ""
+        summary = self._candidate_bbox_geometry_summary(box_bounds)
+        if not summary:
+            return False, ""
+        if (
+            self.candidate_pruned_max_aspect_mean > 0.0
+            and summary["aspect_mean"] >= self.candidate_pruned_max_aspect_mean
+        ):
+            return True, "max_aspect_mean"
+        if (
+            self.candidate_pruned_min_fill_ratio > 0.0
+            and summary["volume_fill_ratio"] < self.candidate_pruned_min_fill_ratio
+        ):
+            return True, "min_fill_ratio"
+        return False, ""
+
+    def _candidate_bbox_geometry_summary(self, box_bounds=None):
+        if box_bounds is None:
+            box_bounds = self._candidate_current_box_bounds()
+        boxes = []
+        for box in box_bounds:
+            if len(box) < 6:
+                continue
+            values = [float(value) for value in box[:6]]
+            if not all(math.isfinite(value) for value in values):
+                continue
+            extents = [
+                max(0.0, values[3] - values[0]),
+                max(0.0, values[4] - values[1]),
+                max(0.0, values[5] - values[2]),
+            ]
+            if min(extents) <= 0.0:
+                continue
+            boxes.append((values, extents, extents[0] * extents[1] * extents[2]))
+        if not boxes:
+            return {}
+        volumes = [item[2] for item in boxes]
+        aspects = [max(extents) / max(min(extents), 1.0e-9) for _, extents, _ in boxes]
+        union_min = [
+            min(values[axis] for values, _, _ in boxes)
+            for axis in range(3)
+        ]
+        union_max = [
+            max(values[axis + 3] for values, _, _ in boxes)
+            for axis in range(3)
+        ]
+        union_extents = [
+            max(0.0, union_max[axis] - union_min[axis])
+            for axis in range(3)
+        ]
+        total_aabb_volume = union_extents[0] * union_extents[1] * union_extents[2]
+        return {
+            "aspect_mean": float(sum(aspects) / len(aspects)),
+            "volume_fill_ratio": float(sum(volumes) / max(total_aabb_volume, 1.0e-9)),
+        }
+
+    def _candidate_current_box_bounds(self):
+        return [list(bbox.box) for bbox in self.bbox_list[: self.num_bbox]]
 
     def _proxy_topk_axis_actions(self, nw_box, actions):
         bitset_state = self._ensure_candidate_bitset_state()
@@ -916,7 +1192,7 @@ class MeshBBoxEnv:
                 float(self.args.cover_penalty),
                 float(self.pen_rate),
             )
-        return smart_rust.centroid_proxy_axis_rewards(
+        return smart_native.centroid_proxy_axis_rewards(
             self.centroid.tolist(),
             np.asarray(self.volume, dtype=float).tolist(),
             box_bounds,
@@ -932,11 +1208,11 @@ class MeshBBoxEnv:
     def _ensure_candidate_bitset_state(self):
         if (
             self._candidate_bitset_state is None
-            and smart_rust is not None
-            and hasattr(smart_rust, "CandidateBitsetState")
-            and smart_rust.CandidateBitsetState is not None
+            and smart_native is not None
+            and hasattr(smart_native, "CandidateBitsetState")
+            and smart_native.CandidateBitsetState is not None
         ):
-            self._candidate_bitset_state = smart_rust.CandidateBitsetState(
+            self._candidate_bitset_state = smart_native.CandidateBitsetState(
                 self.centroid.tolist(),
                 np.asarray(self.volume, dtype=float).tolist(),
                 float(self.volume_sum),
@@ -1015,6 +1291,11 @@ class MeshBBoxEnv:
                 if enabled and candidate_action >= 0 and max_reward < reward:
                     action = candidate_action
                     max_reward = reward
+            self._trace_local_refine_candidate_snapshot(
+                nw_box,
+                selected_action=action,
+                source="local_refine_stateful_greedy",
+            )
             return action, max_reward
 
         box_bounds, box_rotations = self._bridge_current_bounds_rotations()
@@ -1061,6 +1342,11 @@ class MeshBBoxEnv:
                 action = recenter_action
                 max_reward = reward
 
+        self._trace_local_refine_candidate_snapshot(
+            nw_box,
+            selected_action=action,
+            source="local_refine_bridge_greedy",
+        )
         return action, max_reward
 
     def _bridge_greedy_samples_for_mask(self, mask_bbox):
@@ -1101,12 +1387,97 @@ class MeshBBoxEnv:
 
         if self._use_manifold_stateful_reward():
             current_bvs_reward = -abs(self._manifold_stateful.bvs() - 1) - self.last_bbox_score
-        else:
-            current_bvs_reward = -abs(
-                sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
-                / self.volume_sum
-                - 1
-            ) - self.last_bbox_score
+            replacement_mask = [False] * self.num_bbox
+            replacement_bounds = [[0.0] * 6 for _ in range(self.num_bbox)]
+            replacement_rotations = [[0.0] * 9 for _ in range(self.num_bbox)]
+            replacement_params = {}
+
+            for bbox_idx, enabled in enumerate(mask_bbox):
+                if not enabled or current_bvs_reward <= rewards[bbox_idx]:
+                    continue
+                if box_bounds is None or box_rotations is None:
+                    box_bounds, box_rotations = self._bridge_current_bounds_rotations()
+                recenter_box, recenter_rotation = self._bridge_recenter_bbox_params(bbox_idx)
+                replacement_mask[bbox_idx] = True
+                replacement_bounds[bbox_idx] = list(recenter_box)
+                replacement_rotations[bbox_idx] = list(recenter_rotation)
+                replacement_params[bbox_idx] = (list(recenter_box), list(recenter_rotation))
+
+            if len(replacement_params) == 1:
+                bbox_idx, (recenter_box, recenter_rotation) = next(
+                    iter(replacement_params.items())
+                )
+                recenter_action = (
+                    bbox_idx * self._actions_per_bbox + (self._actions_per_bbox - 1)
+                )
+                if (
+                    recenter_box == list(box_bounds[bbox_idx])
+                    and recenter_rotation == list(box_rotations[bbox_idx])
+                ):
+                    recenter_score = float(self.last_bbox_score)
+                else:
+                    recenter_score = float(
+                        state.score_replacement(
+                            int(bbox_idx),
+                            recenter_box,
+                            recenter_rotation,
+                            float(self.args.cover_penalty),
+                            float(self.pen_rate),
+                        )
+                    )
+                reward = recenter_score - self.last_bbox_score
+                if rewards[bbox_idx] < reward:
+                    actions[bbox_idx] = recenter_action
+                    rewards[bbox_idx] = reward
+                    candidate_bounds = [list(row) for row in box_bounds]
+                    candidate_rotations = [list(row) for row in box_rotations]
+                    candidate_bounds[bbox_idx] = list(recenter_box)
+                    candidate_rotations[bbox_idx] = list(recenter_rotation)
+                    self._bridge_cache_apply_candidate(
+                        recenter_action,
+                        candidate_bounds,
+                        candidate_rotations,
+                        recenter_score,
+                        reward,
+                        {bbox_idx},
+                    )
+            elif replacement_params:
+                actions, rewards = state.select_replacement_batch(
+                    replacement_mask,
+                    replacement_bounds,
+                    replacement_rotations,
+                    actions,
+                    rewards,
+                    float(self.args.cover_penalty),
+                    float(self.pen_rate),
+                )
+                actions = [int(action) for action in actions]
+                rewards = [float(reward) for reward in rewards]
+                for bbox_idx, (recenter_box, recenter_rotation) in replacement_params.items():
+                    recenter_action = (
+                        bbox_idx * self._actions_per_bbox + (self._actions_per_bbox - 1)
+                    )
+                    if int(actions[bbox_idx]) != recenter_action:
+                        continue
+                    candidate_bounds = [list(row) for row in box_bounds]
+                    candidate_rotations = [list(row) for row in box_rotations]
+                    candidate_bounds[bbox_idx] = list(recenter_box)
+                    candidate_rotations[bbox_idx] = list(recenter_rotation)
+                    self._bridge_cache_apply_candidate(
+                        recenter_action,
+                        candidate_bounds,
+                        candidate_rotations,
+                        self.last_bbox_score + float(rewards[bbox_idx]),
+                        float(rewards[bbox_idx]),
+                        {bbox_idx},
+                    )
+            return actions, rewards
+
+        current_bvs_reward = -abs(
+            sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
+            / self.volume_sum
+            - 1
+        ) - self.last_bbox_score
 
         for bbox_idx, enabled in enumerate(mask_bbox):
             if not enabled:
@@ -1143,6 +1514,52 @@ class MeshBBoxEnv:
             return None
         if len(mask_bbox) != self.num_bbox:
             raise RuntimeError("mask_bbox length does not match bbox count")
+
+        if (
+            self._use_manifold_stateful_reward()
+            and bool(getattr(self.args, "mcts_native_axis_rollout_step", False))
+        ):
+            state = self._ensure_manifold_stateful_state()
+            (
+                mx_action,
+                mx_reward,
+                applied_reward,
+                next_mask,
+                next_score,
+                updated_bbox_idx,
+                updated_bounds,
+                updated_rotation,
+            ) = state.greedy_axis_rollout_step(
+                [bool(value) for value in mask_bbox],
+                float(self.args.cover_penalty),
+                float(self.pen_rate),
+            )
+            mx_action = int(mx_action)
+            mx_reward = float(mx_reward)
+            applied_reward = float(applied_reward)
+            if mx_action < 0 or mx_reward <= 0.0:
+                return None, mx_reward, 0.0, self.done, list(next_mask)
+            if not math.isfinite(applied_reward) or applied_reward <= 0.0:
+                return mx_action, mx_reward, applied_reward, self.done, list(next_mask)
+            bbox_idx, coord_idx, scale_idx = self._decode_action(mx_action)
+            trace_geometry = self._action_geometry_trace_fields(
+                bbox_idx, coord_idx, scale_idx
+            )
+            self._bridge_sync_axis_delta(
+                int(updated_bbox_idx),
+                updated_bounds,
+                updated_rotation,
+                float(next_score),
+                1,
+                state_already_current=True,
+            )
+            self._trace_action(
+                "manifold_stateful_native_axis_rollout",
+                mx_action,
+                applied_reward,
+                trace_geometry,
+            )
+            return mx_action, mx_reward, applied_reward, self.done, list(next_mask)
 
         actions_rewards = self._bridge_greedy_samples_for_mask(mask_bbox)
         if actions_rewards is None:
@@ -1184,6 +1601,83 @@ class MeshBBoxEnv:
         )
         return int(mx_action), mx_reward, reward_to_store, done, next_mask
 
+    def _bridge_mcts_greedy_rollout_segment(self, mask_bbox, max_steps):
+        if not self._use_manifold_bridge_reward() or bool(self.args.tov):
+            return None
+        if not self._use_manifold_stateful_reward():
+            return None
+        if not bool(getattr(self.args, "mcts_native_axis_rollout_segment", False)):
+            return None
+        if len(mask_bbox) != self.num_bbox:
+            raise RuntimeError("mask_bbox length does not match bbox count")
+        max_steps = int(max_steps)
+        if max_steps <= 0:
+            return [], [], list(mask_bbox), self.done
+
+        state = self._ensure_manifold_stateful_state()
+        if hasattr(state, "greedy_axis_rollout_segment_delta"):
+            (
+                actions,
+                _best_rewards,
+                applied_rewards,
+                next_mask,
+                touched_indices,
+                touched_bounds,
+                touched_rotations,
+                next_score,
+            ) = state.greedy_axis_rollout_segment_delta(
+                [bool(value) for value in mask_bbox],
+                float(self.args.cover_penalty),
+                float(self.pen_rate),
+                max_steps,
+            )
+        else:
+            (
+                actions,
+                _best_rewards,
+                applied_rewards,
+                next_mask,
+                next_bounds,
+                next_rotations,
+                next_score,
+            ) = state.greedy_axis_rollout_segment(
+                [bool(value) for value in mask_bbox],
+                float(self.args.cover_penalty),
+                float(self.pen_rate),
+                max_steps,
+            )
+            touched_indices = [
+                self._decode_action(action)[0]
+                for action in actions
+                if int(action) >= 0
+            ]
+            seen = set()
+            touched_indices = [
+                idx for idx in touched_indices if not (idx in seen or seen.add(idx))
+            ]
+            touched_bounds = [next_bounds[idx] for idx in touched_indices]
+            touched_rotations = [next_rotations[idx] for idx in touched_indices]
+        actions = [int(action) for action in actions]
+        applied_rewards = [float(reward) for reward in applied_rewards]
+        if not actions:
+            return [], [], list(next_mask), self.done
+
+        self._bridge_sync_axis_deltas(
+            touched_indices,
+            touched_bounds,
+            touched_rotations,
+            float(next_score),
+            len(actions),
+            state_already_current=True,
+        )
+        for action, reward in zip(actions, applied_rewards):
+            self._trace_action(
+                "manifold_stateful_native_axis_rollout_segment",
+                int(action),
+                float(reward),
+            )
+        return actions, applied_rewards, list(next_mask), self.done
+
     def _bridge_current_bounds_rotations(self):
         box_bounds = []
         box_rotations = []
@@ -1194,6 +1688,42 @@ class MeshBBoxEnv:
             else:
                 box_rotations.append(np.eye(3).reshape(-1).tolist())
         return box_bounds, box_rotations
+
+    def _native_recenter_points_for_box(self, box, rot):
+        if smart_native is not None and hasattr(smart_native, "native_recenter_points_for_box"):
+            try:
+                return np.asarray(
+                    smart_native.native_recenter_points_for_box(
+                        self.tetmsh.vertices,
+                        self.tetmsh.voxels,
+                        self.centroid,
+                        np.asarray(box, dtype=float).reshape(-1).tolist(),
+                        np.asarray(rot, dtype=float).reshape(-1).tolist(),
+                    ),
+                    dtype=float,
+                )
+            except Exception:
+                pass
+
+        pts = np.asarray(self.centroid, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 3 or not np.all(np.isfinite(pts)):
+            return None
+        rot_pts = np.matmul(pts, np.transpose(rot))
+        if not np.all(np.isfinite(rot_pts)):
+            return None
+
+        min_x, min_y, min_z = box[:3]
+        max_x, max_y, max_z = box[3:]
+
+        mask_x = (rot_pts[:, 0] >= min_x) & (rot_pts[:, 0] <= max_x)
+        mask_y = (rot_pts[:, 1] >= min_y) & (rot_pts[:, 1] <= max_y)
+        mask_z = (rot_pts[:, 2] >= min_z) & (rot_pts[:, 2] <= max_z)
+        mask = mask_x & mask_y & mask_z
+
+        masked_voxels = self.tetmsh.voxels[mask]
+        if len(masked_voxels) == 0:
+            return None
+        return self.tetmsh.vertices[np.asarray(masked_voxels, dtype=int).reshape(-1)]
 
     def _bridge_recenter_bbox_params(self, bbox_idx):
         bbox = self.bbox_list[bbox_idx]
@@ -1216,25 +1746,9 @@ class MeshBBoxEnv:
                 cached_box, cached_rotation = cached
                 return list(cached_box), list(cached_rotation)
 
-        pts = np.asarray(self.centroid, dtype=float)
-        if pts.ndim != 2 or pts.shape[1] != 3 or not np.all(np.isfinite(pts)):
-            return list(map(float, box)), rot.reshape(-1).tolist()
-        rot_pts = np.matmul(pts, np.transpose(rot))
-        if not np.all(np.isfinite(rot_pts)):
-            return list(map(float, box)), rot.reshape(-1).tolist()
-
-        min_x, min_y, min_z = box[:3]
-        max_x, max_y, max_z = box[3:]
-
-        mask_x = (rot_pts[:, 0] >= min_x) & (rot_pts[:, 0] <= max_x)
-        mask_y = (rot_pts[:, 1] >= min_y) & (rot_pts[:, 1] <= max_y)
-        mask_z = (rot_pts[:, 2] >= min_z) & (rot_pts[:, 2] <= max_z)
-        mask = mask_x & mask_y & mask_z
-
-        masked_voxels = self.tetmsh.voxels[mask]
-        if len(masked_voxels) == 0:
+        nw_pts = self._native_recenter_points_for_box(box, rot)
+        if nw_pts is None or len(nw_pts) == 0:
             return list(map(float, box)), np.asarray(rot, dtype=float).reshape(-1).tolist()
-        nw_pts = self.tetmsh.vertices[np.asarray(masked_voxels, dtype=int).reshape(-1)]
         result_box, rot_mat = _safe_recenter_box(box, rot, nw_pts)
         result_box = list(map(float, result_box))
         result_rotation = np.asarray(rot_mat, dtype=float).reshape(-1).tolist()
@@ -1349,6 +1863,7 @@ class MeshBBoxEnv:
         action = int(action)
         reward = float(reward)
         bbox_idx, coord_idx, scale_idx = self._decode_action(action)
+        trace_geometry = self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx)
 
         if self._use_manifold_stateful_reward() and coord_idx < 6:
             state = self._ensure_manifold_stateful_state()
@@ -1372,7 +1887,7 @@ class MeshBBoxEnv:
                 1,
                 state_already_current=True,
             )
-            self._trace_action("manifold_stateful", action, reward)
+            self._trace_action("manifold_stateful", action, reward, trace_geometry)
             return reward, self.done
 
         bounds, rotations = self._bridge_current_bounds_rotations()
@@ -1381,6 +1896,32 @@ class MeshBBoxEnv:
             bounds[bbox_idx][coord_idx] += self.action_scale[scale_idx] * self.action_unit
         else:
             bounds[bbox_idx], rotations[bbox_idx] = self._bridge_recenter_bbox_params(bbox_idx)
+            if self._use_manifold_stateful_reward():
+                state = self._ensure_manifold_stateful_state()
+                (
+                    reward,
+                    updated_bbox_idx,
+                    updated_bounds,
+                    updated_rotation,
+                    next_score,
+                ) = state.apply_replacement_delta(
+                    int(bbox_idx),
+                    bounds[bbox_idx],
+                    rotations[bbox_idx],
+                    float(self.args.cover_penalty),
+                    float(self.pen_rate),
+                )
+                reward = float(reward)
+                self._bridge_sync_axis_delta(
+                    updated_bbox_idx,
+                    updated_bounds,
+                    updated_rotation,
+                    next_score,
+                    1,
+                    state_already_current=True,
+                )
+                self._trace_action("manifold_stateful_recenter", action, reward, trace_geometry)
+                return reward, self.done
 
         self._bridge_sync_axis_state(
             bounds,
@@ -1389,7 +1930,7 @@ class MeshBBoxEnv:
             1,
             touched_indices={bbox_idx},
         )
-        self._trace_action("manifold_bridge", action, reward)
+        self._trace_action("manifold_bridge", action, reward, trace_geometry)
         return reward, self.done
 
     def _bridge_apply_cached_action(self, action):
@@ -1398,10 +1939,42 @@ class MeshBBoxEnv:
         cached = self._bridge_apply_cache.get(int(action))
         if cached is None:
             return None
+        bbox_idx, coord_idx, scale_idx = self._decode_action(action)
+        trace_geometry = self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx)
         state_key, bounds, rotations, score, reward, touched_indices = cached
         if state_key != self._state_cache_key():
             self._bridge_apply_cache = {}
             return None
+        if self._use_manifold_stateful_reward() and coord_idx >= 6:
+            state = self._ensure_manifold_stateful_state()
+            (
+                reward,
+                updated_bbox_idx,
+                updated_bounds,
+                updated_rotation,
+                score,
+            ) = state.apply_replacement_delta(
+                int(bbox_idx),
+                bounds[bbox_idx],
+                rotations[bbox_idx],
+                float(self.args.cover_penalty),
+                float(self.pen_rate),
+            )
+            self._bridge_sync_axis_delta(
+                updated_bbox_idx,
+                updated_bounds,
+                updated_rotation,
+                score,
+                1,
+                state_already_current=True,
+            )
+            self._trace_action(
+                "manifold_stateful_cached_recenter",
+                int(action),
+                float(reward),
+                trace_geometry,
+            )
+            return float(reward), self.done
         self._bridge_sync_axis_state(
             bounds,
             rotations,
@@ -1409,13 +1982,15 @@ class MeshBBoxEnv:
             1,
             touched_indices=touched_indices,
         )
+        self._trace_action("manifold_bridge_cached", int(action), float(reward), trace_geometry)
         return reward, self.done
 
     def _bridge_apply_unscored_action(self, action):
         if not self._use_manifold_stateful_reward() or bool(self.args.tov):
             return None
         action = int(action)
-        bbox_idx, coord_idx, _ = self._decode_action(action)
+        bbox_idx, coord_idx, scale_idx = self._decode_action(action)
+        trace_geometry = self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx)
 
         if coord_idx < 6:
             state = self._ensure_manifold_stateful_state()
@@ -1439,21 +2014,33 @@ class MeshBBoxEnv:
                 1,
                 state_already_current=True,
             )
-            self._trace_action("manifold_stateful_unscored_axis", action, reward)
+            self._trace_action("manifold_stateful_unscored_axis", action, reward, trace_geometry)
             return reward, self.done
 
-        box_bounds, box_rotations = self._bridge_current_bounds_rotations()
-        recenter_bounds, recenter_rotations, recenter_score, reward = (
-            self._bridge_recenter_candidate_score(bbox_idx, box_bounds, box_rotations)
+        recenter_box, recenter_rotation = self._bridge_recenter_bbox_params(bbox_idx)
+        state = self._ensure_manifold_stateful_state()
+        (
+            reward,
+            updated_bbox_idx,
+            updated_bounds,
+            updated_rotation,
+            next_score,
+        ) = state.apply_replacement_delta(
+            int(bbox_idx),
+            recenter_box,
+            recenter_rotation,
+            float(self.args.cover_penalty),
+            float(self.pen_rate),
         )
-        self._bridge_sync_axis_state(
-            recenter_bounds,
-            recenter_rotations,
-            recenter_score,
+        self._bridge_sync_axis_delta(
+            updated_bbox_idx,
+            updated_bounds,
+            updated_rotation,
+            next_score,
             1,
-            touched_indices={bbox_idx},
+            state_already_current=True,
         )
-        self._trace_action("manifold_stateful_unscored_recenter", action, reward)
+        self._trace_action("manifold_stateful_unscored_recenter", action, reward, trace_geometry)
         return reward, self.done
 
     def _bridge_axis_refine_segment(self, max_steps):
@@ -1467,29 +2054,49 @@ class MeshBBoxEnv:
 
         if self._use_manifold_stateful_reward():
             state = self._ensure_manifold_stateful_state()
-            (
-                next_bounds,
-                next_rotations,
-                rewards,
-                actions,
-                next_score,
-            ) = state.greedy_axis_refine_segment(
-                float(self.args.cover_penalty),
-                float(self.pen_rate),
-                max_steps,
-            )
-            if rewards:
-                touched = {
+            if hasattr(state, "greedy_axis_refine_segment_delta"):
+                (
+                    actions,
+                    rewards,
+                    touched_indices,
+                    touched_bounds,
+                    touched_rotations,
+                    next_score,
+                ) = state.greedy_axis_refine_segment_delta(
+                    float(self.args.cover_penalty),
+                    float(self.pen_rate),
+                    max_steps,
+                )
+            else:
+                (
+                    next_bounds,
+                    next_rotations,
+                    rewards,
+                    actions,
+                    next_score,
+                ) = state.greedy_axis_refine_segment(
+                    float(self.args.cover_penalty),
+                    float(self.pen_rate),
+                    max_steps,
+                )
+                touched_indices = [
                     int(action) // self._actions_per_bbox
                     for action in actions
                     if int(action) >= 0
-                }
-                self._bridge_sync_axis_state(
-                    next_bounds,
-                    next_rotations,
+                ]
+                seen = set()
+                touched_indices = [
+                    idx for idx in touched_indices if not (idx in seen or seen.add(idx))
+                ]
+                touched_bounds = [next_bounds[idx] for idx in touched_indices]
+                touched_rotations = [next_rotations[idx] for idx in touched_indices]
+            if rewards:
+                self._bridge_sync_axis_deltas(
+                    touched_indices,
+                    touched_bounds,
+                    touched_rotations,
                     next_score,
                     len(rewards),
-                    touched_indices=touched,
                     state_already_current=True,
                 )
                 for action, reward in zip(actions, rewards):
@@ -1552,7 +2159,7 @@ class MeshBBoxEnv:
 
         self.step_cache = None
         self._cached_state_key = None
-        self._rust_bbox_state = None
+        self._native_bbox_state = None
         self._bridge_apply_cache = {}
         # Keep exact memoized scores across state transitions. These caches are
         # keyed by bbox state and reward parameters, so retaining them lets MCTS
@@ -1589,7 +2196,11 @@ class MeshBBoxEnv:
         self.last_bbox_score = float(last_bbox_score)
         if self._manifold_stateful is not None:
             if state_already_current:
-                self._manifold_stateful_key = self._state_cache_key()
+                native_key = self._manifold_stateful_native_cache_key()
+                self._cached_state_key = native_key
+                self._manifold_stateful_key = (
+                    native_key if native_key is not None else self._state_cache_key()
+                )
                 self._manifold_stateful_score = float(self.last_bbox_score)
             else:
                 self._manifold_stateful.reset_to_state(
@@ -1599,6 +2210,57 @@ class MeshBBoxEnv:
                 )
                 self._manifold_stateful_key = self._state_cache_key()
                 self._manifold_stateful_score = float(self.last_bbox_score)
+        self.step_cnt += int(step_count)
+        self._refresh_step_vec()
+        if self.step_cnt >= self.max_step - 1:
+            self.done = 1
+
+    def _bridge_sync_axis_deltas(
+        self,
+        touched_indices,
+        bounds,
+        rotations,
+        last_bbox_score,
+        step_count,
+        state_already_current=False,
+    ):
+        if len(touched_indices) != len(bounds) or len(bounds) != len(rotations):
+            raise RuntimeError("bridge delta lengths do not match")
+
+        self.step_cache = None
+        self._cached_state_key = None
+        self._native_bbox_state = None
+        self._bridge_apply_cache = {}
+
+        for idx, box, rotation in zip(touched_indices, bounds, rotations):
+            idx = int(idx)
+            if idx < 0 or idx >= self.num_bbox:
+                raise RuntimeError("bridge delta bbox index is out of range")
+            self.bbox_list[idx].box = list(map(float, box))
+            self.bbox_list[idx].rot = np.asarray(rotation, dtype=float).reshape(3, 3)
+            self.bbox_part_vol[idx] = -1
+            self.bbox_part_ov[idx] = -1
+            self.bbox_part_occ[idx] = -1
+            if self.bbox_list[idx].valid_bbox():
+                if self._use_manifold_bridge_reward() and not bool(self.args.tov):
+                    self.bbox_mesh[idx] = None
+                    self.bbox_man[idx] = None
+                else:
+                    self.bbox_mesh[idx], self.bbox_man[idx] = self.get_bbox_bmesh_bman(idx)
+            else:
+                self.bbox_mesh[idx] = None
+                self.bbox_man[idx] = None
+
+        self.last_bbox_score = float(last_bbox_score)
+        if self._manifold_stateful is not None:
+            if not state_already_current:
+                raise RuntimeError("delta sync requires the stateful backend to be current")
+            native_key = self._manifold_stateful_native_cache_key()
+            self._cached_state_key = native_key
+            self._manifold_stateful_key = (
+                native_key if native_key is not None else self._state_cache_key()
+            )
+            self._manifold_stateful_score = float(self.last_bbox_score)
         self.step_cnt += int(step_count)
         self._refresh_step_vec()
         if self.step_cnt >= self.max_step - 1:
@@ -1615,7 +2277,7 @@ class MeshBBoxEnv:
     ):
         self.step_cache = None
         self._cached_state_key = None
-        self._rust_bbox_state = None
+        self._native_bbox_state = None
         self._bridge_apply_cache = {}
 
         idx = int(bbox_idx)
@@ -1638,12 +2300,64 @@ class MeshBBoxEnv:
         if self._manifold_stateful is not None:
             if not state_already_current:
                 raise RuntimeError("delta sync requires the stateful backend to be current")
-            self._manifold_stateful_key = self._state_cache_key()
+            native_key = self._manifold_stateful_native_cache_key()
+            self._cached_state_key = native_key
+            self._manifold_stateful_key = (
+                native_key if native_key is not None else self._state_cache_key()
+            )
             self._manifold_stateful_score = float(self.last_bbox_score)
         self.step_cnt += int(step_count)
         self._refresh_step_vec()
         if self.step_cnt >= self.max_step - 1:
             self.done = 1
+
+    def _native_engine_box_params(self):
+        bounds = []
+        rotations = []
+        for bbox in self.bbox_list[: self.num_bbox]:
+            bounds.append([float(value) for value in bbox.box])
+            if bool(self.args.tilted):
+                rotations.append(np.asarray(bbox.rot, dtype=float).reshape(-1).tolist())
+            else:
+                rotations.append(np.eye(3, dtype=float).reshape(-1).tolist())
+        return bounds, rotations
+
+    def make_native_smart_engine(self):
+        if (
+            smart_native is None
+            or not getattr(smart_native, "native_core_available", lambda: False)()
+            or getattr(smart_native, "NativeSmartEngine", None) is None
+        ):
+            raise RuntimeError("cpp_native backend requires smart._cpp NativeSmartEngine")
+        bounds, rotations = self._native_engine_box_params()
+        return smart_native.NativeSmartEngine(
+            np.asarray(self.trimsh.vertices, dtype=float).tolist(),
+            np.asarray(self.trimsh.faces, dtype=int).tolist(),
+            np.asarray(self.tetmsh.voxels, dtype=int).tolist(),
+            np.asarray(self.volume, dtype=float).reshape(-1).tolist(),
+            np.asarray(self.centroid, dtype=float).reshape((-1, 3)).tolist(),
+            bounds,
+            rotations,
+            str(getattr(self.args, "category", "")),
+            int(self.num_action_scale),
+            float(self.action_unit),
+            float(self.volume_sum),
+            float(self.last_bbox_score),
+            bool(getattr(self.args, "stateful_union_cache", False)),
+            int(getattr(self.args, "stateful_cache_capacity", 65536)),
+            str(getattr(self.args, "manifold_volume_method", "mesh")),
+        )
+
+    def sync_native_smart_engine(self, engine, step_count):
+        bounds, rotations, score = engine.boxes()
+        self._bridge_sync_axis_state(
+            bounds,
+            rotations,
+            float(score),
+            int(step_count),
+            touched_indices=range(self.num_bbox),
+            state_already_current=False,
+        )
 
     def random_sample(self) -> int:
         action = np.random.randint(
@@ -1659,7 +2373,7 @@ class MeshBBoxEnv:
             return i, 6, 0
         return i, local // self.num_action_scale, local % self.num_action_scale
 
-    def _trace_action(self, source, action, reward):
+    def _trace_action(self, source, action, reward, geometry_fields=None):
         trace_path = str(getattr(self.args, "trace_actions_path", "") or "")
         if not trace_path:
             return
@@ -1694,11 +2408,14 @@ class MeshBBoxEnv:
             "pen_rate": float(self.pen_rate),
             "candidate_backend": str(self.candidate_backend),
         }
+        if geometry_fields is None:
+            geometry_fields = self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx)
+        record.update(geometry_fields)
         with open(trace_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(record, sort_keys=True) + "\n")
 
     def action_prior_context(self):
-        return {
+        context = {
             "category": str(getattr(self.args, "category", "")),
             "mesh": self.name,
             "step": int(self.step_cnt),
@@ -1717,6 +2434,168 @@ class MeshBBoxEnv:
             "reward_backend": self.reward_backend,
             "manifold_volume_method": self.manifold_volume_method,
         }
+        context.update(self._bbox_geometry_context())
+        return context
+
+    def _bbox_geometry_context(self):
+        bounds = []
+        for bbox in self.bbox_list[: self.num_bbox]:
+            if bbox.valid_bbox():
+                bounds.append([float(value) for value in bbox.box])
+            else:
+                bounds.append([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        return {"bbox_bounds": bounds}
+
+    def _action_geometry_trace_fields(self, bbox_idx, coord_idx, scale_idx):
+        idx = int(bbox_idx)
+        if idx < 0 or idx >= len(self.bbox_list):
+            return {}
+        bbox = self.bbox_list[idx]
+        if not bbox.valid_bbox():
+            return {}
+        box = [float(value) for value in bbox.box]
+        dims = [
+            max(0.0, box[3] - box[0]),
+            max(0.0, box[4] - box[1]),
+            max(0.0, box[5] - box[2]),
+        ]
+        center = [
+            0.5 * (box[0] + box[3]),
+            0.5 * (box[1] + box[4]),
+            0.5 * (box[2] + box[5]),
+        ]
+        bbox_volume = _box_volume(box)
+        action_delta = 0.0
+        candidate = list(box)
+        if 0 <= int(coord_idx) < 6:
+            action_delta = float(self.action_scale[int(scale_idx)] * self.action_unit)
+            candidate[int(coord_idx)] += action_delta
+        invalid_after = not _box_valid(candidate)
+        action_new_volume = 0.0 if invalid_after else _box_volume(candidate)
+        return {
+            "bbox_min_x": box[0],
+            "bbox_min_y": box[1],
+            "bbox_min_z": box[2],
+            "bbox_max_x": box[3],
+            "bbox_max_y": box[4],
+            "bbox_max_z": box[5],
+            "bbox_dim_x": dims[0],
+            "bbox_dim_y": dims[1],
+            "bbox_dim_z": dims[2],
+            "bbox_center_x": center[0],
+            "bbox_center_y": center[1],
+            "bbox_center_z": center[2],
+            "bbox_volume": float(bbox_volume),
+            "action_delta": float(action_delta),
+            "action_new_bbox_volume": float(action_new_volume),
+            "action_invalid_after": bool(invalid_after),
+        }
+
+    def _candidate_trace_enabled(self):
+        return bool(str(getattr(self.args, "candidate_trace_path", "") or ""))
+
+    def _trace_local_refine_candidate_snapshot(self, nw_box, selected_action=None, source="local_refine_greedy"):
+        if not self._candidate_trace_enabled():
+            return
+        actions, upper_rewards = self._candidate_action_order_and_upper(nw_box)
+        if not actions:
+            return
+        top_k = max(0, int(getattr(self.args, "candidate_trace_top_k", 0) or 0))
+        actions_to_score = list(actions)
+        if top_k > 0 and top_k < len(actions_to_score):
+            actions_to_score = sorted(
+                actions_to_score,
+                key=lambda action: (float(upper_rewards.get(int(action), -sys.float_info.max)), -int(action)),
+                reverse=True,
+            )[:top_k]
+            if selected_action is not None and int(selected_action) >= 0:
+                actions_to_score.append(int(selected_action))
+            actions_to_score = list(dict.fromkeys(int(action) for action in actions_to_score))
+        box_bounds, box_rotations = self._bridge_current_bounds_rotations()
+        exact_rewards = {}
+        for action in actions_to_score:
+            try:
+                exact_rewards[int(action)] = float(
+                    self._exact_candidate_reward(int(action), box_bounds, box_rotations)
+                )
+            except Exception:
+                continue
+        self._trace_local_refine_candidates(
+            exact_rewards,
+            selected_action=selected_action,
+            source=source,
+            upper_rewards=upper_rewards,
+        )
+
+    def _trace_local_refine_candidates(self, exact_rewards, selected_action=None, source="local_refine_candidate", upper_rewards=None):
+        trace_path = str(getattr(self.args, "candidate_trace_path", "") or "")
+        if not trace_path or not exact_rewards:
+            return
+        selected = int(selected_action) if selected_action is not None and int(selected_action) >= 0 else None
+        ordered = sorted(
+            (
+                (int(action), float(reward))
+                for action, reward in exact_rewards.items()
+                if int(action) >= 0 and np.isfinite(float(reward))
+            ),
+            key=lambda item: (item[1], -item[0]),
+            reverse=True,
+        )
+        top_k = max(0, int(getattr(self.args, "candidate_trace_top_k", 0) or 0))
+        if top_k > 0 and len(ordered) > top_k:
+            kept = ordered[:top_k]
+            if selected is not None and selected not in {action for action, _ in kept}:
+                for action, reward in ordered:
+                    if action == selected:
+                        kept.append((action, reward))
+                        break
+            ordered = kept
+        if not ordered:
+            return
+        parent = os.path.dirname(trace_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        upper_rewards = upper_rewards or {}
+        rows = []
+        for rank, (action, reward) in enumerate(ordered):
+            bbox_idx, coord_idx, scale_idx = self._decode_action(action)
+            row = {
+                "schema_version": 4,
+                "record_type": "local_refine_candidate",
+                "source": str(source),
+                "category": str(getattr(self.args, "category", "")),
+                "mesh": self.name,
+                "reward_backend": self.reward_backend,
+                "manifold_volume_method": self.manifold_volume_method,
+                "step": int(self.step_cnt),
+                "rank": int(rank),
+                "action": int(action),
+                "bbox_idx": int(bbox_idx),
+                "candidate_bbox_idx": int(bbox_idx),
+                "coord_idx": int(coord_idx),
+                "scale_idx": int(scale_idx),
+                "num_bbox": int(self.num_bbox),
+                "num_action_scale": int(self.num_action_scale),
+                "actions_per_bbox": int(self._actions_per_bbox),
+                "action_unit": float(self.action_unit),
+                "reward": float(reward),
+                "upper_reward": float(upper_rewards.get(int(action), 0.0)),
+                "selected": bool(selected is not None and int(action) == selected),
+                "last_bbox_score": float(self.last_bbox_score),
+                "bvs": float(
+                    sum(_box_volume(bbox.box) for bbox in self.bbox_list if bbox.valid_bbox())
+                    / max(float(self.volume_sum), 1e-12)
+                ),
+                "volume_sum": float(self.volume_sum),
+                "cover_penalty": float(self.args.cover_penalty),
+                "pen_rate": float(self.pen_rate),
+                "candidate_backend": str(self.candidate_backend),
+            }
+            row.update(self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx))
+            rows.append(row)
+        with open(trace_path, "a", encoding="utf-8") as file:
+            for row in rows:
+                file.write(json.dumps(row, sort_keys=True) + "\n")
 
     def _load_action_prior(self, path):
         if not path or (self.action_prior_weight == 0.0 and self.action_value_weight == 0.0):
@@ -1800,7 +2679,8 @@ class MeshBBoxEnv:
                 action
                 for _, action in proposal_scores[: self.action_prior_top_k]
             }
-            keep.update(action for _, action in upper_scores[: self.action_prior_top_k])
+            if self.action_prior_keep_upper:
+                keep.update(action for _, action in upper_scores[: self.action_prior_top_k])
             actions = [action for action in original_actions if int(action) in keep]
             index_by_action = {int(action): idx for idx, action in enumerate(original_actions)}
             prior_logits = np.asarray(
@@ -1818,8 +2698,10 @@ class MeshBBoxEnv:
         best_action = None
         best_reward = -sys.float_info.max
         best_biased_score = -sys.float_info.max
+        exact_rewards = {}
         for idx, action in enumerate(actions):
             reward = self._exact_candidate_reward(action, box_bounds, box_rotations)
+            exact_rewards[int(action)] = float(reward)
             if reward <= 0.0:
                 continue
             biased_score = (
@@ -1838,7 +2720,19 @@ class MeshBBoxEnv:
                 best_reward = float(reward)
                 best_biased_score = float(biased_score)
         if best_action is None:
+            self._trace_local_refine_candidates(
+                exact_rewards,
+                selected_action=None,
+                source="local_refine_prior_guided",
+                upper_rewards=upper_rewards,
+            )
             return None
+        self._trace_local_refine_candidates(
+            exact_rewards,
+            selected_action=best_action,
+            source="local_refine_prior_guided",
+            upper_rewards=upper_rewards,
+        )
         return best_action, best_reward
 
     def refine_bbox(self, action, revert=False) -> None:
@@ -1854,43 +2748,29 @@ class MeshBBoxEnv:
                 list(self.bbox_list[i].box),
                 np.copy(self.bbox_list[i].rot),
                 self._cached_state_key,
-                self._rust_bbox_state,
+                self._native_bbox_state,
             )
             self._cached_state_key = None
             if j != 6:
                 self.bbox_list[i].box[j] += self.action_scale[k] * self.action_unit
-                if self._rust_bbox_state is not None:
+                if self._native_bbox_state is not None:
                     try:
-                        self._rust_bbox_state = self._rust_bbox_state.after_axis_action(
+                        self._native_bbox_state = self._native_bbox_state.after_axis_action(
                             int(action)
                         )
                     except Exception:
-                        self._rust_bbox_state = None
+                        self._native_bbox_state = None
             else:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
                 if self.args.tilted:
 
-                    pts = np.asarray(self.centroid, dtype=float)
                     self.bbox_list[i].rot = _safe_rotation(self.bbox_list[i].rot)
-                    if pts.ndim != 2 or pts.shape[1] != 3 or not np.all(np.isfinite(pts)):
-                        pts = np.zeros((0, 3), dtype=float)
-                    rot_pts = np.matmul(pts, np.transpose(self.bbox_list[i].rot))
-                    if not np.all(np.isfinite(rot_pts)):
-                        rot_pts = np.zeros_like(pts)
-
-                    min_x, min_y, min_z = self.bbox_list[i].box[:3]
-                    max_x, max_y, max_z = self.bbox_list[i].box[3:]
-
-                    mask_x = (rot_pts[:, 0] >= min_x) & (rot_pts[:, 0] <= max_x)
-                    mask_y = (rot_pts[:, 1] >= min_y) & (rot_pts[:, 1] <= max_y)
-                    mask_z = (rot_pts[:, 2] >= min_z) & (rot_pts[:, 2] <= max_z)
-                    mask = mask_x & mask_y & mask_z
-
-                    nw_pts = []
-                    masked_voxels = self.tetmsh.voxels[mask]
-                    for j in range(len(masked_voxels)):
-                        for k in range(4):
-                            nw_pts.append(self.tetmsh.vertices[masked_voxels[j][k]])
+                    nw_pts = self._native_recenter_points_for_box(
+                        np.asarray(self.bbox_list[i].box, dtype=float),
+                        self.bbox_list[i].rot,
+                    )
+                    if nw_pts is None:
+                        nw_pts = np.zeros((0, 3), dtype=float)
                     new_box, rot_mat = _safe_recenter_box(
                         self.bbox_list[i].box,
                         self.bbox_list[i].rot,
@@ -1914,7 +2794,7 @@ class MeshBBoxEnv:
                 self.bbox_list[i].box,
                 self.bbox_list[i].rot,
                 self._cached_state_key,
-                self._rust_bbox_state,
+                self._native_bbox_state,
             ) = self.step_cache
             self.step_cache = None
         else:
@@ -1925,7 +2805,7 @@ class MeshBBoxEnv:
                 self.bbox_part_ov[i] = -1
                 self.bbox_part_occ[i] = -1
                 self._cached_state_key = None
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
 
                 return
 
@@ -1956,6 +2836,18 @@ class MeshBBoxEnv:
             reward_cache_key = self._step_reward_cache_key(action)
             cached_reward = self._cache_get(self.step_reward_cache, reward_cache_key)
             cached_trial_score = self._cached_step_score(cached_reward)
+        bbox_idx, coord_idx, scale_idx = self._decode_action(action)
+        trace_geometry = self._action_geometry_trace_fields(bbox_idx, coord_idx, scale_idx) if apply else None
+
+        if (
+            apply
+            and not obs
+            and bool(getattr(self.args, "stateful_unscored_apply", False))
+        ):
+            bridge_applied = self._bridge_apply_unscored_action(action)
+            if bridge_applied is not None:
+                reward, done = bridge_applied
+                return float(reward), self.current_observation(), done
 
         self.refine_bbox(action)
         if prune_below is not None and not apply and not obs:
@@ -2001,17 +2893,17 @@ class MeshBBoxEnv:
         self.step_cache = None
         self._bridge_apply_cache = {}
         self.last_bbox_score = nw_bbox_score
-        if self._rust_bbox_state is not None:
+        if self._native_bbox_state is not None:
             try:
-                self._rust_bbox_state.set_last_bbox_score(nw_bbox_score)
+                self._native_bbox_state.set_last_bbox_score(nw_bbox_score)
             except Exception:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
         if self._use_manifold_stateful_reward() and self._manifold_stateful is not None:
             bounds, rotations = self._bridge_current_bounds_rotations()
             self._manifold_stateful.reset_to_state(bounds, rotations, float(self.last_bbox_score))
             self._manifold_stateful_key = self._state_cache_key()
             self._manifold_stateful_score = float(self.last_bbox_score)
-        self._trace_action("legacy_step", int(action), float(reward))
+        self._trace_action("legacy_step", int(action), float(reward), trace_geometry)
 
         self.step_cnt += 1
         self._refresh_step_vec()
@@ -2029,19 +2921,19 @@ class MeshBBoxEnv:
         return -abs(bvs - 1)
 
     def _action_upper_rewards(self, bbox_idx=None):
-        rust_state = self._get_rust_bbox_state()
-        if rust_state is not None:
+        native_state = self._get_native_bbox_state()
+        if native_state is not None:
             try:
                 if bbox_idx is not None:
-                    return rust_state.bbox_action_upper_rewards(int(bbox_idx))
-                return rust_state.action_upper_rewards()
+                    return native_state.bbox_action_upper_rewards(int(bbox_idx))
+                return native_state.action_upper_rewards()
             except Exception:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
 
         boxes = [bbox.box for bbox in self.bbox_list[: self.num_bbox]]
-        if self._use_rust_action_helpers():
+        if self._use_native_action_helpers():
             if bbox_idx is not None:
-                return smart_rust.bbox_action_upper_rewards(
+                return smart_native.bbox_action_upper_rewards(
                     boxes,
                     int(bbox_idx),
                     self.num_action_scale,
@@ -2049,7 +2941,7 @@ class MeshBBoxEnv:
                     self.volume_sum,
                     self.last_bbox_score,
                 )
-            return smart_rust.action_upper_rewards(
+            return smart_native.action_upper_rewards(
                 boxes,
                 self.num_action_scale,
                 self.action_unit,
@@ -2174,8 +3066,7 @@ class MeshBBoxEnv:
                 return cached
 
         if self._use_tet_clipping_reward() and not tov:
-            metrics = self._tet_clipping_metrics()
-            result = (0.0, float(metrics["Covered"]))
+            result = (0.0, float(self._tet_clipping_covered()))
             if cache_key is not None:
                 self._cache_set(self.covered_cache, cache_key, result)
             return result
@@ -2224,20 +3115,20 @@ class MeshBBoxEnv:
             except Exception:
                 pass
 
-        rust_state = self._get_rust_bbox_state()
-        if rust_state is not None:
+        native_state = self._get_native_bbox_state()
+        if native_state is not None:
             try:
-                return rust_state.bvs()
+                return native_state.bvs()
             except Exception:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
 
         valid_boxes = []
         for i in range(self.num_bbox):
             if self.bbox_list[i].valid_bbox():
                 valid_boxes.append(self.bbox_list[i].box)
 
-        if self._use_rust_action_helpers():
-            return smart_rust.total_bbox_volume(valid_boxes) / self.volume_sum
+        if self._use_native_action_helpers():
+            return smart_native.total_bbox_volume(valid_boxes) / self.volume_sum
 
         ret = 0.0
         for i in range(self.num_bbox):
@@ -2268,12 +3159,12 @@ class MeshBBoxEnv:
         return _manifold_mesh_volume(merged_bbox ^ self.manmsh) / union_volume
 
     def num_valid_bboxs(self) -> None:
-        rust_state = self._get_rust_bbox_state()
-        if rust_state is not None:
+        native_state = self._get_native_bbox_state()
+        if native_state is not None:
             try:
-                return rust_state.valid_count()
+                return native_state.valid_count()
             except Exception:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
 
         cnt = 0
         for i in range(self.num_bbox):
@@ -2360,16 +3251,16 @@ class MeshBBoxEnv:
         if self._cached_state_key is not None:
             return self._cached_state_key
 
-        rust_state = self._get_rust_bbox_state()
-        if rust_state is not None:
+        native_state = self._get_native_bbox_state()
+        if native_state is not None:
             try:
-                self._cached_state_key = smart_rust.bbox_rot_state_key(
-                    rust_state.bounds(),
+                self._cached_state_key = smart_native.bbox_rot_state_key(
+                    native_state.bounds(),
                     [bbox.rot.reshape(-1).tolist() for bbox in self.bbox_list],
                 )
                 return self._cached_state_key
             except Exception:
-                self._rust_bbox_state = None
+                self._native_bbox_state = None
 
         state = []
         for bbox in self.bbox_list:
@@ -2385,15 +3276,23 @@ class MeshBBoxEnv:
         self._cached_state_key = tuple(state)
         return self._cached_state_key
 
-    def _get_rust_bbox_state(self):
-        if smart_rust is None:
+    def _manifold_stateful_native_cache_key(self):
+        if self._manifold_stateful is None or not hasattr(self._manifold_stateful, "state_key"):
             return None
-        if not self._use_rust_action_helpers():
-            return None
-        if self._rust_bbox_state is not None:
-            return self._rust_bbox_state
         try:
-            self._rust_bbox_state = smart_rust.BBoxState(
+            return ("manifold_state", str(self._manifold_stateful.state_key()))
+        except Exception:
+            return None
+
+    def _get_native_bbox_state(self):
+        if smart_native is None:
+            return None
+        if not self._use_native_action_helpers():
+            return None
+        if self._native_bbox_state is not None:
+            return self._native_bbox_state
+        try:
+            self._native_bbox_state = smart_native.BBoxState(
                 [bbox.box for bbox in self.bbox_list[: self.num_bbox]],
                 self.num_action_scale,
                 self.action_unit,
@@ -2401,37 +3300,39 @@ class MeshBBoxEnv:
                 self.last_bbox_score,
             )
         except Exception:
-            self._rust_bbox_state = None
-        return self._rust_bbox_state
+            self._native_bbox_state = None
+        return self._native_bbox_state
 
-    def _use_rust_action_helpers(self):
+    def _use_native_action_helpers(self):
         return (
-            smart_rust is not None
-            and self.num_bbox * self._actions_per_bbox >= _RUST_ACTION_HELPER_MIN
+            smart_native is not None
+            and self.num_bbox * self._actions_per_bbox >= _NATIVE_ACTION_HELPER_MIN
         )
 
     def _use_tet_clipping_reward(self):
         return (
             self.reward_backend == "tet_clipping"
             and self._tet_clipping_state is not None
-            and smart_rust is not None
-            and smart_rust.using_rust()
+            and smart_native is not None
+            and getattr(smart_native, "native_core_available", lambda: False)()
         )
 
     def _use_manifold_bridge_reward(self):
+        if self.reward_backend == "manifold_stateful" and self._use_manifold_stateful_reward():
+            return True
         return (
             self.reward_backend in {"manifold_bridge", "manifold_stateful"}
             and self._manifold_bridge_mesh is not None
-            and smart_rust is not None
-            and smart_rust.using_rust()
+            and smart_native is not None
+            and smart_native.manifold_bridge_available()
         )
 
     def _use_manifold_stateful_reward(self):
         return (
             self.reward_backend == "manifold_stateful"
-            and smart_rust is not None
-            and smart_rust.using_rust()
-            and getattr(smart_rust, "ManifoldState", None) is not None
+            and smart_native is not None
+            and getattr(smart_native, "ManifoldState", None) is not None
+            and smart_native.manifold_bridge_available()
         )
 
     def _ensure_manifold_stateful_state(self):
@@ -2440,7 +3341,7 @@ class MeshBBoxEnv:
         bounds, rotations = self._bridge_current_bounds_rotations()
         state_key = self._state_cache_key()
         if self._manifold_stateful is None:
-            self._manifold_stateful = smart_rust.ManifoldState(
+            self._manifold_stateful = smart_native.ManifoldState(
                 np.asarray(self.trimsh.vertices, dtype=float).tolist(),
                 np.asarray(self.trimsh.faces, dtype=int).tolist(),
                 bounds,
@@ -2527,12 +3428,40 @@ class MeshBBoxEnv:
                 box_volumes=box_volumes,
             )
 
+    def _tet_clipping_covered(self):
+        if self._tet_clipping_state is None:
+            raise RuntimeError("tet clipping reward backend is not initialized")
+        if not hasattr(self._tet_clipping_state, "covered_for_boxes"):
+            return float(self._tet_clipping_metrics()["Covered"])
+
+        box_bounds = []
+        box_rotations = []
+        for i in range(self.num_bbox):
+            if not self.bbox_list[i].valid_bbox():
+                continue
+            bbox = self.bbox_list[i]
+            box_bounds.append(list(bbox.box))
+            if bool(self.args.tilted):
+                box_rotations.append(bbox.rot.reshape(-1).tolist())
+            else:
+                box_rotations.append(np.eye(3).reshape(-1).tolist())
+
+        if not box_bounds:
+            return 0.0
+        return float(
+            self._tet_clipping_state.covered_for_boxes(
+                box_bounds,
+                box_rotations,
+                max_boxes=self.tet_clipping_max_boxes,
+            )
+        )
+
     def _manifold_bridge_covered(self):
-        if self._manifold_bridge_mesh is None:
-            raise RuntimeError("Manifold bridge reward backend is not initialized")
         if self._use_manifold_stateful_reward():
             state = self._ensure_manifold_stateful_state()
             return float(state.covered())
+        if self._manifold_bridge_mesh is None:
+            raise RuntimeError("Manifold bridge reward backend is not initialized")
 
         box_bounds = []
         box_rotations = []
@@ -2629,8 +3558,8 @@ class MeshBBoxEnv:
 
 
 def _action_scales(num_action_scale):
-    if smart_rust is not None:
-        return smart_rust.action_scales(num_action_scale)
+    if smart_native is not None:
+        return smart_native.action_scales(num_action_scale)
     half = num_action_scale // 2
     return [-(2**i) for i in range(half - 1, -1, -1)] + [2**i for i in range(half)]
 
@@ -2647,8 +3576,8 @@ def _as_numpy(array):
 
 
 def _action_indices(max_bboxs, num_action_scale):
-    if smart_rust is not None:
-        return smart_rust.action_indices(max_bboxs, num_action_scale)
+    if smart_native is not None:
+        return smart_native.action_indices(max_bboxs, num_action_scale)
 
     action_indices = []
     for i in range(max_bboxs):
@@ -2696,6 +3625,25 @@ def _bbox_vertices_faces(box, rot, oriented):
     mx = np.asarray(box[3:], dtype=float)
     lengths = mx - mn
     base = np.matmul(mn, rot) if oriented else mn
+    faces = _BOX_FACES
+    if smart_native is not None and hasattr(smart_native, "native_box_mesh"):
+        try:
+            vertices, native_faces = smart_native.native_box_mesh(
+                float(base[0]),
+                float(base[1]),
+                float(base[2]),
+                float(lengths[0]),
+                float(lengths[1]),
+                float(lengths[2]),
+                rot.reshape(-1).tolist(),
+            )
+            vertices = np.asarray(vertices, dtype=float)
+            faces = np.asarray(native_faces, dtype=np.int64)
+            if oriented and np.linalg.det(rot) < 0:
+                faces = faces[:, ::-1]
+            return vertices, faces
+        except Exception:
+            pass
 
     vertices = []
     for i in range(2):
@@ -2708,7 +3656,6 @@ def _bbox_vertices_faces(box, rot, oriented):
                     + rot[2] * k * lengths[2]
                 )
     vertices = np.asarray(vertices, dtype=float)
-    faces = _BOX_FACES
     if oriented and np.linalg.det(rot) < 0:
         faces = faces[:, ::-1]
     return vertices, faces

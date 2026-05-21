@@ -1,0 +1,118 @@
+name: Wheels
+
+"on":
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-wheel:
+    name: ${{ matrix.os }} ${{ matrix.archs }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            archs: arm64
+          - os: macos-13
+            archs: x86_64
+          - os: ubuntu-22.04
+            archs: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.22.0
+        env:
+          CIBW_ARCHS: ${{ matrix.archs }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+      - name: Audit wheel contents
+        run: python scripts/audit_release_wheel.py wheelhouse/*.whl
+
+      - name: Smoke installed console scripts
+        run: |
+          python -m pip install PyYAML numpy
+          python -m pip install --force-reinstall --no-deps wheelhouse/*.whl
+          smart-smoke-console-scripts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.archs }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel twine
+
+      - name: Build sdist
+        run: python setup.py sdist --dist-dir dist
+
+      - name: Audit sdist contents
+        run: python scripts/audit_release_wheel.py dist/*.tar.gz
+
+      - name: Check sdist metadata
+        run: python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs:
+      - build-wheel
+      - sdist
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release artifacts
+        run: ls -lh dist
+
+      - name: Check release metadata
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - name: Audit release artifacts
+        run: python scripts/audit_release_wheel.py dist/*
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

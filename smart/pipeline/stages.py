@@ -20,6 +20,12 @@ from .config import (
 )
 from .manifest import ManifestWriter, StageRecord
 from .runner import find_executable, run_command
+from ..native_executable import native_executable_path, run_native_command
+
+try:
+    import smart.native as smart_native
+except ImportError:  # pragma: no cover - source-tree fallback
+    smart_native = None
 
 
 STAGE_ORDER = [
@@ -32,6 +38,36 @@ STAGE_ORDER = [
     "local_refine",
     "render",
 ]
+
+_ACTION_PRIOR_DEVICE_CACHE: dict[str, str] = {}
+NATIVE_SEARCH_BACKENDS = {
+    "cpp",
+    "cpp_stateful",
+    "cpp_native",
+    "native",
+    "native_stateful",
+}
+NATIVE_SEARCH_BACKEND_LABEL = "cpp/cpp_stateful/cpp_native/native/native_stateful"
+
+
+def _resolve_action_prior_device(device: Any) -> str:
+    requested = str(device or "json")
+    if requested.lower() != "auto":
+        return requested
+    if requested in _ACTION_PRIOR_DEVICE_CACHE:
+        return _ACTION_PRIOR_DEVICE_CACHE[requested]
+    resolved = "json"
+    try:
+        import torch  # type: ignore
+
+        if bool(getattr(torch.backends, "mps", None)) and torch.backends.mps.is_available():
+            resolved = "mps"
+        elif torch.cuda.is_available():
+            resolved = "cuda"
+    except Exception:
+        resolved = "json"
+    _ACTION_PRIOR_DEVICE_CACHE[requested] = resolved
+    return resolved
 
 
 def _command_failure_summary(tool: str, result: Any) -> str:
@@ -90,6 +126,293 @@ def run_pipeline(
 
     writer.write_summary(records)
     return records
+
+
+def run_native_pipelines(
+    cfg: dict[str, Any],
+    *,
+    category_name: str | None = None,
+    meshes: list[str] | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> list[StageRecord]:
+    """Run the full one-mesh SMART path through smart-cpp-native.
+
+    This keeps Python at the package/batch layer: each mesh is handed to the
+    C++ executable, which drives normalization, Mesh2Tet orchestration,
+    CoACD splitting/partitioning, merge, refine, and MCTS.
+    """
+
+    workspace = workspace_path(cfg)
+    workspace.mkdir(parents=True, exist_ok=True)
+    writer = ManifestWriter(workspace / "manifests")
+    records: list[StageRecord] = []
+
+    for category in cfg.get("categories", []):
+        if category_name and category["name"] != category_name:
+            continue
+        for mesh_id in list_mesh_ids(category, explicit=meshes):
+            record = run_native_pipeline_mesh(
+                cfg,
+                category,
+                mesh_id,
+                dry_run=dry_run,
+                force=force,
+            )
+            writer.append(record)
+            records.append(record)
+
+    writer.write_summary(records)
+    return records
+
+
+def run_native_pipeline_mesh(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+) -> StageRecord:
+    started = time.time()
+    stage = "native_pipeline"
+    source_mesh = category_mesh_root(category) / mesh_id / "model.obj"
+    work_dir = workspace_path(cfg, "native_pipeline", category["name"], mesh_id)
+    expected = work_dir / "mcts_bboxs_steps0" / "bbox0.obj"
+    if expected.exists() and not force:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="skipped",
+            output_path=work_dir / "mcts_bboxs_steps0",
+            metadata={"reason": "existing_output", "backend": "smart-cpp-native"},
+        )
+    if not source_mesh.exists():
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="skipped",
+            output_path=work_dir,
+            error=f"missing source mesh: {source_mesh}",
+        )
+
+    tetra_cfg = deep_update(cfg.get("tetra", {}), category.get("tetra", {}))
+    preseg_cfg = deep_update(cfg.get("preseg", {}), category.get("preseg", {}))
+    merge_cfg = deep_update(cfg.get("merge", {}), category.get("merge", {}))
+    refine_cfg = deep_update(cfg.get("refine", {}), category.get("refine", {}))
+    mcts_cfg = deep_update(cfg.get("mcts", {}), category.get("mcts", {}))
+    norm_cfg = cfg.get("normalization", {})
+    coacd_cfg = dict(preseg_cfg.get("coacd", {}))
+
+    manifold_bin = _mesh2tet_tool(
+        cfg,
+        "manifoldplus_bin",
+        "SMART_MANIFOLDPLUS_BIN",
+        "manifold",
+    )
+    ftetwild_bin = _mesh2tet_tool(
+        cfg,
+        "ftetwild_bin",
+        "SMART_FTETWILD_BIN",
+        "FloatTetwild_bin",
+    )
+    coacd_bin = _resolve_coacd_cli(cfg, preseg_cfg)
+    missing = [
+        name
+        for name, value in [
+            ("ManifoldPlus", manifold_bin),
+            ("fTetWild", ftetwild_bin),
+            ("CoACD", coacd_bin),
+        ]
+        if not value
+    ]
+    if missing and not dry_run:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="blocked",
+            output_path=work_dir,
+            error="Missing native pipeline tool(s): " + ", ".join(missing),
+            metadata={"backend": "smart-cpp-native"},
+        )
+
+    try:
+        from smart import native_runner
+    except Exception as exc:  # noqa: BLE001
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="blocked",
+            output_path=work_dir,
+            error=f"failed to import smart.native_runner: {exc}",
+        )
+
+    native_bin = native_executable_path(cfg.get("tools", {}).get("smart_cpp_native_bin"))
+    if native_bin is None and not dry_run:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="blocked",
+            output_path=work_dir,
+            error="smart-cpp-native executable is not available; run `smart build-cpp`",
+            metadata={"backend": "smart-cpp-native"},
+        )
+
+    kwargs = _native_pipeline_kwargs(
+        cfg,
+        source_mesh=source_mesh,
+        work_dir=work_dir,
+        manifoldplus_bin=manifold_bin or "$SMART_MANIFOLDPLUS_BIN",
+        ftetwild_bin=ftetwild_bin or "$SMART_FTETWILD_BIN",
+        coacd_bin=coacd_bin or "$SMART_COACD_BIN",
+        mesh_id=mesh_id,
+        tetra_cfg=tetra_cfg,
+        preseg_cfg=preseg_cfg,
+        coacd_cfg=coacd_cfg,
+        merge_cfg=merge_cfg,
+        refine_cfg=refine_cfg,
+        mcts_cfg=mcts_cfg,
+        norm_cfg=norm_cfg,
+    )
+    args = native_runner.pipeline_args_from_files(**kwargs)
+    command = [str(native_bin or "smart-cpp-native"), *args]
+    if dry_run:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="dry_run",
+            output_path=work_dir,
+            command=command,
+            metadata={"backend": "smart-cpp-native", "combined": True},
+        )
+
+    try:
+        result = native_runner.run_pipeline_from_files(
+            **kwargs,
+            timeout=float(cfg.get("native_pipeline", {}).get("timeout_sec", 0.0) or 0.0)
+            or None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            stage,
+            started,
+            status="failed",
+            output_path=work_dir,
+            command=command,
+            error=str(exc),
+            metadata={"backend": "smart-cpp-native", "combined": True},
+        )
+
+    return _base_record(
+        cfg,
+        category,
+        mesh_id,
+        stage,
+        started,
+        status=str(result.get("status", "success")),
+        output_path=result.get("output_path"),
+        command=list(result.get("command") or command),
+        metadata=dict(result.get("metadata") or {}),
+    )
+
+
+def _native_pipeline_kwargs(
+    cfg: dict[str, Any],
+    *,
+    source_mesh: Path,
+    work_dir: Path,
+    manifoldplus_bin: str | Path,
+    ftetwild_bin: str | Path,
+    coacd_bin: str | Path,
+    mesh_id: str,
+    tetra_cfg: dict[str, Any],
+    preseg_cfg: dict[str, Any],
+    coacd_cfg: dict[str, Any],
+    merge_cfg: dict[str, Any],
+    refine_cfg: dict[str, Any],
+    mcts_cfg: dict[str, Any],
+    norm_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    retry = tetra_cfg.get("retry", {}) if isinstance(tetra_cfg.get("retry"), dict) else {}
+    ftetwild_threads = tetra_cfg.get("ftetwild_threads")
+    if ftetwild_threads is not None and not _executable_supports_option(
+        str(ftetwild_bin),
+        "--max-threads",
+    ):
+        ftetwild_threads = None
+    return {
+        "input_mesh": source_mesh,
+        "work_dir": work_dir,
+        "manifoldplus_bin": manifoldplus_bin,
+        "ftetwild_bin": ftetwild_bin,
+        "coacd_bin": coacd_bin,
+        "mesh_id": mesh_id,
+        "epsilon": float(tetra_cfg.get("epsilon", 0.002)),
+        "edge_length": float(tetra_cfg.get("edge_length", 0.1)),
+        "merge_eps": float(merge_cfg.get("merge_eps", 0.02)),
+        "refine_max_step": int(refine_cfg.get("max_step", 2000)),
+        "mcts_iter": int(mcts_cfg.get("mcts_iter", 3000)),
+        "mcts_max_step": int(mcts_cfg.get("max_step", 150)),
+        "normalize_mode": str(norm_cfg.get("mode", "bbox_diagonal")),
+        "normalize_target": float(norm_cfg.get("target", 1.0)),
+        "normalize_center": str(norm_cfg.get("center", "bbox")),
+        "cover_penalty": float(mcts_cfg.get("cover_penalty", refine_cfg.get("cover_penalty", 100))),
+        "refine_action_unit": float(refine_cfg.get("action_unit", 0.01)),
+        "mcts_action_unit": float(mcts_cfg.get("action_unit", 0.02)),
+        "num_action_scale": max(1, int(refine_cfg.get("num_action_scale", 1))) * 2,
+        "manifold_timeout_sec": float(tetra_cfg.get("manifold_timeout_sec", 600)),
+        "ftetwild_timeout_sec": float(tetra_cfg.get("ftetwild_timeout_sec", 1200)),
+        "ftetwild_threads": ftetwild_threads,
+        "ftetwild_level": int(tetra_cfg.get("ftetwild_level", 2)),
+        "retry_epsilon_scale": float(retry.get("epsilon_scale", 2.0)),
+        "retry_edge_length_scale": float(retry.get("edge_length_scale", 2.0)),
+        "coacd_timeout_sec": float(preseg_cfg.get("timeout_sec", 1200)),
+        "coacd_threshold": float(coacd_cfg.get("threshold", 0.05)),
+        "coacd_max_convex_hull": int(coacd_cfg.get("max_convex_hull", 64)),
+        "coacd_preprocess_mode": str(coacd_cfg.get("preprocess_mode", "auto")),
+        "coacd_preprocess_resolution": int(coacd_cfg.get("preprocess_resolution", 50)),
+        "coacd_resolution": int(coacd_cfg.get("resolution", 2000)),
+        "coacd_mcts_nodes": int(coacd_cfg.get("mcts_nodes", 20)),
+        "coacd_mcts_iterations": int(coacd_cfg.get("mcts_iterations", 150)),
+        "coacd_mcts_max_depth": int(coacd_cfg.get("mcts_max_depth", 3)),
+        "coacd_seed": int(coacd_cfg.get("seed", mcts_cfg.get("seed", 7777))),
+        "coacd_pca": bool(coacd_cfg.get("pca", False)),
+        "coacd_merge": bool(coacd_cfg.get("merge", True)),
+        "coacd_decimate": bool(coacd_cfg.get("decimate", True)),
+        "merge_tilted": bool(merge_cfg.get("tilted", True)),
+        "merge_only_nearby": bool(merge_cfg.get("only_nearby", False)),
+        "final_k": int(merge_cfg.get("final_k", 0)),
+        "exp_w": float(mcts_cfg.get("exp_w", 0.001)),
+        "gamma": float(mcts_cfg.get("gamma", 1.0)),
+        "cache_capacity": int(
+            mcts_cfg.get("stateful_cache_capacity", refine_cfg.get("stateful_cache_capacity", 65536))
+        ),
+        "volume_method": str(mcts_cfg.get("manifold_volume_method", "mesh")),
+        "stateful_union_cache": bool(mcts_cfg.get("stateful_union_cache", True)),
+        "transposition_table": bool(mcts_cfg.get("transposition_table", False)),
+        "seed": int(mcts_cfg.get("seed", 0)),
+    }
 
 
 def run_stage(
@@ -278,10 +601,25 @@ def run_normalize_mesh(
         )
 
     try:
-        obj_lines, vertices = _read_obj_vertices(source_mesh)
-        normalized, stats = _normalize_vertices(vertices, signature)
         out_dir.mkdir(parents=True, exist_ok=True)
-        _write_normalized_obj(obj_lines, normalized, output)
+        native_exec = _normalize_obj_file_executable(cfg, source_mesh, output, signature, mesh_id)
+        command = list(native_exec.get("command") or []) if native_exec else None
+        log_path = Path(native_exec["log_path"]) if native_exec and native_exec.get("log_path") else None
+        if native_exec is not None:
+            stats = dict(native_exec["stats"])
+        else:
+            native_stats = _normalize_obj_file_native(source_mesh, output, signature)
+            command = None
+            log_path = None
+            if native_stats is not None:
+                stats = native_stats
+            else:
+                if stage_cfg.get("native_executable_required", False):
+                    raise RuntimeError("smart-cpp-native normalize executable is required but unavailable")
+                obj_lines, vertices = _read_obj_vertices(source_mesh)
+                normalized, stats = _normalize_vertices(vertices, signature)
+                _write_normalized_obj(obj_lines, normalized, output)
+                stats["backend"] = "python_obj"
         metadata = {"signature": signature, **stats, "source": str(source_mesh), "output": str(output)}
         metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
@@ -304,8 +642,79 @@ def run_normalize_mesh(
         started,
         status="success",
         output_path=output,
+        log_path=log_path,
+        command=command,
         metadata={"scale": stats["scale"], **stats["after"]},
     )
+
+
+def _normalize_obj_file_executable(
+    cfg: dict[str, Any],
+    source: Path,
+    output: Path,
+    signature: dict[str, Any],
+    mesh_id: str,
+) -> dict[str, Any] | None:
+    stage_cfg = cfg.get("normalization", {})
+    if str(stage_cfg.get("backend", "cpp_native_executable")) != "cpp_native_executable":
+        return None
+    tools = cfg.get("tools", {})
+    explicit = tools.get("smart_cpp_native_bin") if isinstance(tools, dict) else None
+    binary_path = native_executable_path(explicit)
+    if binary_path is None:
+        return None
+    binary = str(binary_path)
+    command = [
+        binary,
+        "normalize",
+        "--input",
+        str(source),
+        "--output",
+        str(output),
+        "--mode",
+        str(signature["mode"]),
+        "--center",
+        str(signature["center"]),
+        "--target",
+        str(float(signature["target"])),
+    ]
+    log_path = workspace_path(cfg, "logs", "normalize", f"{mesh_id}.log")
+    result = run_command(command, timeout=600, log_path=log_path)
+    if not result.ok:
+        if stage_cfg.get("native_executable_required", False):
+            raise RuntimeError(f"smart-cpp-native normalize failed; see {log_path}")
+        return None
+    payload = json.loads(result.stdout or "{}")
+    if payload.get("status") != "success":
+        if stage_cfg.get("native_executable_required", False):
+            raise RuntimeError(f"smart-cpp-native normalize returned non-success; see {log_path}")
+        return None
+    payload["backend"] = "cpp_native_executable"
+    return {"stats": payload, "command": command, "log_path": str(log_path)}
+
+
+def _normalize_obj_file_native(
+    source: Path,
+    output: Path,
+    signature: dict[str, Any],
+) -> dict[str, Any] | None:
+    if smart_native is None:
+        return None
+    try:
+        if not smart_native.native_core_available() or not hasattr(smart_native, "native_normalize_obj_file"):
+            return None
+        stats = smart_native.native_normalize_obj_file(
+            str(source),
+            str(output),
+            mode=str(signature["mode"]),
+            center=str(signature["center"]),
+            target=float(signature["target"]),
+        )
+        payload = dict(stats)
+        payload["backend"] = "cpp_native_obj"
+        return payload
+    except Exception:
+        return None
 
 
 def tetra_source_mesh(cfg: dict[str, Any], category: dict[str, Any], mesh_id: str) -> Path:
@@ -313,6 +722,99 @@ def tetra_source_mesh(cfg: dict[str, Any], category: dict[str, Any], mesh_id: st
         return normalized_mesh_path(cfg, category, mesh_id)
     source_name = str(cfg.get("normalization", {}).get("source_filename", "model.obj"))
     return category_mesh_root(category) / mesh_id / source_name
+
+
+def _prepare_tetra_input_mesh(source: Path, output: Path, stage_cfg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    repair_cfg = stage_cfg.get("input_repair", {})
+    if not repair_cfg.get("enabled", False):
+        return source, {"enabled": False}
+    metadata: dict[str, Any] = {"enabled": True, "used": False, "source": str(source)}
+    try:
+        import trimesh  # type: ignore
+        import trimesh.repair  # type: ignore
+    except ModuleNotFoundError:
+        metadata["skipped_reason"] = "trimesh is not installed"
+        return source, metadata
+    try:
+        mesh = trimesh.load(str(source), force="mesh", process=False)
+        if not isinstance(mesh, trimesh.Trimesh):
+            metadata["skipped_reason"] = f"unsupported mesh object: {type(mesh).__name__}"
+            return source, metadata
+        components = _split_mesh_components(trimesh, mesh)
+        metadata["before"] = {
+            "vertices": int(len(mesh.vertices)),
+            "faces": int(len(mesh.faces)),
+            "watertight": bool(mesh.is_watertight),
+            "components": int(len(components)) if len(mesh.faces) else 0,
+        }
+        if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+            metadata["skipped_reason"] = "empty mesh"
+            return source, metadata
+        if repair_cfg.get("keep_largest_component", False):
+            if components:
+                mesh = max(components, key=lambda component: len(component.faces))
+        if repair_cfg.get("basic_cleanup", True):
+            if hasattr(mesh, "unique_faces") and hasattr(mesh, "update_faces"):
+                try:
+                    mesh.update_faces(mesh.unique_faces())
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                _call_optional_mesh_method(mesh, "remove_duplicate_faces")
+            if hasattr(mesh, "nondegenerate_faces") and hasattr(mesh, "update_faces"):
+                try:
+                    mesh.update_faces(mesh.nondegenerate_faces())
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                _call_optional_mesh_method(mesh, "remove_degenerate_faces")
+            _call_optional_mesh_method(mesh, "remove_infinite_values")
+            _call_optional_mesh_method(mesh, "remove_unreferenced_vertices")
+            _call_optional_mesh_method(mesh, "merge_vertices")
+        if repair_cfg.get("fill_holes", False):
+            trimesh.repair.fill_holes(mesh)
+        if repair_cfg.get("fix_normals", True):
+            trimesh.repair.fix_normals(mesh)
+        components = _split_mesh_components(trimesh, mesh)
+        metadata["after"] = {
+            "vertices": int(len(mesh.vertices)),
+            "faces": int(len(mesh.faces)),
+            "watertight": bool(mesh.is_watertight),
+            "components": int(len(components)) if len(mesh.faces) else 0,
+        }
+        if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+            metadata["skipped_reason"] = "repair produced empty mesh"
+            return source, metadata
+        output.parent.mkdir(parents=True, exist_ok=True)
+        mesh.export(str(output), file_type="obj")
+        if not output.exists() or output.stat().st_size == 0:
+            metadata["skipped_reason"] = "repair export failed"
+            return source, metadata
+        metadata["used"] = True
+        metadata["path"] = str(output)
+        return output, metadata
+    except Exception as exc:  # noqa: BLE001
+        metadata["error"] = str(exc)
+        return source, metadata
+
+
+def _call_optional_mesh_method(mesh: Any, name: str) -> None:
+    method = getattr(mesh, name, None)
+    if not callable(method):
+        return
+    try:
+        method()
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _split_mesh_components(trimesh_module: Any, mesh: Any) -> list[Any]:
+    try:
+        return list(trimesh_module.graph.split(mesh, only_watertight=False))
+    except TypeError:
+        return list(trimesh_module.graph.split(mesh))
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _read_obj_vertices(path: Path) -> tuple[list[str], list[tuple[float, float, float]]]:
@@ -334,6 +836,18 @@ def _normalize_vertices(
     vertices: list[tuple[float, float, float]],
     signature: dict[str, Any],
 ) -> tuple[list[tuple[float, float, float]], dict[str, Any]]:
+    if smart_native is not None:
+        try:
+            if smart_native.native_core_available():
+                return smart_native.native_normalize_vertices(
+                    vertices,
+                    mode=str(signature["mode"]),
+                    center=str(signature["center"]),
+                    target=float(signature["target"]),
+                )
+        except Exception:
+            pass
+
     before = _vertex_stats(vertices)
     center_mode = signature["center"]
     if center_mode == "bbox":
@@ -482,6 +996,16 @@ def run_tetra_mesh(
             error=f"missing source mesh: {source_mesh}",
         )
 
+    log_dir.mkdir(parents=True, exist_ok=True)
+    prepared_source_mesh = source_mesh
+    input_repair_metadata: dict[str, Any] = {}
+    if not dry_run:
+        prepared_source_mesh, input_repair_metadata = _prepare_tetra_input_mesh(
+            source_mesh,
+            log_dir / "input_repaired.obj",
+            stage_cfg,
+        )
+
     attempts: list[dict[str, Any]] = [
         {
             "epsilon": epsilon,
@@ -492,6 +1016,17 @@ def run_tetra_mesh(
     ]
     retry = stage_cfg.get("retry", {})
     if retry.get("enabled", True):
+        fine_retry = retry.get("fine_retry", {})
+        if fine_retry.get("enabled", True):
+            attempts.append(
+                {
+                    "epsilon": epsilon * float(fine_retry.get("epsilon_scale", 0.5)),
+                    "edge_length": edge_length * float(fine_retry.get("edge_length_scale", 0.5)),
+                    "coarsen": bool(fine_retry.get("coarsen", False)),
+                    "timeout_sec": fine_retry.get("timeout_sec"),
+                    "name": str(fine_retry.get("name", "fine_retry")),
+                }
+            )
         attempts.append(
             {
                 "epsilon": epsilon * float(retry.get("epsilon_scale", 2.0)),
@@ -523,7 +1058,7 @@ def run_tetra_mesh(
         manmesh = out_dir / "model_manifold.obj"
         manifold_log = log_dir / f"{attempt_name}_manifoldplus.log"
         ftetwild_log = log_dir / f"{attempt_name}_ftetwild.log"
-        manifold_cmd = [manifold_bin, "--input", str(source_mesh), "--output", str(manmesh)]
+        manifold_cmd = [manifold_bin, "--input", str(prepared_source_mesh), "--output", str(manmesh)]
         result = run_command(
             manifold_cmd,
             timeout=stage_cfg.get("manifold_timeout_sec"),
@@ -649,6 +1184,8 @@ def run_tetra_mesh(
             "attempt": attempt_name,
             "previous_attempts": attempt_metadata,
         }
+        if input_repair_metadata:
+            metadata["input_repair"] = input_repair_metadata
         if validation_metadata:
             metadata["validation"] = validation_metadata
         return _base_record(
@@ -676,7 +1213,7 @@ def run_tetra_mesh(
         log_path=last_log,
         command=last_command,
         error="; ".join(errors) if errors else "unknown tetrahedralization failure",
-        metadata={"attempts": attempt_metadata},
+        metadata={"attempts": attempt_metadata, "input_repair": input_repair_metadata},
     )
 
 
@@ -775,7 +1312,7 @@ def inspect_tetra_output(
         return None, metadata
     try:
         mesh = trimesh.load(surface, file_type="obj", process=False)
-        components = trimesh.graph.split(mesh)
+        components = _split_mesh_components(trimesh, mesh)
         metadata.update(
             {
                 "surface_vertices": int(len(mesh.vertices)),
@@ -794,6 +1331,237 @@ def inspect_tetra_output(
     except Exception as exc:  # noqa: BLE001
         return str(exc), metadata
     return None, metadata
+
+
+def _write_coacd_partition_metadata(
+    tet_dir: Path,
+    mesh_id: str,
+    *,
+    force: bool = False,
+    require_native: bool = False,
+) -> dict[str, Any]:
+    """Cache CoACD part-to-tet assignments for the direct C++ merge runner."""
+    metadata_path = tet_dir / "coacd_partitions.json"
+    if metadata_path.exists() and not force:
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+            return {
+                "partition_metadata_path": str(metadata_path),
+                "partition_count": len(data.get("partitions", [])),
+                "partition_metadata_cached": True,
+            }
+        except Exception:
+            pass
+
+    native_error = None
+    try:
+        from smart import native_runner
+
+        if native_runner.cpp_native_file_runner_available():
+            native_result = native_runner.run_coacd_partition_from_files(
+                msh_path=tet_dir / "tetra.msh",
+                coacd_dir=tet_dir / "coacd",
+                output_path=metadata_path,
+                mesh_id=mesh_id,
+            )
+            if native_result.get("status") == "success" and metadata_path.exists():
+                data = json.loads(metadata_path.read_text(encoding="utf-8"))
+                return {
+                    "partition_metadata_path": str(metadata_path),
+                    "partition_count": len(data.get("partitions", [])),
+                    "partition_metadata_cached": False,
+                    "partition_metadata_backend": "smart-cpp-native",
+                    "partition_metadata_native": dict(native_result.get("metadata") or {}),
+                }
+    except Exception as exc:  # noqa: BLE001
+        native_error = str(exc)
+
+    if require_native:
+        detail = f": {native_error}" if native_error else ""
+        raise RuntimeError(
+            "smart-cpp-native partition-coacd is required for cpp_native preseg"
+            + detail
+        )
+
+    manifold_python = os.environ.get("SMART_MANIFOLD_PYTHON")
+    manifold_candidates = []
+    if manifold_python:
+        manifold_candidates.append(Path(manifold_python).expanduser())
+    manifold_candidates.extend(
+        [
+            REPO_ROOT / "smart" / "pymanifold_runtime",
+            REPO_ROOT / "smart" / "vendor" / "manifold" / "build" / "bindings" / "python",
+        ]
+    )
+    for candidate in manifold_candidates:
+        if candidate.exists() and str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+            break
+
+    from smart.legacy.merging.src.utils.preseg import presegmentation
+    import smart.pymesh_compat as pymesh
+
+    tetmsh = pymesh.load_mesh(tet_dir / "tetra.msh")
+    tetmsh.enable_connectivity()
+    partitions = presegmentation(str(tet_dir), tetmsh, "coacd", "", mesh_id)
+    clean_partitions = [
+        sorted({int(value) for value in partition})
+        for partition in partitions
+        if partition
+    ]
+    payload = {
+        "schema_version": 1,
+        "source": "smart.pipeline.preseg.coacd_partition_metadata",
+        "init_type": "coacd",
+        "mesh_id": mesh_id,
+        "part_obj_count": len(list((tet_dir / "coacd").glob("*.obj"))),
+        "tet_count": int(len(tetmsh.voxels)),
+        "partitions": clean_partitions,
+    }
+    metadata_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return {
+        "partition_metadata_path": str(metadata_path),
+        "partition_count": len(clean_partitions),
+        "partition_metadata_cached": False,
+        "partition_metadata_backend": "legacy_python",
+        "partition_metadata_native_error": native_error,
+    }
+
+
+def _resolve_coacd_cli(cfg: dict[str, Any], stage_cfg: dict[str, Any]) -> str | None:
+    candidates: list[str | Path | None] = [
+        os.environ.get("SMART_COACD_BIN"),
+        stage_cfg.get("coacd_bin"),
+        cfg.get("tools", {}).get("coacd_bin"),
+        "external/CoACD/python/package/bin/coacd",
+        "external/CoACD/build/main",
+    ]
+    for configured in candidates:
+        if not configured:
+            continue
+        path = repo_path(configured)
+        if path is not None and path.exists():
+            return str(path)
+        if Path(str(configured)).is_absolute() and Path(str(configured)).exists():
+            return str(configured)
+    return shutil.which("coacd")
+
+
+def _command_for_script_or_executable(path: str) -> list[str]:
+    candidate = Path(path)
+    if os.access(candidate, os.X_OK):
+        return [str(candidate)]
+    try:
+        with candidate.open("rb") as handle:
+            header = handle.read(128)
+    except OSError:
+        return [str(candidate)]
+    if header.startswith(b"#!") and b"python" in header.lower():
+        return [sys.executable, str(candidate)]
+    return [str(candidate)]
+
+
+def _run_coacd_cli_preseg(
+    cfg: dict[str, Any],
+    stage_cfg: dict[str, Any],
+    surface: Path,
+    out_dir: Path,
+    *,
+    dry_run: bool,
+) -> tuple[bool, dict[str, Any], str | None]:
+    coacd_bin = _resolve_coacd_cli(cfg, stage_cfg)
+    if not coacd_bin:
+        return False, {}, "CoACD C++ CLI not found"
+    native_bin = native_executable_path()
+    if native_bin is None:
+        return False, {}, "smart-cpp-native is required to split CoACD CLI output"
+
+    combined = out_dir / "coacd_parts.obj"
+    kwargs = dict(stage_cfg.get("coacd", {}))
+    command = [
+        *_command_for_script_or_executable(coacd_bin),
+        "-i",
+        str(surface),
+        "-o",
+        str(combined),
+        "-t",
+        str(float(kwargs.get("threshold", 0.05))),
+        "-c",
+        str(int(kwargs.get("max_convex_hull", 64))),
+        "-pm",
+        str(kwargs.get("preprocess_mode", "auto")),
+        "-pr",
+        str(int(kwargs.get("preprocess_resolution", 50))),
+        "-r",
+        str(int(kwargs.get("resolution", 2000))),
+        "-mn",
+        str(int(kwargs.get("mcts_nodes", 20))),
+        "-mi",
+        str(int(kwargs.get("mcts_iterations", 150))),
+        "-md",
+        str(int(kwargs.get("mcts_max_depth", 3))),
+        "--seed",
+        str(int(kwargs.get("seed", 7777))),
+    ]
+    if bool(kwargs.get("pca", False)):
+        command.append("--pca")
+    if not bool(kwargs.get("merge", True)):
+        command.append("-nm")
+    if bool(kwargs.get("decimate", True)):
+        command.append("-d")
+    if dry_run:
+        return True, {"coacd_cli_command": command, "splitter": str(native_bin)}, None
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = out_dir / "coacd_cli.log"
+    result = run_command(
+        command,
+        timeout=float(stage_cfg.get("timeout_sec", 1800)),
+        log_path=log_path,
+    )
+    if not result.ok or not combined.exists():
+        error = _command_failure_summary("CoACD CLI", result)
+        if result.stderr:
+            error += f": {result.stderr.strip()[:500]}"
+        return False, {"coacd_cli_command": command, "coacd_cli_log": str(log_path)}, error
+
+    split = run_native_command(
+        [
+            "split-obj-parts",
+            "--input",
+            str(combined),
+            "--output_dir",
+            str(out_dir),
+            "--prefix",
+            "part",
+        ]
+    )
+    if split.returncode != 0:
+        return (
+            False,
+            {"coacd_cli_command": command, "coacd_cli_log": str(log_path)},
+            "smart-cpp-native split-obj-parts failed: "
+            + (split.stderr.strip() or split.stdout.strip()),
+        )
+    parts = sorted(path for path in out_dir.glob("part_*.obj"))
+    return (
+        True,
+        {
+            "backend": "coacd_cli",
+            "coacd_cli": coacd_bin,
+            "coacd_cli_command": command,
+            "coacd_cli_log": str(log_path),
+            "combined_obj": str(combined),
+            "splitter": str(native_bin),
+            "split_stdout": split.stdout.strip(),
+            "parts": len(parts),
+        },
+        None,
+    )
 
 
 def run_preseg_mesh(
@@ -818,15 +1586,99 @@ def run_preseg_mesh(
     if dry_run:
         return _base_record(cfg, category, mesh_id, "preseg", started, status="dry_run", output_path=out_dir)
 
+    backend = str(stage_cfg.get("backend", "auto"))
+    metadata: dict[str, Any] = {}
+    cli_attempted = backend in {"auto", "coacd_cli", "cpp_native"}
+    if cli_attempted:
+        ok, cli_metadata, cli_error = _run_coacd_cli_preseg(
+            cfg,
+            stage_cfg,
+            surface,
+            out_dir,
+            dry_run=dry_run,
+        )
+        metadata.update(cli_metadata)
+        if ok:
+            if stage_cfg.get("write_partition_metadata", True):
+                try:
+                    require_native_partition = (
+                        str(stage_cfg.get("partition_metadata_backend", "cpp_native")) == "cpp_native"
+                        and bool(stage_cfg.get("partition_metadata_required", False))
+                    )
+                    metadata.update(
+                        _write_coacd_partition_metadata(
+                            tet_dir,
+                            mesh_id,
+                            force=force,
+                            require_native=require_native_partition,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if bool(stage_cfg.get("partition_metadata_required", False)):
+                        return _base_record(
+                            cfg,
+                            category,
+                            mesh_id,
+                            "preseg",
+                            started,
+                            status="failed",
+                            output_path=out_dir,
+                            error=str(exc),
+                            metadata=metadata,
+                        )
+                    metadata["partition_metadata_error"] = str(exc)
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "preseg",
+                started,
+                status="success",
+                output_path=out_dir,
+                metadata=metadata,
+            )
+        if backend in {"coacd_cli", "cpp_native"} and bool(stage_cfg.get("coacd_cli_required", False)):
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "preseg",
+                started,
+                status="failed",
+                output_path=out_dir,
+                error=cli_error or "CoACD C++ CLI failed",
+                metadata=metadata,
+            )
+        if cli_error:
+            metadata["coacd_cli_error"] = cli_error
+
     try:
         import coacd  # type: ignore
-        import trimesh  # type: ignore
+        import numpy as np  # type: ignore
     except ModuleNotFoundError as exc:
         return _base_record(cfg, category, mesh_id, "preseg", started, status="blocked", output_path=out_dir, error=f"missing dependency: {exc.name}")
 
     try:
-        mesh = trimesh.load(surface, file_type="obj", process=False)
-        coacd_mesh = coacd.Mesh(mesh.vertices, mesh.faces)
+        used_native_obj_io = False
+        try:
+            if (
+                smart_native is not None
+                and smart_native.native_core_available()
+                and hasattr(smart_native, "native_load_obj_mesh")
+            ):
+                vertices, faces = smart_native.native_load_obj_mesh(str(surface))
+                coacd_mesh = coacd.Mesh(
+                    np.asarray(vertices, dtype=np.float64),
+                    np.asarray(faces, dtype=np.int32),
+                )
+                used_native_obj_io = True
+            else:
+                raise RuntimeError("native OBJ IO unavailable")
+        except Exception:
+            import trimesh  # type: ignore
+
+            mesh = trimesh.load(surface, file_type="obj", process=False)
+            coacd_mesh = coacd.Mesh(mesh.vertices, mesh.faces)
         kwargs = dict(stage_cfg.get("coacd", {}))
         try:
             parts = coacd.run_coacd(coacd_mesh, **kwargs)
@@ -837,10 +1689,52 @@ def run_preseg_mesh(
         out_dir.mkdir(parents=True, exist_ok=True)
         for index, part in enumerate(parts):
             vertices, faces = part
-            part_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-            part_mesh.export(out_dir / f"part_{index:04d}.obj")
+            output_part = out_dir / f"part_{index:04d}.obj"
+            if used_native_obj_io and hasattr(smart_native, "native_save_obj_mesh"):
+                smart_native.native_save_obj_mesh(str(output_part), vertices, faces)
+            else:
+                import trimesh  # type: ignore
+
+                part_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+                part_mesh.export(output_part)
     except Exception as exc:  # noqa: BLE001
         return _base_record(cfg, category, mesh_id, "preseg", started, status="failed", output_path=out_dir, error=str(exc))
+
+    metadata.update(
+        {
+            "backend": "coacd_python",
+            "parts": len(list(out_dir.glob("*.obj"))),
+            "obj_io_backend": "cpp_native" if used_native_obj_io else "trimesh",
+        }
+    )
+    if stage_cfg.get("write_partition_metadata", True):
+        try:
+            require_native_partition = (
+                str(stage_cfg.get("partition_metadata_backend", "cpp_native")) == "cpp_native"
+                and bool(stage_cfg.get("partition_metadata_required", False))
+            )
+            metadata.update(
+                _write_coacd_partition_metadata(
+                    tet_dir,
+                    mesh_id,
+                    force=force,
+                    require_native=require_native_partition,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            if bool(stage_cfg.get("partition_metadata_required", False)):
+                return _base_record(
+                    cfg,
+                    category,
+                    mesh_id,
+                    "preseg",
+                    started,
+                    status="failed",
+                    output_path=out_dir,
+                    error=str(exc),
+                    metadata=metadata,
+                )
+            metadata["partition_metadata_error"] = str(exc)
 
     return _base_record(
         cfg,
@@ -850,7 +1744,7 @@ def run_preseg_mesh(
         started,
         status="success",
         output_path=out_dir,
-        metadata={"parts": len(list(out_dir.glob("*.obj")))},
+        metadata=metadata,
     )
 
 
@@ -872,6 +1766,57 @@ def run_merge_mesh(
         return _base_record(cfg, category, mesh_id, "merge", started, status="skipped", error="missing tetra mesh", output_path=expected)
     if stage_cfg.get("init_type", "coacd") == "coacd" and not list((tet_dir / "coacd").glob("*.obj")):
         return _base_record(cfg, category, mesh_id, "merge", started, status="skipped", error="missing CoACD parts", output_path=expected)
+
+    direct_result = None
+    try:
+        direct_result = _run_cpp_native_merge_file_runner(
+            cfg,
+            category,
+            mesh_id,
+            stage_cfg,
+            expected,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if stage_cfg.get("direct_file_runner_required", False):
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "merge",
+                started,
+                status="failed",
+                output_path=expected,
+                error=f"cpp_native merge file runner failed: {exc}",
+            )
+    if direct_result is None and _cpp_native_search_direct_enabled(stage_cfg) and stage_cfg.get(
+        "direct_file_runner_required", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "merge",
+            started,
+            status="failed",
+            output_path=expected,
+            error=(
+                "cpp_native merge file runner required but unavailable. "
+                "Check smart-cpp-native build and CoACD partition metadata."
+            ),
+        )
+    if direct_result is not None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "merge",
+            started,
+            status=str(direct_result["status"]),
+            output_path=direct_result.get("output_path"),
+            command=list(direct_result.get("command") or []),
+            metadata=dict(direct_result.get("metadata") or {}),
+        )
 
     result_root = stage_root(cfg, "merge", category)
     log_path = workspace_path(cfg, "logs", "merge", category["name"], f"{mesh_id}.log")
@@ -896,6 +1841,8 @@ def run_merge_mesh(
         str(stage_cfg.get("init_type", "coacd")),
         "--final_k",
         str(stage_cfg.get("final_k", 0)),
+        "--merge_backend",
+        str(stage_cfg.get("backend", "legacy_python")),
         "--worker",
         str(stage_cfg.get("worker", 0)),
         "--data_batch_size",
@@ -910,6 +1857,8 @@ def run_merge_mesh(
         command.append("--fast_merge")
     if stage_cfg.get("only_nearby", False):
         command.append("--only_nearby")
+    if stage_cfg.get("cpp_native_allow_tilted_axis", False):
+        command.append("--cpp_native_merge_allow_tilted_axis")
     result = run_command(
         command,
         cwd=REPO_ROOT / "smart" / "legacy" / "merging",
@@ -944,6 +1893,347 @@ def greedy_segment_path(tet_dir: Path, stage_cfg: dict[str, Any]) -> Path:
     return tet_dir / f"greedy_segment{final_k}{init_suffix}_mgeps{merge_eps:g}{fast_suffix}.txt"
 
 
+def _cpp_native_search_direct_enabled(stage_cfg: dict[str, Any]) -> bool:
+    return str(stage_cfg.get("backend", "auto")) == "cpp_native" and bool(
+        stage_cfg.get("direct_file_runner", True)
+    )
+
+
+def _run_cpp_native_merge_file_runner(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    stage_cfg: dict[str, Any],
+    output_segment: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if not _cpp_native_search_direct_enabled(stage_cfg):
+        return None
+    try:
+        from smart import native_runner
+    except Exception:
+        return None
+    if not native_runner.cpp_native_file_runner_available():
+        return None
+    tet_dir = mesh_tetra_dir(cfg, category, mesh_id)
+    configured = stage_cfg.get("partition_metadata_path")
+    if configured:
+        metadata_path = repo_path(configured)
+    else:
+        metadata_path = native_runner.find_partition_metadata(
+            tet_dir, str(stage_cfg.get("init_type", "coacd"))
+        )
+    if metadata_path is None or not metadata_path.exists():
+        return None
+    return native_runner.run_merge_from_partitions_file(
+        msh_path=tet_dir / "tetra.msh",
+        partition_metadata_path=metadata_path,
+        output_segment_path=output_segment,
+        category=category["name"],
+        merge_eps=float(stage_cfg.get("merge_eps", 0.02)),
+        final_k=int(stage_cfg.get("final_k", 0)),
+        tilted=bool(stage_cfg.get("tilted", True)),
+        only_nearby=bool(stage_cfg.get("only_nearby", False)),
+        dry_run=dry_run,
+    )
+
+
+def _cpp_native_refine_exp_name(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    stage_cfg: dict[str, Any],
+    merge_cfg: dict[str, Any],
+) -> str:
+    name = (
+        f"{tetra_root(cfg, category).name}_{stage_cfg.get('bbox_init', 'grd_merged')}"
+        f"_cppnative_maxstep{int(stage_cfg.get('max_step', 2000))}"
+        f"_covpen{int(stage_cfg.get('cover_penalty', 100))}"
+        f"_acscale{int(stage_cfg.get('num_action_scale', 1))}"
+        f"_acunit{float(stage_cfg.get('action_unit', 0.01)):.5g}"
+        f"_mgeps{float(merge_cfg.get('merge_eps', 0.02)):.5g}_timing"
+    )
+    exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
+    return f"{name}_{exp_tag}" if exp_tag else name
+
+
+def _cpp_native_mcts_exp_name(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    stage_cfg: dict[str, Any],
+) -> str:
+    name = (
+        f"{tetra_root(cfg, category).name}_{stage_cfg.get('bbox_init', 'bbox_direct')}"
+        f"_cppnative_mcts{int(stage_cfg.get('mcts_iter', 3000))}"
+        f"_maxstep{int(stage_cfg.get('max_step', 150))}"
+        f"_covpen{int(stage_cfg.get('cover_penalty', 100))}"
+        f"_acunit{float(stage_cfg.get('action_unit', 0.02)):.5g}_timing"
+    )
+    exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
+    return f"{name}_{exp_tag}" if exp_tag else name
+
+
+def _run_cpp_native_refine_file_runner(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    stage_cfg: dict[str, Any],
+    merge_cfg: dict[str, Any],
+    proposal_root: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if not _cpp_native_search_direct_enabled(stage_cfg):
+        return None
+    try:
+        from smart import native_runner
+    except Exception:
+        return None
+    if not native_runner.cpp_native_file_runner_available():
+        return None
+    bbox_init = str(stage_cfg.get("bbox_init", "grd_merged"))
+    if bbox_init == "grd_merged":
+        segment_path = greedy_segment_path(mesh_tetra_dir(cfg, category, mesh_id), merge_cfg)
+        metadata_path = Path(str(segment_path) + ".bbox_params.json")
+        strict_legacy_params = bool(stage_cfg.get("strict_legacy_bbox_params", True))
+        if strict_legacy_params and not dry_run:
+            metadata_path = native_runner.write_legacy_grd_bbox_params_from_segment(
+                segment_path,
+                mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+                tilted=bool(merge_cfg.get("tilted", True)),
+            )
+    elif bbox_init == "bbox_direct":
+        metadata_path = native_runner.find_bbox_params_metadata(proposal_root, mesh_id)
+        if metadata_path is None:
+            return None
+    else:
+        return None
+    if not metadata_path.exists():
+        return None
+    return native_runner.run_refine_from_files(
+        msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+        bbox_metadata_path=metadata_path,
+        output_root=stage_root(cfg, "refine", category),
+        exp_name=_cpp_native_refine_exp_name(cfg, category, stage_cfg, merge_cfg),
+        mesh_id=mesh_id,
+        category=category["name"],
+        max_step=int(stage_cfg.get("max_step", 2000)),
+        cover_penalty=float(stage_cfg.get("cover_penalty", 100)),
+        action_unit=float(stage_cfg.get("action_unit", 0.01)),
+        num_action_scale=native_runner.effective_native_num_action_scale(
+            stage_cfg.get("num_action_scale", 1)
+        ),
+        stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", True)),
+        cache_capacity=int(stage_cfg.get("stateful_cache_capacity", 65536)),
+        volume_method=str(stage_cfg.get("manifold_volume_method", "mesh")),
+        native_recenter=bool(stage_cfg.get("native_recenter", False))
+        or (bbox_init == "grd_merged" and bool(stage_cfg.get("strict_legacy_bbox_params", True))),
+        dry_run=dry_run,
+    )
+
+
+def _run_cpp_native_mcts_file_runner(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    stage_cfg: dict[str, Any],
+    bbox_input_root: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if not _cpp_native_search_direct_enabled(stage_cfg):
+        return None
+    uses_static_prior = (
+        float(stage_cfg.get("action_prior_weight", 0.0) or 0.0) != 0.0
+        or float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0) != 0.0
+        or float(stage_cfg.get("action_value_weight", 0.0) or 0.0) != 0.0
+    )
+    if uses_static_prior and not stage_cfg.get("action_prior_path"):
+        return None
+    if int(stage_cfg.get("action_prior_top_k", 0) or 0) > 0 and not uses_static_prior:
+        return None
+    if str(stage_cfg.get("action_prior_select", "legacy") or "legacy") != "legacy":
+        return None
+    try:
+        from smart import native_runner
+    except Exception:
+        return None
+    if not native_runner.cpp_native_file_runner_available():
+        return None
+    metadata_path = native_runner.find_bbox_params_metadata(bbox_input_root, mesh_id)
+    if metadata_path is None or not metadata_path.exists():
+        return None
+    return native_runner.run_mcts_from_files(
+        msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+        bbox_metadata_path=metadata_path,
+        output_root=stage_root(cfg, "mcts", category),
+        exp_name=_cpp_native_mcts_exp_name(cfg, category, stage_cfg),
+        mesh_id=mesh_id,
+        category=category["name"],
+        mcts_iter=int(stage_cfg.get("mcts_iter", 3000)),
+        max_step=int(stage_cfg.get("max_step", 150)),
+        cover_penalty=float(stage_cfg.get("cover_penalty", 100)),
+        action_unit=float(stage_cfg.get("action_unit", 0.02)),
+        num_action_scale=native_runner.effective_native_num_action_scale(
+            stage_cfg.get("num_action_scale", 1)
+        ),
+        exp_weight=float(stage_cfg.get("exp_w", 0.001)),
+        gamma=float(stage_cfg.get("gamma", 1.0)),
+        seed=int(stage_cfg.get("seed", stage_cfg.get("cpp_rng_seed", 7777))),
+        transposition_table=bool(stage_cfg.get("transposition_table", False)),
+        transposition_table_size=int(stage_cfg.get("transposition_table_size", 8192)),
+        stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", True)),
+        cache_capacity=int(stage_cfg.get("stateful_cache_capacity", 65536)),
+        volume_method=str(stage_cfg.get("manifold_volume_method", "mesh")),
+        action_prior_path=repo_path(stage_cfg["action_prior_path"])
+        if stage_cfg.get("action_prior_path")
+        else None,
+        action_prior_device=_resolve_action_prior_device(
+            stage_cfg.get("action_prior_device", "json")
+        ),
+        action_prior_weight=float(stage_cfg.get("action_prior_weight", 0.0) or 0.0),
+        puct_prior_weight=float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0),
+        action_value_weight=float(stage_cfg.get("action_value_weight", 0.0) or 0.0),
+        action_prior_top_k=int(stage_cfg.get("action_prior_top_k", 0) or 0),
+        native_recenter=bool(stage_cfg.get("native_recenter", False)),
+        dry_run=dry_run,
+    )
+
+
+def _run_cpp_native_refine_mcts_file_runner(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    stage_cfg: dict[str, Any],
+    merge_cfg: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if not bool(stage_cfg.get("combined_refine", False)):
+        return None
+    if not _cpp_native_search_direct_enabled(stage_cfg):
+        return None
+    uses_static_prior = (
+        float(stage_cfg.get("action_prior_weight", 0.0) or 0.0) != 0.0
+        or float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0) != 0.0
+        or float(stage_cfg.get("action_value_weight", 0.0) or 0.0) != 0.0
+    )
+    if uses_static_prior and not stage_cfg.get("action_prior_path"):
+        return None
+    if int(stage_cfg.get("action_prior_top_k", 0) or 0) > 0 and not uses_static_prior:
+        return None
+    if str(stage_cfg.get("action_prior_select", "legacy") or "legacy") != "legacy":
+        return None
+    try:
+        from smart import native_runner
+    except Exception:
+        return None
+    if not native_runner.cpp_native_file_runner_available() and not dry_run:
+        return None
+
+    refine_cfg = cfg.get("refine", {})
+    bbox_init = str(
+        stage_cfg.get(
+            "combined_refine_bbox_init",
+            refine_cfg.get("bbox_init", "grd_merged"),
+        )
+    )
+    if bbox_init == "grd_merged":
+        segment_path = greedy_segment_path(mesh_tetra_dir(cfg, category, mesh_id), merge_cfg)
+        metadata_path = Path(str(segment_path) + ".bbox_params.json")
+        strict_legacy_params = bool(
+            stage_cfg.get(
+                "strict_legacy_bbox_params",
+                refine_cfg.get("strict_legacy_bbox_params", True),
+            )
+        )
+        if strict_legacy_params and not dry_run:
+            metadata_path = native_runner.write_legacy_grd_bbox_params_from_segment(
+                segment_path,
+                mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+                tilted=bool(merge_cfg.get("tilted", True)),
+            )
+    elif bbox_init == "bbox_direct":
+        proposal_root = repo_path(stage_cfg.get("combined_refine_path_to_bbox", ""))
+        if proposal_root is None:
+            proposal_root = repo_path(refine_cfg.get("path_to_bbox", ""))
+        if proposal_root is None:
+            return None
+        metadata_path = native_runner.find_bbox_params_metadata(proposal_root, mesh_id)
+        if metadata_path is None:
+            return None
+    else:
+        return None
+    if not metadata_path.exists() and not dry_run:
+        return None
+
+    refine_exp = _cpp_native_refine_exp_name(cfg, category, refine_cfg, merge_cfg)
+    mcts_exp = _cpp_native_mcts_exp_name(cfg, category, stage_cfg)
+    refine_mesh_root = stage_root(cfg, "refine", category) / refine_exp / "result" / "updated0" / mesh_id
+    mcts_mesh_root = stage_root(cfg, "mcts", category) / mcts_exp / "result" / "updated0" / mesh_id
+    refine_bbox_dir = refine_mesh_root / "bboxs_steps0"
+    mcts_bbox_dir = mcts_mesh_root / "bboxs_steps0"
+
+    result = native_runner.run_refine_mcts_from_files(
+        msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+        bbox_metadata_path=metadata_path,
+        refine_output_dir=refine_bbox_dir,
+        mcts_output_dir=mcts_bbox_dir,
+        category=category["name"],
+        mesh_id=mesh_id,
+        refine_max_step=int(refine_cfg.get("max_step", 2000)),
+        mcts_iter=int(stage_cfg.get("mcts_iter", 3000)),
+        mcts_max_step=int(stage_cfg.get("max_step", 150)),
+        cover_penalty=float(stage_cfg.get("cover_penalty", refine_cfg.get("cover_penalty", 100))),
+        refine_action_unit=float(refine_cfg.get("action_unit", 0.01)),
+        mcts_action_unit=float(stage_cfg.get("action_unit", 0.02)),
+        num_action_scale=native_runner.effective_native_num_action_scale(
+            stage_cfg.get("num_action_scale", refine_cfg.get("num_action_scale", 1))
+        ),
+        exp_weight=float(stage_cfg.get("exp_w", 0.001)),
+        gamma=float(stage_cfg.get("gamma", 1.0)),
+        seed=int(stage_cfg.get("seed", stage_cfg.get("cpp_rng_seed", 7777))),
+        transposition_table=bool(stage_cfg.get("transposition_table", False)),
+        transposition_table_size=int(stage_cfg.get("transposition_table_size", 8192)),
+        stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", refine_cfg.get("stateful_union_cache", True))),
+        cache_capacity=int(stage_cfg.get("stateful_cache_capacity", refine_cfg.get("stateful_cache_capacity", 65536))),
+        volume_method=str(stage_cfg.get("manifold_volume_method", refine_cfg.get("manifold_volume_method", "mesh"))),
+        action_prior_path=repo_path(stage_cfg["action_prior_path"])
+        if stage_cfg.get("action_prior_path")
+        else None,
+        action_prior_device=_resolve_action_prior_device(
+            stage_cfg.get("action_prior_device", "json")
+        ),
+        action_prior_weight=float(stage_cfg.get("action_prior_weight", 0.0) or 0.0),
+        puct_prior_weight=float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0),
+        action_value_weight=float(stage_cfg.get("action_value_weight", 0.0) or 0.0),
+        action_prior_top_k=int(stage_cfg.get("action_prior_top_k", 0) or 0),
+        native_recenter=bool(stage_cfg.get("native_recenter", refine_cfg.get("native_recenter", False)))
+        or (bbox_init == "grd_merged" and strict_legacy_params),
+        dry_run=dry_run,
+    )
+    if not dry_run:
+        metadata = dict(result.get("metadata") or {})
+        elapsed = float(metadata.get("elapsed_sec_wall", 0.0) or 0.0)
+        refine_mesh_root.mkdir(parents=True, exist_ok=True)
+        mcts_mesh_root.mkdir(parents=True, exist_ok=True)
+        exported = len(list(mcts_bbox_dir.glob("bbox*.obj")))
+        refine_exported = len(list(refine_bbox_dir.glob("bbox*.obj")))
+        refine_mesh_root.joinpath("time.txt").write_text(
+            f"{refine_exported}\n{refine_exported}\n{elapsed}\n",
+            encoding="utf-8",
+        )
+        mcts_mesh_root.joinpath("time.txt").write_text(
+            f"{refine_exported}\n{exported}\n{elapsed}\n",
+            encoding="utf-8",
+        )
+        mcts_mesh_root.joinpath("native_stats.json").write_text(
+            json.dumps(metadata, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    return result
+
+
 def run_refine_mesh(
     cfg: dict[str, Any],
     category: dict[str, Any],
@@ -958,8 +2248,74 @@ def run_refine_mesh(
     existing = latest_bbox_dir(stage_root(cfg, "refine", category), mesh_id)
     if existing and not force:
         return _base_record(cfg, category, mesh_id, "refine", started, status="skipped", output_path=existing)
-    if not greedy_segment_path(mesh_tetra_dir(cfg, category, mesh_id), merge_cfg).exists():
+    bbox_init = str(stage_cfg.get("bbox_init", "grd_merged"))
+    proposal_bbox_root = str(stage_cfg.get("path_to_bbox", "") or "")
+    if bbox_init == "grd_merged" and not greedy_segment_path(mesh_tetra_dir(cfg, category, mesh_id), merge_cfg).exists():
         return _base_record(cfg, category, mesh_id, "refine", started, status="skipped", error="missing greedy merged segment")
+    if bbox_init == "bbox_direct" and proposal_bbox_root:
+        proposal_root = repo_path(proposal_bbox_root)
+        if not (proposal_root / "result").exists():
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "refine",
+                started,
+                status="skipped",
+                error=f"missing bbox_direct proposal result directory: {proposal_root / 'result'}",
+            )
+    else:
+        proposal_root = Path("")
+
+    direct_result = None
+    try:
+        direct_result = _run_cpp_native_refine_file_runner(
+            cfg,
+            category,
+            mesh_id,
+            stage_cfg,
+            merge_cfg,
+            proposal_root,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if stage_cfg.get("direct_file_runner_required", False):
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "refine",
+                started,
+                status="failed",
+                error=f"cpp_native file runner failed: {exc}",
+            )
+    if direct_result is None and _cpp_native_search_direct_enabled(stage_cfg) and stage_cfg.get(
+        "direct_file_runner_required", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "refine",
+            started,
+            status="failed",
+            error=(
+                "cpp_native refine file runner required but unavailable. "
+                "Check smart-cpp-native build and bbox_params.json from merge/proposal."
+            ),
+        )
+    if direct_result is not None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "refine",
+            started,
+            status=str(direct_result["status"]),
+            output_path=direct_result.get("output_path"),
+            command=list(direct_result.get("command") or []),
+            metadata=dict(direct_result.get("metadata") or {}),
+        )
 
     result_root = stage_root(cfg, "refine", category)
     log_path = workspace_path(cfg, "logs", "refine", category["name"], f"{mesh_id}.log")
@@ -975,9 +2331,9 @@ def run_refine_mesh(
         "--category",
         category["name"],
         "--path_to_bbox",
-        "",
+        str(proposal_root) if proposal_bbox_root else "",
         "--bbox_init",
-        str(stage_cfg.get("bbox_init", "grd_merged")),
+        bbox_init,
         "--init_type",
         str(merge_cfg.get("init_type", "coacd")),
         "--merge_eps",
@@ -994,6 +2350,10 @@ def run_refine_mesh(
         str(stage_cfg.get("candidate_backend", "exact")),
         "--candidate_top_k",
         str(stage_cfg.get("candidate_top_k", 8)),
+        "--candidate_pruned_max_aspect_mean",
+        str(stage_cfg.get("candidate_pruned_max_aspect_mean", 0.0)),
+        "--candidate_pruned_min_fill_ratio",
+        str(stage_cfg.get("candidate_pruned_min_fill_ratio", 0.0)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold")),
         "--manifold_volume_method",
@@ -1022,12 +2382,24 @@ def run_refine_mesh(
         command.append("--skip_summary_metrics")
     if not stage_cfg.get("stateful_union_cache", True):
         command.append("--no-stateful_union_cache")
+    if not stage_cfg.get("candidate_require_exact_fallback", True):
+        command.append("--no-candidate_require_exact_fallback")
+    if stage_cfg.get("candidate_bypass_on_exact_fallback", False):
+        command.append("--candidate_bypass_on_exact_fallback")
+    if stage_cfg.get("candidate_pruned_categories"):
+        command.extend(
+            ["--candidate_pruned_categories", str(stage_cfg.get("candidate_pruned_categories", ""))]
+        )
     if not stage_cfg.get("cache_initial_bbox_state", True):
         command.append("--no-cache_initial_bbox_state")
     if stage_cfg.get("stateful_unscored_apply", False):
         command.append("--stateful_unscored_apply")
     if stage_cfg.get("fused_rollout_step", False):
         command.append("--mcts_fused_rollout_step")
+    if stage_cfg.get("native_axis_rollout_step", False):
+        command.append("--mcts_native_axis_rollout_step")
+    if stage_cfg.get("native_axis_rollout_segment", False):
+        command.append("--mcts_native_axis_rollout_segment")
     if stage_cfg.get("trace_actions_path"):
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
     if stage_cfg.get("candidate_trace_path"):
@@ -1037,11 +2409,13 @@ def run_refine_mesh(
                 str(repo_path(stage_cfg["candidate_trace_path"])),
                 "--candidate_trace_top_k",
                 str(stage_cfg.get("candidate_trace_top_k", 0)),
+                "--candidate_trace_node_top_k",
+                str(stage_cfg.get("candidate_trace_node_top_k", 0)),
             ]
         )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
-        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
+        command.extend(["--action_prior_device", _resolve_action_prior_device(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
         command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
@@ -1089,7 +2463,7 @@ def run_mcts_mesh(
     stage_cfg = cfg.get("mcts", {})
     merge_cfg = cfg.get("merge", {})
     mcts_backend = str(stage_cfg.get("backend", "auto"))
-    if mcts_backend in {"rust", "rust_stateful"} and not stage_cfg.get(
+    if mcts_backend in (NATIVE_SEARCH_BACKENDS - {"cpp_native"}) and not stage_cfg.get(
         "allow_search_order_changes", False
     ):
         return _base_record(
@@ -1100,7 +2474,7 @@ def run_mcts_mesh(
             started,
             status="blocked",
             error=(
-                "mcts.backend=rust/rust_stateful can change MCTS search order. "
+                f"mcts.backend={NATIVE_SEARCH_BACKEND_LABEL} can change MCTS search order. "
                 "Use backend=auto for paper-compatible exact runs, or set "
                 "mcts.allow_search_order_changes=true for experimental runs."
             ),
@@ -1118,6 +2492,22 @@ def run_mcts_mesh(
             error=(
                 "mcts.transposition_table changes search order. Keep it disabled "
                 "for exact legacy metric compatibility, or set "
+                "mcts.allow_search_order_changes=true for experimental runs."
+            ),
+        )
+    if stage_cfg.get("cpp_rng", False) and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.cpp_rng changes the MCTS random sequence. Keep it disabled "
+                "for paper-compatible runs, or set "
                 "mcts.allow_search_order_changes=true for experimental runs."
             ),
         )
@@ -1185,12 +2575,160 @@ def run_mcts_mesh(
                 "mcts.allow_search_order_changes=true for research runs."
             ),
         )
+    if str(stage_cfg.get("action_prior_select", "legacy") or "legacy") != "legacy" and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.action_prior_select changes MCTS untried-action expansion "
+                "order. Keep it at legacy for paper-compatible runs, or set "
+                "mcts.allow_search_order_changes=true for research runs."
+            ),
+        )
+    if stage_cfg.get("escape_policy", False) and not stage_cfg.get(
+        "allow_search_order_changes", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="blocked",
+            error=(
+                "mcts.escape_policy changes MCTS search order to explore "
+                "local-minimum escape branches. Keep it disabled for "
+                "paper-compatible runs, or set "
+                "mcts.allow_search_order_changes=true for research runs."
+            ),
+        )
     existing = latest_bbox_dir(stage_root(cfg, "mcts", category), mesh_id)
     if existing and not force:
         return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", output_path=existing)
-    refine_exp = latest_exp_dir_for_bbox(stage_root(cfg, "refine", category), mesh_id)
-    if refine_exp is None:
-        return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", error="missing refine bbox output")
+    combined_result = None
+    try:
+        combined_result = _run_cpp_native_refine_mcts_file_runner(
+            cfg,
+            category,
+            mesh_id,
+            stage_cfg,
+            merge_cfg,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if stage_cfg.get("direct_file_runner_required", False):
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "mcts",
+                started,
+                status="failed",
+                error=f"cpp_native refine-mcts file runner failed: {exc}",
+            )
+    if (
+        combined_result is None
+        and bool(stage_cfg.get("combined_refine", False))
+        and _cpp_native_search_direct_enabled(stage_cfg)
+        and stage_cfg.get("direct_file_runner_required", False)
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="failed",
+            error=(
+                "cpp_native refine-mcts file runner required but unavailable. "
+                "Check smart-cpp-native build and merged bbox_params.json."
+            ),
+        )
+    if combined_result is not None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status=str(combined_result["status"]),
+            output_path=combined_result.get("output_path"),
+            command=list(combined_result.get("command") or []),
+            metadata=dict(combined_result.get("metadata") or {}),
+        )
+    configured_bbox_root = str(stage_cfg.get("path_to_bbox", "") or "")
+    if configured_bbox_root:
+        bbox_input_root = repo_path(configured_bbox_root)
+        if not (bbox_input_root / "result").exists():
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "mcts",
+                started,
+                status="skipped",
+                error=f"missing bbox_direct proposal result directory: {bbox_input_root / 'result'}",
+            )
+    else:
+        refine_exp = latest_exp_dir_for_bbox(stage_root(cfg, "refine", category), mesh_id)
+        if refine_exp is None:
+            return _base_record(cfg, category, mesh_id, "mcts", started, status="skipped", error="missing refine bbox output")
+        bbox_input_root = refine_exp
+
+    direct_result = None
+    try:
+        direct_result = _run_cpp_native_mcts_file_runner(
+            cfg,
+            category,
+            mesh_id,
+            stage_cfg,
+            bbox_input_root,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if stage_cfg.get("direct_file_runner_required", False):
+            return _base_record(
+                cfg,
+                category,
+                mesh_id,
+                "mcts",
+                started,
+                status="failed",
+                error=f"cpp_native file runner failed: {exc}",
+            )
+    if direct_result is None and _cpp_native_search_direct_enabled(stage_cfg) and stage_cfg.get(
+        "direct_file_runner_required", False
+    ):
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status="failed",
+            error=(
+                "cpp_native mcts file runner required but unavailable. "
+                "Check smart-cpp-native build and bbox_params.json from refine/proposal."
+            ),
+        )
+    if direct_result is not None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "mcts",
+            started,
+            status=str(direct_result["status"]),
+            output_path=direct_result.get("output_path"),
+            command=list(direct_result.get("command") or []),
+            metadata=dict(direct_result.get("metadata") or {}),
+        )
 
     result_root = stage_root(cfg, "mcts", category)
     log_path = workspace_path(cfg, "logs", "mcts", category["name"], f"{mesh_id}.log")
@@ -1206,7 +2744,7 @@ def run_mcts_mesh(
         "--category",
         category["name"],
         "--path_to_bbox",
-        str(refine_exp),
+        str(bbox_input_root),
         "--bbox_init",
         str(stage_cfg.get("bbox_init", "bbox_direct")),
         "--init_type",
@@ -1223,6 +2761,10 @@ def run_mcts_mesh(
         str(stage_cfg.get("candidate_backend", "exact")),
         "--candidate_top_k",
         str(stage_cfg.get("candidate_top_k", 8)),
+        "--candidate_pruned_max_aspect_mean",
+        str(stage_cfg.get("candidate_pruned_max_aspect_mean", 0.0)),
+        "--candidate_pruned_min_fill_ratio",
+        str(stage_cfg.get("candidate_pruned_min_fill_ratio", 0.0)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold")),
         "--manifold_volume_method",
@@ -1235,6 +2777,8 @@ def run_mcts_mesh(
         str(stage_cfg.get("action_unit", 0.02)),
         "--mcts_iter",
         str(stage_cfg.get("mcts_iter", 3000)),
+        "--seed",
+        str(stage_cfg.get("seed", 7777)),
         "--mcts_no_reward_stop_after",
         str(stage_cfg.get("no_reward_stop_after", 101)),
         "--mcts_backend",
@@ -1261,12 +2805,32 @@ def run_mcts_mesh(
         command.append("--skip_summary_metrics")
     if not stage_cfg.get("stateful_union_cache", True):
         command.append("--no-stateful_union_cache")
+    if not stage_cfg.get("candidate_require_exact_fallback", True):
+        command.append("--no-candidate_require_exact_fallback")
+    if stage_cfg.get("candidate_bypass_on_exact_fallback", False):
+        command.append("--candidate_bypass_on_exact_fallback")
+    if stage_cfg.get("candidate_pruned_categories"):
+        command.extend(
+            ["--candidate_pruned_categories", str(stage_cfg.get("candidate_pruned_categories", ""))]
+        )
     if not stage_cfg.get("cache_initial_bbox_state", True):
         command.append("--no-cache_initial_bbox_state")
     if stage_cfg.get("stateful_unscored_apply", False):
         command.append("--stateful_unscored_apply")
     if stage_cfg.get("fused_rollout_step", False):
         command.append("--mcts_fused_rollout_step")
+    if stage_cfg.get("native_axis_rollout_step", False):
+        command.append("--mcts_native_axis_rollout_step")
+    if stage_cfg.get("native_axis_rollout_segment", False):
+        command.append("--mcts_native_axis_rollout_segment")
+    if stage_cfg.get("cpp_rng", False):
+        command.extend(
+            [
+                "--mcts_cpp_rng",
+                "--mcts_cpp_rng_seed",
+                str(stage_cfg.get("cpp_rng_seed", stage_cfg.get("seed", 7777))),
+            ]
+        )
     if stage_cfg.get("trace_actions_path"):
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
     if stage_cfg.get("candidate_trace_path"):
@@ -1276,15 +2840,31 @@ def run_mcts_mesh(
                 str(repo_path(stage_cfg["candidate_trace_path"])),
                 "--candidate_trace_top_k",
                 str(stage_cfg.get("candidate_trace_top_k", 0)),
+                "--candidate_trace_node_top_k",
+                str(stage_cfg.get("candidate_trace_node_top_k", 0)),
             ]
         )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
-        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
+        command.extend(["--action_prior_device", _resolve_action_prior_device(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--puct_prior_weight", str(stage_cfg.get("puct_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
         command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
+        command.extend(["--action_prior_select", str(stage_cfg.get("action_prior_select", "legacy"))])
+        command.extend(
+            [
+                "--action_prior_select_temperature",
+                str(stage_cfg.get("action_prior_select_temperature", 1.0)),
+            ]
+        )
+        if not stage_cfg.get("action_prior_keep_upper", True):
+            command.append("--no-action_prior_keep_upper")
+    if stage_cfg.get("escape_policy", False):
+        command.append("--escape_policy")
+        command.extend(["--escape_after_no_update", str(stage_cfg.get("escape_after_no_update", 20))])
+        command.extend(["--escape_action_top_k", str(stage_cfg.get("escape_action_top_k", 0))])
+        command.extend(["--escape_probability", str(stage_cfg.get("escape_probability", 0.5))])
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):
@@ -1448,6 +3028,10 @@ def run_local_refine_mesh(
         str(stage_cfg.get("candidate_backend", "exact")),
         "--candidate_top_k",
         str(stage_cfg.get("candidate_top_k", 8)),
+        "--candidate_pruned_max_aspect_mean",
+        str(stage_cfg.get("candidate_pruned_max_aspect_mean", 0.0)),
+        "--candidate_pruned_min_fill_ratio",
+        str(stage_cfg.get("candidate_pruned_min_fill_ratio", 0.0)),
         "--reward_backend",
         str(stage_cfg.get("reward_backend", "manifold_stateful")),
         "--manifold_volume_method",
@@ -1476,18 +3060,53 @@ def run_local_refine_mesh(
         command.append("--skip_summary_metrics")
     if not stage_cfg.get("stateful_union_cache", True):
         command.append("--no-stateful_union_cache")
+    if not stage_cfg.get("candidate_require_exact_fallback", True):
+        command.append("--no-candidate_require_exact_fallback")
+    if stage_cfg.get("candidate_bypass_on_exact_fallback", False):
+        command.append("--candidate_bypass_on_exact_fallback")
+    if stage_cfg.get("candidate_pruned_categories"):
+        command.extend(
+            ["--candidate_pruned_categories", str(stage_cfg.get("candidate_pruned_categories", ""))]
+        )
     if not stage_cfg.get("cache_initial_bbox_state", True):
         command.append("--no-cache_initial_bbox_state")
     if stage_cfg.get("stateful_unscored_apply", False):
         command.append("--stateful_unscored_apply")
+    if str(stage_cfg.get("forced_action_sequence", "") or ""):
+        command.extend(["--forced_action_sequence", str(stage_cfg.get("forced_action_sequence", ""))])
+        command.extend(
+            [
+                "--forced_first_action_min_reward",
+                str(stage_cfg.get("forced_first_action_min_reward", 0.0)),
+            ]
+        )
+    elif int(stage_cfg.get("forced_first_action", -1) or -1) >= 0:
+        command.extend(["--forced_first_action", str(stage_cfg.get("forced_first_action", -1))])
+        command.extend(
+            [
+                "--forced_first_action_min_reward",
+                str(stage_cfg.get("forced_first_action_min_reward", 0.0)),
+            ]
+        )
     if stage_cfg.get("trace_actions_path"):
         command.extend(["--trace_actions_path", str(repo_path(stage_cfg["trace_actions_path"]))])
+    if stage_cfg.get("candidate_trace_path"):
+        command.extend(
+            [
+                "--candidate_trace_path",
+                str(repo_path(stage_cfg["candidate_trace_path"])),
+                "--candidate_trace_top_k",
+                str(stage_cfg.get("candidate_trace_top_k", 0)),
+            ]
+        )
     if stage_cfg.get("action_prior_path"):
         command.extend(["--action_prior_path", str(repo_path(stage_cfg["action_prior_path"]))])
-        command.extend(["--action_prior_device", str(stage_cfg.get("action_prior_device", "json"))])
+        command.extend(["--action_prior_device", _resolve_action_prior_device(stage_cfg.get("action_prior_device", "json"))])
         command.extend(["--action_prior_weight", str(stage_cfg.get("action_prior_weight", 0.0))])
         command.extend(["--action_value_weight", str(stage_cfg.get("action_value_weight", 0.0))])
         command.extend(["--action_prior_top_k", str(stage_cfg.get("action_prior_top_k", 0))])
+        if not stage_cfg.get("action_prior_keep_upper", True):
+            command.append("--no-action_prior_keep_upper")
     if stage_cfg.get("exp_tag"):
         command.extend(["--mcts_exp_tag", str(stage_cfg["exp_tag"])])
     if merge_cfg.get("tilted", True):
@@ -1659,7 +3278,7 @@ def run_render_mesh(
         if result.ok and output.exists():
             successes[name] = str(output)
             continue
-        if backend == "auto" and stage_cfg.get("fallback", True):
+        if stage_cfg.get("fallback", True):
             fallback_error = fallback_render_scene(cfg, category, mesh_id, bbox_dir, output, joint_mesh=joint_mesh)
             if fallback_error is None:
                 successes[name] = str(output)
@@ -2054,9 +3673,16 @@ def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: 
         return latest_bbox_dir(stage_root(cfg, input_stage, category), mesh_id)
     if input_stage == "merge":
         return latest_bbox_dir(stage_root(cfg, "merge", category), mesh_id)
+    generic_stage_root = stage_root(cfg, input_stage, category)
+    if generic_stage_root.exists():
+        found = latest_bbox_dir(generic_stage_root, mesh_id)
+        if found is not None:
+            return found
     candidate = Path(input_stage).expanduser()
     if not candidate.is_absolute():
         candidate = REPO_ROOT / candidate
+    if candidate.is_dir() and any(candidate.glob("bbox*.obj")):
+        return candidate
     return latest_bbox_dir(candidate, mesh_id)
 
 
@@ -2068,9 +3694,16 @@ def _legacy_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    packaged_manifold_python = REPO_ROOT / "smart" / "pymanifold_runtime"
+    source_manifold_python = REPO_ROOT / "smart" / "vendor" / "manifold" / "build" / "bindings" / "python"
+    default_manifold_python = (
+        packaged_manifold_python
+        if any(packaged_manifold_python.glob("pymanifold*"))
+        else source_manifold_python
+    )
     env.setdefault(
         "SMART_MANIFOLD_PYTHON",
-        str(REPO_ROOT / "smart" / "vendor" / "manifold" / "build" / "bindings" / "python"),
+        str(default_manifold_python),
     )
     return env
 
