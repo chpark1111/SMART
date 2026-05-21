@@ -659,6 +659,12 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
         cmake_args.append(
             "-DCMAKE_CXX_FLAGS=-D_VSTD=std -Wno-error=missing-template-arg-list-after-template-kw"
         )
+    cached_python = (
+        _cmake_cache_value(build / "CMakeCache.txt", "Python3_EXECUTABLE")
+        or _cmake_cache_value(build / "CMakeCache.txt", "PYTHON_EXECUTABLE")
+    )
+    if cached_python and cached_python != sys.executable and not dry_run:
+        shutil.rmtree(build)
     if manifold_relax_werror:
         compiler_wrapper = build / "cxx-filter-werror.py"
         cached_compiler = _cmake_cache_value(build / "CMakeCache.txt", "CMAKE_CXX_COMPILER")

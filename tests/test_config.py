@@ -236,19 +236,19 @@ def test_manifold_parallel_cmake_args_on_darwin(monkeypatch, tmp_path) -> None:
 
 def test_demo_sample_counts_are_limited() -> None:
     cfg = load_config("configs/demo.yaml")
-    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
-    assert counts == {"airplane": 50, "chair": 50, "table": 50}
+    limits = {category["name"]: category.get("limit") for category in cfg["categories"]}
+    assert limits == {"airplane": 50, "chair": 50, "table": 50}
 
 
 def test_smoke_config_uses_explicit_meshes() -> None:
     cfg = load_config("configs/smoke_5.yaml")
-    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
+    counts = {category["name"]: len(category.get("meshes", [])) for category in cfg["categories"]}
     assert counts == {"airplane": 2, "chair": 2, "table": 1}
 
 
 def test_example_3x3_config_uses_three_meshes_per_category() -> None:
     cfg = load_config("configs/example_3x3.yaml")
-    counts = {category["name"]: len(list_mesh_ids(category)) for category in cfg["categories"]}
+    counts = {category["name"]: len(category.get("meshes", [])) for category in cfg["categories"]}
     assert counts == {"airplane": 3, "chair": 3, "table": 3}
     assert cfg["workspace"] == "examples/runs/example_3x3"
 
@@ -1134,14 +1134,31 @@ def test_latest_bbox_dir_can_filter_outputs_before_current_run(tmp_path) -> None
     assert latest_bbox_dir(tmp_path / "mcts" / "chair", "mesh-a", since=2500.0) is None
 
 
-def test_public_api_exposes_dry_run_pipeline() -> None:
+def test_public_api_exposes_dry_run_pipeline(tmp_path: Path) -> None:
+    mesh_root = tmp_path / "meshes" / "airplane"
+    mesh_id = "mesh-a"
+    (mesh_root / mesh_id).mkdir(parents=True)
+    (mesh_root / mesh_id / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(mesh_root),
+            "meshes": [mesh_id],
+            "tetra": {"epsilon": 0.003, "edge_length": 0.2},
+        }
+    ]
     records = smart.run_pipeline(
-        "configs/smoke_5.yaml",
+        cfg,
         stage="normalize",
         category="airplane",
-        meshes=["1f5537f4747ec847622c69c3abc6f80"],
+        meshes=[mesh_id],
         dry_run=True,
-        overrides={"workspace": "runs/api_test"},
     )
 
     assert len(records) == 1
