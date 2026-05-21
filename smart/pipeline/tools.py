@@ -96,7 +96,7 @@ def _werror_filter_compiler(log_root: Path, *, dry_run: bool = False) -> Path:
     wrapper.write_text(
         "\n".join(
             [
-                "#!/usr/bin/env python3",
+                f"#!{sys.executable}",
                 "import subprocess",
                 "import sys",
                 f"REAL_CXX = {real_cxx!r}",
@@ -194,6 +194,12 @@ def _manifold_native_link_args(manifold_root: Path) -> list[str]:
                 return [str(library)]
             return ["-L", str(libomp / "lib"), "-lomp"]
         return ["-lomp"]
+    return []
+
+
+def _native_thread_link_args() -> list[str]:
+    if sys.platform.startswith("linux"):
+        return ["-pthread"]
     return []
 
 
@@ -653,6 +659,7 @@ def build_vendored_manifold_binding(
     manifold_relax_werror = _manifold_relax_werror(cfg)
     cmake_args = [
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+        "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         "-DMANIFOLD_PYBIND=ON",
         "-DMANIFOLD_CBIND=OFF",
         f"-DMANIFOLD_PAR={manifold_parallel}",
@@ -669,6 +676,9 @@ def build_vendored_manifold_binding(
         or _cmake_cache_value(build / "CMakeCache.txt", "PYTHON_EXECUTABLE")
     )
     if cached_python and cached_python != sys.executable and not dry_run:
+        shutil.rmtree(build)
+    cached_pic = _cmake_cache_value(build / "CMakeCache.txt", "CMAKE_POSITION_INDEPENDENT_CODE")
+    if cached_pic and cached_pic.upper() != "ON" and not dry_run:
         shutil.rmtree(build)
     if manifold_relax_werror:
         compiler_wrapper = build / "cxx-filter-werror.py"
@@ -804,12 +814,14 @@ def build_cpp_extension(
         str(tmp_output),
         str(module_source),
         str(native_source),
+        str(engine_source),
         str(bridge_source),
     ]
     for include_dir in include_dirs:
         command.extend(["-I", str(include_dir)])
     command.append(str(manifold_lib or default_manifold_lib))
     command.extend(_manifold_native_link_args(manifold_root))
+    command.extend(_native_thread_link_args())
     if sys.platform == "darwin":
         command.extend(["-undefined", "dynamic_lookup"])
     else:
@@ -848,6 +860,7 @@ def build_cpp_extension(
         cli_command.extend(["-I", str(include_dir)])
     cli_command.append(str(manifold_lib or default_manifold_lib))
     cli_command.extend(_manifold_native_link_args(manifold_root))
+    cli_command.extend(_native_thread_link_args())
     if sys.platform != "darwin":
         cli_command.append("-lstdc++")
     cli_result = run_command(
@@ -884,6 +897,7 @@ def build_cpp_extension(
             asan_command.extend(["-I", str(include_dir)])
         asan_command.append(str(manifold_lib or default_manifold_lib))
         asan_command.extend(_manifold_native_link_args(manifold_root))
+        asan_command.extend(_native_thread_link_args())
         asan_command.append("-fsanitize=address")
         if sys.platform != "darwin":
             asan_command.append("-lstdc++")

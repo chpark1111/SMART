@@ -24,6 +24,7 @@ def main() -> int:
 
     if os.environ.get("SMART_CI_CLEAN_MANIFOLD_BUILD", "1") != "0":
         shutil.rmtree(MANIFOLD_BUILD, ignore_errors=True)
+    shutil.rmtree(LOG_ROOT, ignore_errors=True)
 
     os.environ.setdefault("SMART_MANIFOLD_RELAX_WERROR", "1")
     cfg = load_config(ROOT / "configs" / "smoke_5.yaml")

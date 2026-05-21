@@ -121,6 +121,12 @@ def _manifold_link_args() -> list[str]:
     return []
 
 
+def _native_thread_link_args() -> list[str]:
+    if sys.platform.startswith("linux"):
+        return ["-pthread"]
+    return []
+
+
 def _include_dirs() -> list[str]:
     python_paths = sysconfig.get_paths()
     include = python_paths["include"]
@@ -148,6 +154,7 @@ def _extension() -> Extension:
             manifold_lib or MANIFOLD_LIB,
             ROOT / "cpp/smart_cpp_module.cpp",
             ROOT / "cpp/smart_native_core.cpp",
+            ROOT / "cpp/smart_native_engine.cpp",
             ROOT / "cpp/manifold_bridge.cpp",
         ]
         if not path.exists()
@@ -162,6 +169,7 @@ def _extension() -> Extension:
 
     compile_args = ["-std=c++17", "-O3", "-DNDEBUG"]
     link_args: list[str] = _manifold_link_args()
+    link_args.extend(_native_thread_link_args())
     compile_args.extend(_macos_min_version_flags())
     link_args.extend(_macos_min_version_flags())
     if _is_macos_arm64_host():
@@ -175,6 +183,7 @@ def _extension() -> Extension:
         sources=[
             "cpp/smart_cpp_module.cpp",
             "cpp/smart_native_core.cpp",
+            "cpp/smart_native_engine.cpp",
             "cpp/manifold_bridge.cpp",
         ],
         include_dirs=_include_dirs(),
@@ -287,6 +296,7 @@ class BuildPyWithoutSourceArtifacts(_build_py):
             command.extend(["-I", include_dir])
         command.append(str(manifold_lib or MANIFOLD_LIB))
         command.extend(_manifold_link_args())
+        command.extend(_native_thread_link_args())
         if sys.platform != "darwin":
             command.append("-lstdc++")
         self.spawn(command)
@@ -294,6 +304,9 @@ class BuildPyWithoutSourceArtifacts(_build_py):
 
     def _stage_pymanifold_runtime(self) -> None:
         output_dir = Path(self.build_lib) / "smart" / "pymanifold_runtime"
+        if os.environ.get("SMART_PACKAGE_PYMANIFOLD", "0") != "1":
+            shutil.rmtree(output_dir, ignore_errors=True)
+            return
         candidates = [
             ROOT / "smart" / "pymanifold_runtime",
             MANIFOLD_ROOT / "build" / "bindings" / "python",
@@ -330,9 +343,6 @@ setup(
             "legacy/renderer/*.txt",
             "bin/smart-cpp-native",
             "bin/smart-cpp-native.exe",
-            "pymanifold_runtime/pymanifold*.so",
-            "pymanifold_runtime/pymanifold*.pyd",
-            "pymanifold_runtime/pymanifold*.dylib",
         ],
     },
     ext_modules=[_extension()] if _should_build_extension() else [],

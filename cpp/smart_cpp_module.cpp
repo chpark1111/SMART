@@ -1544,8 +1544,9 @@ py::array_t<double> native_recenter_points_for_box_py(
     const double z = point[0] * rotation[6] + point[1] * rotation[7] +
                      point[2] * rotation[8];
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-      return py::array_t<double>({static_cast<py::ssize_t>(0),
-                                  static_cast<py::ssize_t>(3)});
+      const std::vector<py::ssize_t> empty_shape = {
+          static_cast<py::ssize_t>(0), static_cast<py::ssize_t>(3)};
+      return py::array_t<double>(empty_shape);
     }
   }
   std::vector<double> selected;
