@@ -138,7 +138,7 @@ Before publishing the package to PyPI, configure PyPI Trusted Publisher:
 
 - Repository: this SMART GitHub repository.
 - Workflow file: `.github/workflows/wheels.yml`.
-- Environment: `pypi`, or PyPI's "all environments" option.
+- Environment: `pypi`.
 - Package: `smart-bbox`.
 
 The workflow has `id-token: write` permission and uploads only on `v*` tag
@@ -149,6 +149,13 @@ publishers rather than as an existing project. That is expected: the project is
 created by the first successful trusted publish. If a tag run failed before the
 pending publisher was configured, rerun the `Wheels` workflow or push the next
 version tag instead of moving an existing tag.
+
+If PyPI reports `invalid-publisher`, compare the claims printed in the failed
+job with the PyPI publisher settings. For this repository, the expected claims
+are `repository=chpark1111/SMART`,
+`workflow_ref=chpark1111/SMART/.github/workflows/wheels.yml@refs/tags/<tag>`,
+and `environment=pypi`. Old failed tag runs stay visible in GitHub even after a
+later tag publishes successfully.
 
 ## First Release Tag
 
