@@ -96,10 +96,19 @@ Tetrahedralization is the least predictable stage on raw ShapeNet meshes. SMART
 does not abort the whole run when one mesh fails. It records the failed
 ManifoldPlus/fTetWild attempts in the tetra manifest, skips downstream stages
 for that mesh, and continues other meshes. The default config runs conservative
-mesh cleanup, multiple parameter retries, and a final `fill_holes=true` input
-repair fallback. Stronger repair such as `keep_largest_component=true` is
-configurable but disabled by default because it can delete real disconnected
-parts.
+mesh cleanup and multiple parameter retries. It also detects common failure
+classes and queues targeted repair retries:
+
+- `surface is not watertight` queues a `fill_holes=true` retry from the
+  repaired input.
+- fTetWild timeout/crash queues the same conservative repaired-input retry and
+  records `failure_class` in the manifest.
+- low tetra count keeps using finer/coarser parameter retries before giving up.
+- disconnected components can trigger `keep_largest_component=true` only when
+  you explicitly enable that fallback, because it can delete real parts.
+
+The original mesh in `data/` is never modified; repaired inputs are written
+under the run logs.
 More details are in [`TETRA_FAILURE_PLAYBOOK.md`](TETRA_FAILURE_PLAYBOOK.md).
 
 ## 4. Prepare ShapeNet Data

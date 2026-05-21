@@ -28,14 +28,19 @@ python -m pip install "smart-bbox[pipeline]"
 ```
 
 The wheel includes the Python package, public configs, the native SMART C++
-extension, and `smart-cpp-native`. Full raw-mesh reproduction still needs
-Mesh2Tet/CoACD/Manifold runtime tools and data. Prepare those tools in a
-writable location:
+extension, and `smart-cpp-native`. The `[pipeline]` extra installs Python
+dependencies such as CoACD, trimesh, scipy/sklearn, and torch. Full raw-mesh
+reproduction still needs Mesh2Tet/fTetWild/ManifoldPlus runtime tools and
+data. Prepare those external C++ tools in a writable location:
 
 ```bash
 export SMART_TOOLS_ROOT="$PWD/.smart-tools"
 smart --config smoke_5.yaml build-tools
 ```
+
+This keeps `pip install` reliable: package installation does not download and
+compile large external geometry repositories, but the follow-up `build-tools`
+command makes that setup a single SMART-managed step.
 
 ## CLI
 

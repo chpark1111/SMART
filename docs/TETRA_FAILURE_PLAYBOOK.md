@@ -16,7 +16,7 @@ abort the dataset:
 
 ## Built-In Recovery Order
 
-Default recovery is conservative:
+Default recovery is conservative and failure-aware:
 
 1. normalize mesh;
 2. cleanup duplicate/degenerate faces and unreferenced vertices;
@@ -25,10 +25,21 @@ Default recovery is conservative:
 5. finer retry;
 6. coarser retry with `--coarsen`;
 7. robust winding-number retry;
-8. repaired input fallback with `fill_holes=true`.
+8. targeted repaired-input retry when a matching failure class appears.
 
-The final fallback was added for common ShapeNet holes. It only changes the
-temporary run input, never the original `data/` OBJ.
+SMART records a `failure_class` in the tetra attempt metadata:
+
+- `validation_open_surface`: output surface is not watertight; queues
+  `fill_holes=true`.
+- `command_crash` or `command_timeout`: fTetWild/ManifoldPlus crashed or timed
+  out; queues the conservative repaired-input fallback.
+- `validation_low_tetra_count`: output has too few tetrahedra; handled by the
+  fine/coarse parameter retry schedule.
+- `validation_disconnected`: output has multiple connected components; can
+  queue `keep_largest_component=true` only if you opt in.
+
+Repair only changes temporary inputs under `runs/.../logs/tetra/`; SMART never
+mutates the original `data/` OBJ.
 
 ## Why Some Cases Still Fail
 
@@ -53,12 +64,22 @@ tetra:
   min_surface_faces: 20
   input_repair:
     enabled: true
+    auto_retry_by_failure: true
+    immediate_retry_failures:
+      - validation_open_surface
+      - command_crash
+      - command_timeout
     basic_cleanup: true
     fix_normals: true
     fill_holes: false
     keep_largest_component: false
     fallback_variants:
       - name: fill_holes
+        triggers:
+          - validation_open_surface
+          - command_crash
+          - command_timeout
+          - command_failure
         fill_holes: true
         keep_largest_component: false
   retry:
@@ -81,6 +102,8 @@ tetra:
     fallback_variants:
       - name: largest_component_fill_holes
         enabled: true
+        triggers:
+          - validation_disconnected
         fill_holes: true
         keep_largest_component: true
 ```

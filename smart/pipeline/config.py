@@ -63,6 +63,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_surface_faces": 20,
         "input_repair": {
             "enabled": True,
+            "auto_retry_by_failure": True,
+            "immediate_retry_failures": [
+                "validation_open_surface",
+                "command_crash",
+                "command_timeout",
+            ],
             "basic_cleanup": True,
             "fix_normals": True,
             "fill_holes": False,
@@ -70,12 +76,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "fallback_variants": [
                 {
                     "name": "fill_holes",
+                    "triggers": [
+                        "validation_open_surface",
+                        "command_crash",
+                        "command_timeout",
+                        "command_failure",
+                    ],
                     "fill_holes": True,
                     "keep_largest_component": False,
                 },
                 {
                     "name": "largest_component_fill_holes",
                     "enabled": False,
+                    "triggers": ["validation_disconnected"],
                     "fill_holes": True,
                     "keep_largest_component": True,
                 },

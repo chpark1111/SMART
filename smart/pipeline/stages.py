@@ -89,6 +89,30 @@ def _command_failure_summary(tool: str, result: Any) -> str:
     return f"{tool} failed rc={result.returncode}"
 
 
+def _command_failure_class(result: Any) -> str:
+    if getattr(result, "timed_out", False) or result.returncode == 124:
+        return "command_timeout"
+    if result.returncode < 0:
+        signal = -int(result.returncode)
+        if signal == 11:
+            return "command_crash"
+        return "command_killed"
+    return "command_failure"
+
+
+def _validation_failure_class(error: str) -> str:
+    lowered = error.lower()
+    if "not watertight" in lowered:
+        return "validation_open_surface"
+    if "tetra element count below minimum" in lowered:
+        return "validation_low_tetra_count"
+    if "surface face count below minimum" in lowered:
+        return "validation_low_surface_faces"
+    if "multiple connected components" in lowered:
+        return "validation_disconnected"
+    return "validation_failure"
+
+
 def run_pipeline(
     cfg: dict[str, Any],
     *,
@@ -804,6 +828,8 @@ def _tetra_input_candidates(
     source: Path,
     log_dir: Path,
     stage_cfg: dict[str, Any],
+    *,
+    active_failure_classes: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     repair_cfg = stage_cfg.get("input_repair", {})
     primary_path, primary_metadata = _prepare_tetra_input_mesh(
@@ -829,6 +855,9 @@ def _tetra_input_candidates(
             continue
         if variant.get("enabled", True) is False:
             continue
+        triggers = {str(item) for item in variant.get("triggers", []) or []}
+        if active_failure_classes is not None and triggers and not (triggers & active_failure_classes):
+            continue
         name = str(variant.get("name", f"repair_fallback_{index + 1}"))
         variant_repair_cfg = dict(repair_cfg)
         variant_repair_cfg.update(variant)
@@ -852,10 +881,44 @@ def _tetra_input_candidates(
                 "name": name,
                 "path": variant_path,
                 "repair": variant_metadata,
+                "triggers": sorted(triggers),
             }
         )
 
     return candidates, repair_records
+
+
+def _append_tetra_repair_candidates(
+    input_candidates: list[dict[str, Any]],
+    input_repair_metadata: list[dict[str, Any]],
+    source_mesh: Path,
+    log_dir: Path,
+    stage_cfg: dict[str, Any],
+    active_failure_classes: set[str],
+    queued_names: set[str],
+) -> list[str]:
+    if not active_failure_classes:
+        return []
+    candidates, repair_records = _tetra_input_candidates(
+        source_mesh,
+        log_dir,
+        stage_cfg,
+        active_failure_classes=active_failure_classes,
+    )
+    for record in repair_records:
+        variant = str(record.get("variant") or "")
+        if variant and not any(existing.get("variant") == variant for existing in input_repair_metadata):
+            input_repair_metadata.append(record)
+
+    added: list[str] = []
+    for candidate in candidates:
+        name = str(candidate.get("name", "primary"))
+        if name == "primary" or name in queued_names:
+            continue
+        input_candidates.append(candidate)
+        queued_names.add(name)
+        added.append(name)
+    return added
 
 
 def _call_optional_mesh_method(mesh: Any, name: str) -> None:
@@ -1060,10 +1123,17 @@ def run_tetra_mesh(
     input_candidates: list[dict[str, Any]] = [{"name": "source", "path": source_mesh, "repair": {"enabled": False}}]
     input_repair_metadata: list[dict[str, Any]] = []
     if not dry_run:
+        repair_cfg = stage_cfg.get("input_repair", {})
+        auto_repair = bool(
+            isinstance(repair_cfg, dict)
+            and repair_cfg.get("enabled", False)
+            and repair_cfg.get("auto_retry_by_failure", True)
+        )
         input_candidates, input_repair_metadata = _tetra_input_candidates(
             source_mesh,
             log_dir,
             stage_cfg,
+            active_failure_classes=set() if auto_repair else None,
         )
 
     attempts: list[dict[str, Any]] = [
@@ -1107,7 +1177,21 @@ def run_tetra_mesh(
     attempt_metadata: list[dict[str, Any]] = []
     last_command: list[str] | None = None
     last_log: Path | None = None
-    for input_candidate in input_candidates:
+    queued_input_variants = {str(candidate.get("name", "primary")) for candidate in input_candidates}
+    observed_failure_classes: set[str] = set()
+    repair_cfg = stage_cfg.get("input_repair", {})
+    auto_repair = bool(
+        isinstance(repair_cfg, dict)
+        and repair_cfg.get("enabled", False)
+        and repair_cfg.get("auto_retry_by_failure", True)
+    )
+    immediate_repair_failures = {
+        str(item) for item in repair_cfg.get("immediate_retry_failures", []) or []
+    } if isinstance(repair_cfg, dict) else set()
+    input_index = 0
+    while input_index < len(input_candidates):
+        input_candidate = input_candidates[input_index]
+        input_index += 1
         prepared_source_mesh = Path(input_candidate["path"])
         input_variant = str(input_candidate.get("name", "primary"))
         for attempt in attempts:
@@ -1133,6 +1217,21 @@ def run_tetra_mesh(
             last_log = manifold_log
             if not result.ok:
                 failure = _command_failure_summary("ManifoldPlus", result)
+                failure_class = _command_failure_class(result)
+                observed_failure_classes.add(failure_class)
+                added_repair_variants = (
+                    _append_tetra_repair_candidates(
+                        input_candidates,
+                        input_repair_metadata,
+                        source_mesh,
+                        log_dir,
+                        stage_cfg,
+                        observed_failure_classes,
+                        queued_input_variants,
+                    )
+                    if auto_repair
+                    else []
+                )
                 errors.append(f"{attempt_name}: {failure}")
                 attempt_metadata.append(
                     {
@@ -1147,8 +1246,12 @@ def run_tetra_mesh(
                         "elapsed_sec": result.elapsed_sec,
                         "timed_out": result.timed_out,
                         "failure": failure,
+                        "failure_class": failure_class,
+                        "queued_repair_variants": added_repair_variants,
                     }
                 )
+                if added_repair_variants and failure_class in immediate_repair_failures:
+                    break
                 continue
 
             ftetwild_cmd = [
@@ -1192,6 +1295,21 @@ def run_tetra_mesh(
             last_log = ftetwild_log
             if not result.ok:
                 failure = _command_failure_summary("fTetWild", result)
+                failure_class = _command_failure_class(result)
+                observed_failure_classes.add(failure_class)
+                added_repair_variants = (
+                    _append_tetra_repair_candidates(
+                        input_candidates,
+                        input_repair_metadata,
+                        source_mesh,
+                        log_dir,
+                        stage_cfg,
+                        observed_failure_classes,
+                        queued_input_variants,
+                    )
+                    if auto_repair
+                    else []
+                )
                 errors.append(f"{attempt_name}: {failure}")
                 attempt_metadata.append(
                     {
@@ -1207,8 +1325,12 @@ def run_tetra_mesh(
                         "timed_out": result.timed_out,
                         "timeout_sec": attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
                         "failure": failure,
+                        "failure_class": failure_class,
+                        "queued_repair_variants": added_repair_variants,
                     }
                 )
+                if added_repair_variants and failure_class in immediate_repair_failures:
+                    break
                 continue
             if dry_run:
                 return _base_record(
@@ -1232,6 +1354,21 @@ def run_tetra_mesh(
                     min_surface_faces=int(stage_cfg.get("min_surface_faces", 20)),
                 )
             if validation_error:
+                failure_class = _validation_failure_class(validation_error)
+                observed_failure_classes.add(failure_class)
+                added_repair_variants = (
+                    _append_tetra_repair_candidates(
+                        input_candidates,
+                        input_repair_metadata,
+                        source_mesh,
+                        log_dir,
+                        stage_cfg,
+                        observed_failure_classes,
+                        queued_input_variants,
+                    )
+                    if auto_repair
+                    else []
+                )
                 errors.append(f"{attempt_name}: validation failed: {validation_error}")
                 attempt_metadata.append(
                     {
@@ -1243,9 +1380,13 @@ def run_tetra_mesh(
                         "edge_length": length,
                         "coarsen": coarsen,
                         "failure": validation_error,
+                        "failure_class": failure_class,
+                        "queued_repair_variants": added_repair_variants,
                         "metadata": validation_metadata,
                     }
                 )
+                if added_repair_variants and failure_class in immediate_repair_failures:
+                    break
                 continue
             metadata = {
                 "epsilon": eps,

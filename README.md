@@ -142,12 +142,14 @@ export SMART_TOOLS_ROOT="$PWD/.smart-tools"
 smart --config smoke_5.yaml build-tools
 ```
 
-`pip install` intentionally does not clone and compile these external binaries
-during installation. Those builds are large, platform-specific, and can require
-local compiler/system packages, so SMART exposes them as an explicit
-`smart build-tools` step instead. That one command prepares ManifoldPlus,
-fTetWild, the CoACD Python CLI runtime, the fixed Manifold runtime, and the
-local `smart._cpp`/`smart-cpp-native` build for a source checkout.
+`pip install` installs the SMART Python package and the bundled native SMART
+C++ extension/executable from wheels. It intentionally does not clone and
+compile Mesh2Tet/fTetWild/ManifoldPlus during installation. Those external
+builds are large, platform-specific, and can require local compiler/system
+packages, so SMART exposes them as an explicit `smart build-tools` step
+instead. That one command prepares ManifoldPlus, fTetWild, the CoACD Python CLI
+runtime, the fixed Manifold runtime, and the local `smart._cpp`/
+`smart-cpp-native` build for a source checkout.
 It is idempotent: if CoACD already probes successfully, SMART skips the slow
 editable install; if source editable installation fails, SMART tries the PyPI
 CoACD runtime and only fails the command when no working `coacd` CLI is found.

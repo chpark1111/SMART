@@ -83,8 +83,11 @@ Common tetra validation failures are:
 The tetra stage performs a conservative input cleanup before ManifoldPlus:
 duplicate/degenerate faces are removed, unreferenced vertices are removed, and
 normals are fixed when `trimesh` is installed. The source OBJ is not modified;
-the repaired input is written under the run logs. More aggressive repair can be
-enabled per config:
+the repaired input is written under the run logs. SMART classifies failures in
+the manifest and uses that class to queue targeted repair retries. For example,
+`surface is not watertight` queues `fill_holes=true`, while crash/timeout
+failures queue a conservative repaired-input retry. More aggressive repair can
+be enabled per config:
 
 ```yaml
 tetra:

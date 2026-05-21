@@ -1167,11 +1167,41 @@ def test_tetra_input_candidates_add_fill_holes_fallback(tmp_path, monkeypatch) -
 
     monkeypatch.setattr("smart.pipeline.stages._prepare_tetra_input_mesh", fake_prepare)
 
-    candidates, repair_records = _tetra_input_candidates(mesh_path, tmp_path / "logs", stage_cfg)
+    candidates, repair_records = _tetra_input_candidates(
+        mesh_path,
+        tmp_path / "logs",
+        stage_cfg,
+        active_failure_classes={"validation_open_surface"},
+    )
 
     assert candidates[0]["name"] == "primary"
     assert any(candidate["name"] == "fill_holes" for candidate in candidates)
     assert any(record.get("variant") == "fill_holes" and record.get("used") for record in repair_records)
+
+
+def test_tetra_input_candidates_wait_for_failure_class_before_fill_holes(tmp_path, monkeypatch) -> None:
+    mesh_path = tmp_path / "mesh.obj"
+    mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    stage_cfg = load_config(None)["tetra"]
+
+    def fake_prepare(source: Path, output: Path, cfg: dict) -> tuple[Path, dict]:
+        repair_cfg = cfg.get("input_repair", {})
+        if repair_cfg.get("fill_holes"):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(mesh_path.read_text(encoding="utf-8"), encoding="utf-8")
+            return output, {"enabled": True, "used": True, "variant": "fill_holes"}
+        return source, {"enabled": True, "used": True, "variant": "primary"}
+
+    monkeypatch.setattr("smart.pipeline.stages._prepare_tetra_input_mesh", fake_prepare)
+
+    candidates, _ = _tetra_input_candidates(
+        mesh_path,
+        tmp_path / "logs",
+        stage_cfg,
+        active_failure_classes=set(),
+    )
+
+    assert [candidate["name"] for candidate in candidates] == ["primary"]
 
 
 def test_bbox_dir_prefers_success_manifest_output(tmp_path) -> None:
