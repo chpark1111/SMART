@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-bbox"
-version = "0.1.11"
+version = "0.1.12"
 description = "Official SMART pipeline for tight 3D bounding boxes"
 readme = "README.md"
 requires-python = ">=3.9"

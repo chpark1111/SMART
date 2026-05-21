@@ -13,17 +13,20 @@ permissions:
 jobs:
   build-wheel:
     name: ${{ matrix.os }} ${{ matrix.archs }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-14
             archs: arm64
-          - os: macos-13
+            runs_on: macos-14
+          - os: macos-15
             archs: x86_64
+            runs_on: macos-15-intel
           - os: ubuntu-22.04
             archs: x86_64
+            runs_on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v4

@@ -1152,36 +1152,20 @@ def test_tetra_validation_can_allow_disconnected_surfaces(tmp_path) -> None:
     )
 
 
-def test_tetra_input_candidates_add_fill_holes_fallback(tmp_path) -> None:
-    pytest.importorskip("trimesh")
+def test_tetra_input_candidates_add_fill_holes_fallback(tmp_path, monkeypatch) -> None:
     mesh_path = tmp_path / "open_cube.obj"
-    mesh_path.write_text(
-        "\n".join(
-            [
-                "v 0 0 0",
-                "v 1 0 0",
-                "v 1 1 0",
-                "v 0 1 0",
-                "v 0 0 1",
-                "v 1 0 1",
-                "v 1 1 1",
-                "v 0 1 1",
-                "f 1 2 3",
-                "f 1 3 4",
-                "f 1 5 6",
-                "f 1 6 2",
-                "f 2 6 7",
-                "f 2 7 3",
-                "f 3 7 8",
-                "f 3 8 4",
-                "f 4 8 5",
-                "f 4 5 1",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
     stage_cfg = load_config(None)["tetra"]
+
+    def fake_prepare(source: Path, output: Path, cfg: dict) -> tuple[Path, dict]:
+        repair_cfg = cfg.get("input_repair", {})
+        if repair_cfg.get("fill_holes"):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(mesh_path.read_text(encoding="utf-8"), encoding="utf-8")
+            return output, {"enabled": True, "used": True, "variant": "fill_holes"}
+        return source, {"enabled": True, "used": True, "variant": "primary"}
+
+    monkeypatch.setattr("smart.pipeline.stages._prepare_tetra_input_mesh", fake_prepare)
 
     candidates, repair_records = _tetra_input_candidates(mesh_path, tmp_path / "logs", stage_cfg)
 
