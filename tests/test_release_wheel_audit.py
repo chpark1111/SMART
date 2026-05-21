@@ -302,7 +302,9 @@ def test_release_workflow_audits_artifacts_before_pypi_publish() -> None:
     assert build_step["uses"].startswith("pypa/cibuildwheel")
     assert build_step["env"]["MACOSX_DEPLOYMENT_TARGET"] == "11.0"
     assert audit_step["run"] == "python scripts/audit_release_wheel.py wheelhouse/*.whl"
-    assert "python -m pip install PyYAML numpy" in smoke_step["run"]
+    assert 'python -m pip install PyYAML "numpy<2.4"' in smoke_step["run"]
+    assert "--find-links wheelhouse smart-bbox" in smoke_step["run"]
+    assert "wheelhouse/*.whl" not in smoke_step["run"]
     assert "smart.native as sn" in Path("pyproject.toml").read_text(encoding="utf-8")
     assert "smart-smoke-console-scripts" in smoke_step["run"]
 
