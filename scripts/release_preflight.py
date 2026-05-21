@@ -123,8 +123,6 @@ def run_preflight(
         "assert smart.cpp_native_available(); "
         "assert smart.NativeSmartEngine is sc.NativeSmartEngine; "
         "assert compat.form_mesh is pymesh.form_mesh; "
-        "assert checks['pymanifold']['ok']; "
-        "assert checks['SMART_MANIFOLD_PYTHON']['ok']; "
         "assert checks['smart-cpp-extension']['ok']; "
         "print('smart-bbox release preflight smoke ok')"
     )

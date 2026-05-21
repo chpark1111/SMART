@@ -293,17 +293,15 @@ class BuildPyWithoutSourceArtifacts(_build_py):
         output.chmod(output.stat().st_mode | 0o755)
 
     def _stage_pymanifold_runtime(self) -> None:
+        output_dir = Path(self.build_lib) / "smart" / "pymanifold_runtime"
         candidates = [
             ROOT / "smart" / "pymanifold_runtime",
             MANIFOLD_ROOT / "build" / "bindings" / "python",
         ]
         binary = next((found for candidate in candidates if (found := _first_pymanifold_binary(candidate))), None)
         if binary is None:
-            raise RuntimeError(
-                "Missing pymanifold runtime binary. Run: "
-                "python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding"
-            )
-        output_dir = Path(self.build_lib) / "smart" / "pymanifold_runtime"
+            shutil.rmtree(output_dir, ignore_errors=True)
+            return
         output_dir.mkdir(parents=True, exist_ok=True)
         for pattern in ("pymanifold*.so", "pymanifold*.pyd", "pymanifold*.dylib"):
             for existing in output_dir.glob(pattern):

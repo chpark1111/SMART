@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from smart.pipeline.config import load_config
+from smart.pipeline.tools import build_vendored_manifold_binding
+
 MANIFOLD_BUILD = ROOT / "smart" / "vendor" / "manifold" / "build"
 LOG_ROOT = ROOT / "runs" / "smoke_5" / "logs" / "build-tools"
 
@@ -20,21 +25,16 @@ def main() -> int:
     if os.environ.get("SMART_CI_CLEAN_MANIFOLD_BUILD", "1") != "0":
         shutil.rmtree(MANIFOLD_BUILD, ignore_errors=True)
 
-    env = os.environ.copy()
-    env.setdefault("SMART_MANIFOLD_RELAX_WERROR", "1")
-    command = [
-        sys.executable,
-        "-m",
-        "smart",
-        "--config",
-        "configs/smoke_5.yaml",
-        "build-tools",
-        "--only-manifold-binding",
-    ]
-    result = _run(command, env=env, check=False)
-    if result.returncode != 0:
+    os.environ.setdefault("SMART_MANIFOLD_RELAX_WERROR", "1")
+    cfg = load_config(ROOT / "configs" / "smoke_5.yaml")
+    messages = build_vendored_manifold_binding(cfg, build_python_binding=False)
+    for message in messages:
+        print(message)
+    failed = any(": failed" in message or message.startswith("Missing ") for message in messages)
+    if failed:
         _dump_logs()
-    return result.returncode
+        return 1
+    return 0
 
 
 def _run(

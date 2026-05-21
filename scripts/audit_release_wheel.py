@@ -18,11 +18,6 @@ from typing import Iterable
 
 REQUIRED_PATTERNS = {
     "cpp_extension": ("smart/_cpp*.so", "smart/_cpp*.pyd", "smart/_cpp*.dylib"),
-    "pymanifold_runtime": (
-        "smart/pymanifold_runtime/pymanifold*.so",
-        "smart/pymanifold_runtime/pymanifold*.pyd",
-        "smart/pymanifold_runtime/pymanifold*.dylib",
-    ),
     "native_executable": ("smart/bin/smart-cpp-native", "smart/bin/smart-cpp-native.exe"),
     "smart_package": ("smart/__init__.py",),
     "smart_cli": ("smart/cli.py",),

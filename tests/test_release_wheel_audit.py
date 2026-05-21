@@ -57,7 +57,6 @@ def _minimal_release_names() -> list[str]:
         "smart/bin/smart-cpp-native",
         "smart/native_executable.py",
         "smart/pymesh_compat.py",
-        "smart/pymanifold_runtime/pymanifold.cpython-39-darwin.so",
         "smart/configs/demo.yaml",
         "smart/configs/smoke_5.yaml",
         "smart/configs/example_3x3.yaml",
@@ -171,20 +170,15 @@ def test_audit_required_entry_points_match_pyproject_scripts() -> None:
     assert REQUIRED_ENTRY_POINTS == _pyproject_scripts()
 
 
-def test_audit_release_wheel_rejects_missing_runtime_and_vendored_source(tmp_path: Path) -> None:
+def test_audit_release_wheel_rejects_vendored_source(tmp_path: Path) -> None:
     wheel = tmp_path / "smart_bbox-0.1.0-cp39-cp39-macosx_11_0_arm64.whl"
-    names = [
-        name
-        for name in _minimal_release_names()
-        if not name.startswith("smart/pymanifold_runtime/")
-    ]
+    names = _minimal_release_names()
     names.append("smart/vendor/manifold/src/manifold.cpp")
     _write_wheel(wheel, names)
 
     result = audit_wheel(wheel)
 
     assert result["ok"] is False
-    assert any("pymanifold_runtime" in error for error in result["errors"])
     assert any("vendored_manifold_source" in error for error in result["errors"])
 
 

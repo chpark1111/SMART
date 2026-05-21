@@ -637,7 +637,12 @@ def _resolve_executable(explicit: str | None, env_name: str, fallback: str) -> s
     return find_executable(None, env_name, fallback)
 
 
-def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
+def build_vendored_manifold_binding(
+    cfg: dict[str, Any],
+    *,
+    dry_run: bool = False,
+    build_python_binding: bool = True,
+) -> list[str]:
     source = REPO_ROOT / "smart" / "vendor" / "manifold"
     build = source / "build"
     workspace = repo_path(cfg.get("workspace", "runs/demo"))
@@ -676,7 +681,7 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
         log_root,
         "vendored-manifold",
         build_dir=build,
-        build_target="pymanifold",
+        build_target="pymanifold" if build_python_binding else "manifold",
         cmake_args=cmake_args,
         dry_run=dry_run,
     )
@@ -696,7 +701,10 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
         )
     else:
         messages.append(f"vendored-manifold static library: ok -> {manifold_lib}")
-    messages.append(_stage_pymanifold_runtime(build / "bindings" / "python", dry_run=dry_run))
+    if build_python_binding:
+        messages.append(_stage_pymanifold_runtime(build / "bindings" / "python", dry_run=dry_run))
+    else:
+        messages.append("pymanifold runtime staging: skipped; C++ wheel links libmanifold directly")
     return messages
 
 
