@@ -42,6 +42,11 @@ This keeps `pip install` reliable: package installation does not download and
 compile large external geometry repositories, but the follow-up `build-tools`
 command makes that setup a single SMART-managed step.
 
+Users do not need to manually clone ManifoldPlus, fTetWild, CoACD, or the fixed
+Manifold runtime. `smart build-tools` owns that setup, and existing binaries can
+still be supplied through `SMART_MANIFOLDPLUS_BIN`, `SMART_FTETWILD_BIN`,
+`SMART_COACD_BIN`, and `SMART_MANIFOLD_PYTHON`.
+
 ## CLI
 
 ```bash

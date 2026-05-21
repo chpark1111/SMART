@@ -179,13 +179,23 @@ SMART handles this per mesh, not as a fatal dataset error:
 - records failed attempts in the tetra manifest, then skips downstream stages
   for that mesh while continuing the rest of the dataset.
 
-Before tetrahedralization, SMART runs conservative mesh cleanup. If all normal
-attempts fail, it now also tries a repaired input variant with `fill_holes=true`.
-More destructive rescue, such as `keep_largest_component=true`, is available in
-config but is off by default because it can remove real disconnected shape
-parts. A failed mesh is therefore usually recoverable by either enabling a
-stronger repair variant or loosening/coarsening the tetra parameters, but SMART
-will not silently corrupt the shape just to force success.
+Before tetrahedralization, SMART runs conservative mesh cleanup. The tetra stage
+also classifies failures and queues targeted repair retries automatically:
+
+| Detected failure | Likely cause | Automatic SMART response |
+| --- | --- | --- |
+| `surface is not watertight` | holes or open mesh boundaries | retry with a temporary `fill_holes=true` repaired input |
+| fTetWild/ManifoldPlus timeout or crash | self-intersection, very thin parts, degenerate faces, non-manifold edges | retry with conservative repaired input and robust/coarser parameter attempts |
+| `tetra element count below minimum` | tetra parameters too fine/coarse or damaged repair output | keep fine/coarse retry schedule and record the failed parameters |
+| disconnected components | true multi-part shape or small detached fragments | only use `keep_largest_component=true` if explicitly enabled, because it can delete real parts |
+
+Repaired inputs are written under `runs/<profile>/logs/tetra/...`; SMART never
+mutates the original `data/` OBJ. More destructive rescue, such as
+`keep_largest_component=true`, is available in config but is off by default
+because it can remove real disconnected shape parts. A failed mesh is therefore
+usually recoverable by either enabling a stronger repair variant or
+loosening/coarsening the tetra parameters, but SMART will not silently corrupt
+the shape just to force success.
 
 See [`docs/TETRA_FAILURE_PLAYBOOK.md`](docs/TETRA_FAILURE_PLAYBOOK.md) for
 debug commands and stronger repair options.

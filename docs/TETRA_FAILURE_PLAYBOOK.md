@@ -41,6 +41,20 @@ SMART records a `failure_class` in the tetra attempt metadata:
 Repair only changes temporary inputs under `runs/.../logs/tetra/`; SMART never
 mutates the original `data/` OBJ.
 
+## Automatic Detection Map
+
+| Failure class | Trigger text or condition | Default action | Why it is conservative |
+| --- | --- | --- | --- |
+| `validation_open_surface` | `surface is not watertight` from validation | queue `fill_holes` fallback | fills holes in a temporary copy only |
+| `command_timeout` | external command timeout or rc `124` | queue repaired-input retry and continue parameter retries | does not change original mesh or force success |
+| `command_crash` | negative return code such as `SIGSEGV` | queue repaired-input retry and continue parameter retries | isolates bad mesh cases without stopping the dataset |
+| `validation_low_tetra_count` | `tetra element count below minimum` | rely on fine/coarse/robust retry schedule | avoids deleting geometry to inflate element count |
+| `validation_disconnected` | `surface has multiple connected components` | no destructive default; opt-in largest-component fallback | avoids silently removing real disconnected parts |
+
+If all retries fail, SMART records the failure and skips downstream stages for
+that mesh. This is intentional: producing a silently corrupted tet mesh is worse
+than skipping a bad input.
+
 ## Why Some Cases Still Fail
 
 Common reasons:

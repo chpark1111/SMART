@@ -138,11 +138,17 @@ Before publishing the package to PyPI, configure PyPI Trusted Publisher:
 
 - Repository: this SMART GitHub repository.
 - Workflow file: `.github/workflows/wheels.yml`.
-- Environment: `pypi`.
+- Environment: `pypi`, or PyPI's "all environments" option.
 - Package: `smart-bbox`.
 
 The workflow has `id-token: write` permission and uploads only on `v*` tag
 pushes.
+
+For the first PyPI upload, `smart-bbox` can appear under PyPI's pending
+publishers rather than as an existing project. That is expected: the project is
+created by the first successful trusted publish. If a tag run failed before the
+pending publisher was configured, rerun the `Wheels` workflow or push the next
+version tag instead of moving an existing tag.
 
 ## First Release Tag
 
