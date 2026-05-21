@@ -3,13 +3,13 @@
 Official implementation of **Split, Merge, and Refine: Fitting Tight Bounding
 Boxes via Over-Segmentation and Iterative Search**, 3DV 2024.
 
-![SMART teaser](docs/teaser.png)
+![SMART teaser](https://raw.githubusercontent.com/chpark1111/SMART/main/docs/teaser.png)
 
 [Paper](https://arxiv.org/pdf/2304.04336) |
 [arXiv](https://arxiv.org/abs/2304.04336) |
-[Quickstart](docs/QUICKSTART.md) |
-[Pipeline](docs/PIPELINE.md) |
-[Package Docs](docs/PYTHON_PACKAGE.md) |
+[Quickstart](https://github.com/chpark1111/SMART/blob/main/docs/QUICKSTART.md) |
+[Pipeline](https://github.com/chpark1111/SMART/blob/main/docs/PIPELINE.md) |
+[Package Docs](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md) |
 [All Docs](#documentation)
 
 [Chanhyeok Park](https://chpark1111.github.io/) and
@@ -54,30 +54,30 @@ smart-cpp-native --help
 ```
 
 For the complete install and reproduction path, see
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+[`docs/QUICKSTART.md`](https://github.com/chpark1111/SMART/blob/main/docs/QUICKSTART.md).
 
 ## Documentation
 
 Main user docs:
 
-- [Quickstart](docs/QUICKSTART.md): install, verify, prepare tools/data, and run
+- [Quickstart](https://github.com/chpark1111/SMART/blob/main/docs/QUICKSTART.md): install, verify, prepare tools/data, and run
   a small reproduction.
-- [Pipeline](docs/PIPELINE.md): stage order, config control, rendering, failure
+- [Pipeline](https://github.com/chpark1111/SMART/blob/main/docs/PIPELINE.md): stage order, config control, rendering, failure
   handling, and parameter overrides.
-- [Python Package](docs/PYTHON_PACKAGE.md): CLI, Python API, native executable,
+- [Python Package](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md): CLI, Python API, native executable,
   packaged configs, and library usage.
-- [Tetra Failure Playbook](docs/TETRA_FAILURE_PLAYBOOK.md): why Mesh2Tet/fTetWild
+- [Tetra Failure Playbook](https://github.com/chpark1111/SMART/blob/main/docs/TETRA_FAILURE_PLAYBOOK.md): why Mesh2Tet/fTetWild
   fails, how SMART records failures, and which repair knobs to try.
-- [Repository Structure](docs/REPOSITORY_STRUCTURE.md): public release layout
+- [Repository Structure](https://github.com/chpark1111/SMART/blob/main/docs/REPOSITORY_STRUCTURE.md): public release layout
   versus ignored local data, runs, external tools, and experiments.
 
 Maintainer and research docs:
 
-- [Release Guide](docs/RELEASE.md): local release preflight, wheel checks, tags,
+- [Release Guide](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE.md): local release preflight, wheel checks, tags,
   and PyPI publishing.
-- [Release Notes 0.1.0](docs/RELEASE_NOTES_0.1.0.md): current release scope and
+- [Release Notes 0.1.0](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE_NOTES_0.1.0.md): current release scope and
   verification notes.
-- [Research Plan](docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
+- [Research Plan](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
   memory/table-based search, and promotion rules.
 
 ## Local Example
@@ -197,7 +197,7 @@ usually recoverable by either enabling a stronger repair variant or
 loosening/coarsening the tetra parameters, but SMART will not silently corrupt
 the shape just to force success.
 
-See [`docs/TETRA_FAILURE_PLAYBOOK.md`](docs/TETRA_FAILURE_PLAYBOOK.md) for
+See [`docs/TETRA_FAILURE_PLAYBOOK.md`](https://github.com/chpark1111/SMART/blob/main/docs/TETRA_FAILURE_PLAYBOOK.md) for
 debug commands and stronger repair options.
 
 ## Run SMART
@@ -277,7 +277,7 @@ records = smart.run(cfg)
 print(records[-1])
 ```
 
-Package/API details are in [`docs/PYTHON_PACKAGE.md`](docs/PYTHON_PACKAGE.md).
+Package/API details are in [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md).
 
 ## Repository Layout
 
@@ -296,7 +296,7 @@ external/     Downloaded Mesh2Tet/CoACD tools; not packaged
 past_codes/   Original research archive; reference only
 ```
 
-See [`docs/REPOSITORY_STRUCTURE.md`](docs/REPOSITORY_STRUCTURE.md) for more
+See [`docs/REPOSITORY_STRUCTURE.md`](https://github.com/chpark1111/SMART/blob/main/docs/REPOSITORY_STRUCTURE.md) for more
 detail.
 
 ## Configs
@@ -315,7 +315,7 @@ packages.
 
 Research directions for learned policy/value agents, MCTS priors,
 local-minimum escape policies, and memory/table-based search are tracked in
-[`docs/RESEARCH_PLAN.md`](docs/RESEARCH_PLAN.md).
+[`docs/RESEARCH_PLAN.md`](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md).
 
 ## Compatibility Notes
 
@@ -335,7 +335,7 @@ smart-release-preflight \
   --run-asan-smoke
 ```
 
-Release notes and publishing steps are in [`docs/RELEASE.md`](docs/RELEASE.md).
+Release notes and publishing steps are in [`docs/RELEASE.md`](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE.md).
 
 ## Citation
 
