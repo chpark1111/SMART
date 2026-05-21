@@ -334,7 +334,7 @@ class BuildPyWithoutSourceArtifacts(_build_py):
 
 setup(
     name="smart-bbox",
-    version="0.1.0",
+    version="0.1.11",
     description="Official SMART pipeline for tight 3D bounding boxes",
     long_description=(ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+
+from smart.native_executable import run_native_command
 import smart.native_compat as sr
 import smart.pymesh_compat as pymesh
 import pymesh as legacy_pymesh
@@ -112,6 +115,25 @@ def test_top_level_pymesh_alias_matches_package_compat() -> None:
     assert legacy_pymesh.form_mesh is pymesh.form_mesh
     assert legacy_pymesh.load_mesh is pymesh.load_mesh
     assert legacy_pymesh.save_mesh is pymesh.save_mesh
+
+
+def test_native_command_timeout_returns_failed_process(tmp_path) -> None:
+    sleeper = tmp_path / "sleepy.py"
+    sleeper.write_text(
+        "import time\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    result = run_native_command(
+        [str(sleeper)],
+        configured=sys.executable,
+        include_path=False,
+        timeout=0.1,
+    )
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
 
 
 def test_action_mapping_matches_legacy_order() -> None:

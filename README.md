@@ -9,7 +9,8 @@ Boxes via Over-Segmentation and Iterative Search**, 3DV 2024.
 [arXiv](https://arxiv.org/abs/2304.04336) |
 [Quickstart](docs/QUICKSTART.md) |
 [Pipeline](docs/PIPELINE.md) |
-[Package Docs](docs/PYTHON_PACKAGE.md)
+[Package Docs](docs/PYTHON_PACKAGE.md) |
+[All Docs](#documentation)
 
 [Chanhyeok Park](https://chpark1111.github.io/) and
 [Minhyuk Sung](https://mhsung.github.io/)
@@ -54,6 +55,30 @@ smart-cpp-native --help
 
 For the complete install and reproduction path, see
 [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+
+## Documentation
+
+Main user docs:
+
+- [Quickstart](docs/QUICKSTART.md): install, verify, prepare tools/data, and run
+  a small reproduction.
+- [Pipeline](docs/PIPELINE.md): stage order, config control, rendering, failure
+  handling, and parameter overrides.
+- [Python Package](docs/PYTHON_PACKAGE.md): CLI, Python API, native executable,
+  packaged configs, and library usage.
+- [Tetra Failure Playbook](docs/TETRA_FAILURE_PLAYBOOK.md): why Mesh2Tet/fTetWild
+  fails, how SMART records failures, and which repair knobs to try.
+- [Repository Structure](docs/REPOSITORY_STRUCTURE.md): public release layout
+  versus ignored local data, runs, external tools, and experiments.
+
+Maintainer and research docs:
+
+- [Release Guide](docs/RELEASE.md): local release preflight, wheel checks, tags,
+  and PyPI publishing.
+- [Release Notes 0.1.0](docs/RELEASE_NOTES_0.1.0.md): current release scope and
+  verification notes.
+- [Research Plan](docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
+  memory/table-based search, and promotion rules.
 
 ## Local Example
 
@@ -107,8 +132,28 @@ Manifold runtime. In a source checkout:
 
 ```bash
 smart --config configs/smoke_5.yaml build-tools
-smart --config configs/smoke_5.yaml build-cpp
 ```
+
+After installing from a wheel, run the same setup in a writable project/cache
+directory:
+
+```bash
+export SMART_TOOLS_ROOT="$PWD/.smart-tools"
+smart --config smoke_5.yaml build-tools
+```
+
+`pip install` intentionally does not clone and compile these external binaries
+during installation. Those builds are large, platform-specific, and can require
+local compiler/system packages, so SMART exposes them as an explicit
+`smart build-tools` step instead. That one command prepares ManifoldPlus,
+fTetWild, the CoACD Python CLI runtime, the fixed Manifold runtime, and the
+local `smart._cpp`/`smart-cpp-native` build for a source checkout.
+It is idempotent: if CoACD already probes successfully, SMART skips the slow
+editable install; if source editable installation fails, SMART tries the PyPI
+CoACD runtime and only fails the command when no working `coacd` CLI is found.
+
+Use `smart --config configs/smoke_5.yaml build-cpp` only when you need to
+rebuild the SMART C++ extension/executable without rebuilding external tools.
 
 Prebuilt binaries can also be supplied:
 
@@ -118,6 +163,30 @@ export SMART_FTETWILD_BIN=/path/to/fTetWild/build/FloatTetwild_bin
 export SMART_COACD_BIN=/path/to/coacd
 export SMART_MANIFOLD_PYTHON=/path/to/smart/vendor/manifold/build/bindings/python
 ```
+
+## Tetrahedralization Failures
+
+Mesh2Tet can fail on noisy ShapeNet meshes because the input OBJ may be
+non-watertight, self-intersecting, degenerate, or split into awkward components.
+SMART handles this per mesh, not as a fatal dataset error:
+
+- logs each ManifoldPlus/fTetWild attempt under `runs/<profile>/logs/tetra/`;
+- retries with finer settings, coarser settings, `--coarsen`, and robust winding
+  number settings;
+- validates that `tetra.msh` and `tetra.msh__sf.obj` exist and are usable;
+- records failed attempts in the tetra manifest, then skips downstream stages
+  for that mesh while continuing the rest of the dataset.
+
+Before tetrahedralization, SMART runs conservative mesh cleanup. If all normal
+attempts fail, it now also tries a repaired input variant with `fill_holes=true`.
+More destructive rescue, such as `keep_largest_component=true`, is available in
+config but is off by default because it can remove real disconnected shape
+parts. A failed mesh is therefore usually recoverable by either enabling a
+stronger repair variant or loosening/coarsening the tetra parameters, but SMART
+will not silently corrupt the shape just to force success.
+
+See [`docs/TETRA_FAILURE_PLAYBOOK.md`](docs/TETRA_FAILURE_PLAYBOOK.md) for
+debug commands and stronger repair options.
 
 ## Run SMART
 
@@ -231,6 +300,10 @@ Recommended public configs:
 Experimental RL, pruning, and acceleration profiles are local-only under
 `experiments/configs/`; they are ignored by git and excluded from release
 packages.
+
+Research directions for learned policy/value agents, MCTS priors,
+local-minimum escape policies, and memory/table-based search are tracked in
+[`docs/RESEARCH_PLAN.md`](docs/RESEARCH_PLAN.md).
 
 ## Compatibility Notes
 

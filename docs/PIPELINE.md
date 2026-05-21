@@ -101,6 +101,12 @@ tetra:
       coarsen: false
 ```
 
+The default config also includes a non-destructive fallback input variant that
+tries `fill_holes=true` only after the normal attempts fail. Stronger variants,
+such as `keep_largest_component=true`, can be enabled for experiments but are
+off by default because they may remove real shape parts. See
+[`TETRA_FAILURE_PLAYBOOK.md`](TETRA_FAILURE_PLAYBOOK.md).
+
 Use the failure analyzer for per-stage categories:
 
 ```bash

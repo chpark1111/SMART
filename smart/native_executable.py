@@ -51,14 +51,30 @@ def run_native_command(
             "smart-cpp-native executable is not available; run `smart build-cpp` "
             "or install a SMART wheel that includes smart/bin/smart-cpp-native"
         )
-    return subprocess.run(
-        [str(binary), *[str(arg) for arg in args]],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-    )
+    command = [str(binary), *[str(arg) for arg in args]]
+    try:
+        return subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        timeout_msg = f"smart-cpp-native timed out after {timeout} seconds"
+        if stderr:
+            stderr = f"{timeout_msg}\n{stderr}"
+        else:
+            stderr = timeout_msg
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

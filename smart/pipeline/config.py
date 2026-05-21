@@ -35,6 +35,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "coacd_external_root": "external/CoACD",
         "coacd_bin": "external/CoACD/python/package/bin/coacd",
         "coacd_build": False,
+        "coacd_install_python": True,
+        "build_cpp_with_tools": True,
         "smart_cpp_native_bin": "build/smart-cpp-native",
     },
     "native_pipeline": {
@@ -65,6 +67,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "fix_normals": True,
             "fill_holes": False,
             "keep_largest_component": False,
+            "fallback_variants": [
+                {
+                    "name": "fill_holes",
+                    "fill_holes": True,
+                    "keep_largest_component": False,
+                },
+                {
+                    "name": "largest_component_fill_holes",
+                    "enabled": False,
+                    "fill_holes": True,
+                    "keep_largest_component": True,
+                },
+            ],
         },
         "retry": {
             "enabled": True,

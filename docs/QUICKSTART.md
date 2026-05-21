@@ -14,6 +14,14 @@ From a released wheel:
 python -m pip install "smart-bbox[pipeline]"
 ```
 
+For full raw-mesh reproduction after a wheel install, prepare the external
+toolchain in a writable project/cache directory:
+
+```bash
+export SMART_TOOLS_ROOT="$PWD/.smart-tools"
+smart --config smoke_5.yaml build-tools
+```
+
 From a source checkout:
 
 ```bash
@@ -58,6 +66,21 @@ This prepares ManifoldPlus, fTetWild, CoACD source setup, and the fixed
 vendored Manifold binding. The fixed Manifold source is authoritative and must
 not be pulled, replaced, or rewritten.
 
+SMART does not run this step automatically during `pip install`. The external
+toolchain is large and platform-specific, so it is built explicitly with
+`smart build-tools` or supplied as prebuilt binaries.
+When `SMART_TOOLS_ROOT` is set, relative external tool paths are installed under
+that directory instead of the package/source tree. This is the recommended mode
+for wheel users.
+
+In a source checkout, `smart build-tools` also installs/probes the CoACD Python
+CLI runtime and builds the local `smart._cpp` extension plus
+`build/smart-cpp-native`. Use `smart build-cpp` later only when you need to
+rebuild the SMART C++ wrapper without rebuilding Mesh2Tet/CoACD.
+The command is safe to rerun: an already-working CoACD CLI is reused, and a
+failed CoACD source editable install falls back to the PyPI CoACD runtime before
+SMART reports the setup as failed.
+
 Prebuilt binaries can be supplied instead:
 
 ```bash
@@ -66,6 +89,18 @@ export SMART_FTETWILD_BIN=/path/to/fTetWild/build/FloatTetwild_bin
 export SMART_COACD_BIN=/path/to/coacd
 export SMART_MANIFOLD_PYTHON=/path/to/smart/vendor/manifold/build/bindings/python
 ```
+
+### Tetra Failure Handling
+
+Tetrahedralization is the least predictable stage on raw ShapeNet meshes. SMART
+does not abort the whole run when one mesh fails. It records the failed
+ManifoldPlus/fTetWild attempts in the tetra manifest, skips downstream stages
+for that mesh, and continues other meshes. The default config runs conservative
+mesh cleanup, multiple parameter retries, and a final `fill_holes=true` input
+repair fallback. Stronger repair such as `keep_largest_component=true` is
+configurable but disabled by default because it can delete real disconnected
+parts.
+More details are in [`TETRA_FAILURE_PLAYBOOK.md`](TETRA_FAILURE_PLAYBOOK.md).
 
 ## 4. Prepare ShapeNet Data
 

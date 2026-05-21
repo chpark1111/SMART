@@ -12,13 +12,29 @@ From source:
 ```bash
 python -m pip install -e ".[pipeline]"
 python -m smart --config configs/smoke_5.yaml build-tools
-python -m smart --config configs/smoke_5.yaml build-cpp
 ```
+
+`build-tools` prepares Mesh2Tet tools, CoACD CLI runtime, the fixed Manifold
+runtime, and the local SMART C++ extension/executable. `build-cpp` is only
+needed later if you want to rebuild the SMART wrapper without rebuilding the
+external tools. The setup is idempotent: SMART probes an existing CoACD CLI
+before trying slow source installation, and falls back to the PyPI CoACD runtime
+if the source editable install is not usable on the local platform.
 
 From a release wheel:
 
 ```bash
 python -m pip install "smart-bbox[pipeline]"
+```
+
+The wheel includes the Python package, public configs, the native SMART C++
+extension, and `smart-cpp-native`. Full raw-mesh reproduction still needs
+Mesh2Tet/CoACD/Manifold runtime tools and data. Prepare those tools in a
+writable location:
+
+```bash
+export SMART_TOOLS_ROOT="$PWD/.smart-tools"
+smart --config smoke_5.yaml build-tools
 ```
 
 ## CLI
@@ -110,4 +126,3 @@ pymesh` route to `smart.pymesh_compat`. New code should import
 
 Experimental RL priors, pruning gates, and benchmark configs are kept in the
 local ignored `experiments/` tree, not in release wheels.
-

@@ -10,6 +10,7 @@ import pytest
 from smart.pipeline.config import load_config
 from smart.pipeline.stages import (
     _run_coacd_cli_preseg,
+    _tetra_input_candidates,
     _write_coacd_partition_metadata,
     bbox_dir_for_render,
     inspect_tetra_output,
@@ -23,8 +24,10 @@ from smart.pipeline.stages import (
     validate_tetra_output,
 )
 from smart.pipeline import tools as pipeline_tools
+from smart.pipeline.runner import CommandResult
 from smart.pipeline.tools import (
     _first_pymanifold_binary,
+    _tool_root_path,
     build_cpp_extension,
     build_vendored_manifold_binding,
     diagnose_environment,
@@ -48,6 +51,8 @@ def test_demo_config_loads() -> None:
     assert [category["name"] for category in cfg["categories"]] == ["airplane", "chair", "table"]
     assert cfg["tools"]["coacd_external_root"] == "external/CoACD"
     assert cfg["tools"]["coacd_build"] is False
+    assert cfg["tools"]["coacd_install_python"] is True
+    assert cfg["tools"]["build_cpp_with_tools"] is True
     assert cfg["local_refine_gate"]["enabled"] is False
 
 
@@ -232,6 +237,20 @@ def test_manifold_parallel_cmake_args_on_darwin(monkeypatch, tmp_path) -> None:
     tbb.mkdir()
     monkeypatch.setenv("SMART_TBB_PREFIX", str(tbb))
     assert pipeline_tools._manifold_parallel_cmake_args("TBB") == [f"-DCMAKE_PREFIX_PATH={tbb}"]
+
+
+def test_build_tools_relative_tool_root_uses_cwd_outside_repo(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SMART_TOOLS_ROOT", raising=False)
+
+    assert _tool_root_path("external/mesh2tet", "unused") == tmp_path / "external" / "mesh2tet"
+
+
+def test_build_tools_relative_tool_root_can_use_env(tmp_path, monkeypatch) -> None:
+    tool_root = tmp_path / "smart_tools"
+    monkeypatch.setenv("SMART_TOOLS_ROOT", str(tool_root))
+
+    assert _tool_root_path("external/mesh2tet", "unused") == tool_root / "external" / "mesh2tet"
 
 
 def test_demo_sample_counts_are_limited() -> None:
@@ -993,6 +1012,73 @@ def test_build_tools_dry_run_fetches_coacd_source(tmp_path) -> None:
 
     assert "CoACD source clone: dry-run" in messages
     assert any(message.startswith("CoACD source checkout: dry-run -> ") for message in messages)
+    assert "CoACD Python dependency install: dry-run" in messages
+    assert "CoACD Python runtime install: dry-run" in messages
+    assert any(message.startswith("CoACD CLI probe: dry-run -> ") for message in messages)
+    assert "smart-cpp-native executable build: dry-run" in messages
+
+
+def test_coacd_editable_install_failure_is_nonfatal_when_cli_probe_passes(
+    tmp_path, monkeypatch
+) -> None:
+    coacd_root = tmp_path / "CoACD"
+    coacd_script = coacd_root / "python" / "package" / "bin" / "coacd"
+    coacd_script.parent.mkdir(parents=True)
+    coacd_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    def fake_run_command(command, **kwargs):
+        log_path = Path(kwargs["log_path"])
+        returncode = 1 if log_path.name == "coacd-python-install.log" else 0
+        if log_path.name == "coacd-cli-preflight.log":
+            returncode = 2
+        return CommandResult(
+            command=[str(part) for part in command],
+            returncode=returncode,
+            elapsed_sec=0.0,
+            log_path=log_path,
+        )
+
+    monkeypatch.setattr(pipeline_tools, "run_command", fake_run_command)
+
+    messages = pipeline_tools._prepare_coacd_runtime(
+        coacd_root,
+        tmp_path / "logs",
+        {"coacd_install_python": True},
+    )
+
+    assert "CoACD source editable install: warning rc=1; trying PyPI CoACD runtime fallback" in messages
+    assert "CoACD PyPI runtime install: ok" in messages
+    assert any(message.startswith("CoACD CLI probe") and message.endswith(": ok") for message in messages)
+    assert all(": failed" not in message for message in messages)
+
+
+def test_coacd_runtime_skips_install_when_cli_already_works(tmp_path, monkeypatch) -> None:
+    coacd_root = tmp_path / "CoACD"
+    coacd_script = coacd_root / "python" / "package" / "bin" / "coacd"
+    coacd_script.parent.mkdir(parents=True)
+    coacd_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fake_run_command(command, **kwargs):
+        commands.append([str(part) for part in command])
+        return CommandResult(
+            command=[str(part) for part in command],
+            returncode=0,
+            elapsed_sec=0.0,
+            log_path=Path(kwargs["log_path"]),
+        )
+
+    monkeypatch.setattr(pipeline_tools, "run_command", fake_run_command)
+
+    messages = pipeline_tools._prepare_coacd_runtime(
+        coacd_root,
+        tmp_path / "logs",
+        {"coacd_install_python": True},
+    )
+
+    assert any(message.startswith("CoACD CLI probe") and message.endswith(": ok") for message in messages)
+    assert len(commands) == 1
+    assert all("pip" not in part for command in commands for part in command)
 
 
 def test_build_cpp_dry_run_can_request_asan_binary(tmp_path) -> None:
@@ -1064,6 +1150,44 @@ def test_tetra_validation_can_allow_disconnected_surfaces(tmp_path) -> None:
     assert validate_tetra_output(tmp_path, require_single_component=True) == (
         "surface has multiple connected components"
     )
+
+
+def test_tetra_input_candidates_add_fill_holes_fallback(tmp_path) -> None:
+    pytest.importorskip("trimesh")
+    mesh_path = tmp_path / "open_cube.obj"
+    mesh_path.write_text(
+        "\n".join(
+            [
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 1 1 0",
+                "v 0 1 0",
+                "v 0 0 1",
+                "v 1 0 1",
+                "v 1 1 1",
+                "v 0 1 1",
+                "f 1 2 3",
+                "f 1 3 4",
+                "f 1 5 6",
+                "f 1 6 2",
+                "f 2 6 7",
+                "f 2 7 3",
+                "f 3 7 8",
+                "f 3 8 4",
+                "f 4 8 5",
+                "f 4 5 1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stage_cfg = load_config(None)["tetra"]
+
+    candidates, repair_records = _tetra_input_candidates(mesh_path, tmp_path / "logs", stage_cfg)
+
+    assert candidates[0]["name"] == "primary"
+    assert any(candidate["name"] == "fill_holes" for candidate in candidates)
+    assert any(record.get("variant") == "fill_holes" and record.get("used") for record in repair_records)
 
 
 def test_bbox_dir_prefers_success_manifest_output(tmp_path) -> None:

@@ -800,6 +800,64 @@ def _prepare_tetra_input_mesh(source: Path, output: Path, stage_cfg: dict[str, A
         return source, metadata
 
 
+def _tetra_input_candidates(
+    source: Path,
+    log_dir: Path,
+    stage_cfg: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    repair_cfg = stage_cfg.get("input_repair", {})
+    primary_path, primary_metadata = _prepare_tetra_input_mesh(
+        source,
+        log_dir / "input_repaired.obj",
+        stage_cfg,
+    )
+    candidates: list[dict[str, Any]] = [
+        {
+            "name": "primary",
+            "path": primary_path,
+            "repair": primary_metadata,
+        }
+    ]
+    repair_records: list[dict[str, Any]] = [primary_metadata]
+    seen_paths = {primary_path.resolve() if primary_path.exists() else primary_path}
+
+    if not isinstance(repair_cfg, dict) or not repair_cfg.get("enabled", False):
+        return candidates, repair_records
+
+    for index, variant in enumerate(repair_cfg.get("fallback_variants", []) or []):
+        if not isinstance(variant, dict):
+            continue
+        if variant.get("enabled", True) is False:
+            continue
+        name = str(variant.get("name", f"repair_fallback_{index + 1}"))
+        variant_repair_cfg = dict(repair_cfg)
+        variant_repair_cfg.update(variant)
+        variant_repair_cfg.pop("fallback_variants", None)
+        variant_cfg = deep_update(stage_cfg, {"input_repair": variant_repair_cfg})
+        variant_path, variant_metadata = _prepare_tetra_input_mesh(
+            source,
+            log_dir / f"input_repaired_{name}.obj",
+            variant_cfg,
+        )
+        variant_metadata["variant"] = name
+        repair_records.append(variant_metadata)
+        if not variant_metadata.get("used", False):
+            continue
+        resolved = variant_path.resolve() if variant_path.exists() else variant_path
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        candidates.append(
+            {
+                "name": name,
+                "path": variant_path,
+                "repair": variant_metadata,
+            }
+        )
+
+    return candidates, repair_records
+
+
 def _call_optional_mesh_method(mesh: Any, name: str) -> None:
     method = getattr(mesh, name, None)
     if not callable(method):
@@ -999,12 +1057,12 @@ def run_tetra_mesh(
         )
 
     log_dir.mkdir(parents=True, exist_ok=True)
-    prepared_source_mesh = source_mesh
-    input_repair_metadata: dict[str, Any] = {}
+    input_candidates: list[dict[str, Any]] = [{"name": "source", "path": source_mesh, "repair": {"enabled": False}}]
+    input_repair_metadata: list[dict[str, Any]] = []
     if not dry_run:
-        prepared_source_mesh, input_repair_metadata = _prepare_tetra_input_mesh(
+        input_candidates, input_repair_metadata = _tetra_input_candidates(
             source_mesh,
-            log_dir / "input_repaired.obj",
+            log_dir,
             stage_cfg,
         )
 
@@ -1049,159 +1107,171 @@ def run_tetra_mesh(
     attempt_metadata: list[dict[str, Any]] = []
     last_command: list[str] | None = None
     last_log: Path | None = None
-    for attempt in attempts:
-        eps = float(attempt["epsilon"])
-        length = float(attempt["edge_length"])
-        coarsen = bool(attempt.get("coarsen", False))
-        attempt_name = str(attempt["name"])
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        manmesh = out_dir / "model_manifold.obj"
-        manifold_log = log_dir / f"{attempt_name}_manifoldplus.log"
-        ftetwild_log = log_dir / f"{attempt_name}_ftetwild.log"
-        manifold_cmd = [manifold_bin, "--input", str(prepared_source_mesh), "--output", str(manmesh)]
-        result = run_command(
-            manifold_cmd,
-            timeout=stage_cfg.get("manifold_timeout_sec"),
-            log_path=manifold_log,
-            dry_run=dry_run,
-        )
-        last_command = manifold_cmd
-        last_log = manifold_log
-        if not result.ok:
-            failure = _command_failure_summary("ManifoldPlus", result)
-            errors.append(f"{attempt_name}: {failure}")
-            attempt_metadata.append(
-                {
-                    "attempt": attempt_name,
-                    "tool": "ManifoldPlus",
-                    "epsilon": eps,
-                    "edge_length": length,
-                    "coarsen": coarsen,
-                    "returncode": result.returncode,
-                    "elapsed_sec": result.elapsed_sec,
-                    "timed_out": result.timed_out,
-                    "failure": failure,
-                }
+    for input_candidate in input_candidates:
+        prepared_source_mesh = Path(input_candidate["path"])
+        input_variant = str(input_candidate.get("name", "primary"))
+        for attempt in attempts:
+            eps = float(attempt["epsilon"])
+            length = float(attempt["edge_length"])
+            coarsen = bool(attempt.get("coarsen", False))
+            base_attempt_name = str(attempt["name"])
+            attempt_name = base_attempt_name if input_variant == "primary" else f"{input_variant}_{base_attempt_name}"
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            manmesh = out_dir / "model_manifold.obj"
+            manifold_log = log_dir / f"{attempt_name}_manifoldplus.log"
+            ftetwild_log = log_dir / f"{attempt_name}_ftetwild.log"
+            manifold_cmd = [manifold_bin, "--input", str(prepared_source_mesh), "--output", str(manmesh)]
+            result = run_command(
+                manifold_cmd,
+                timeout=stage_cfg.get("manifold_timeout_sec"),
+                log_path=manifold_log,
+                dry_run=dry_run,
             )
-            continue
+            last_command = manifold_cmd
+            last_log = manifold_log
+            if not result.ok:
+                failure = _command_failure_summary("ManifoldPlus", result)
+                errors.append(f"{attempt_name}: {failure}")
+                attempt_metadata.append(
+                    {
+                        "attempt": attempt_name,
+                        "input_variant": input_variant,
+                        "input_mesh": str(prepared_source_mesh),
+                        "tool": "ManifoldPlus",
+                        "epsilon": eps,
+                        "edge_length": length,
+                        "coarsen": coarsen,
+                        "returncode": result.returncode,
+                        "elapsed_sec": result.elapsed_sec,
+                        "timed_out": result.timed_out,
+                        "failure": failure,
+                    }
+                )
+                continue
 
-        ftetwild_cmd = [
-            ftetwild_bin,
-            "--input",
-            str(manmesh),
-            "--output",
-            str(tetmesh),
-            "-q",
-            "-l",
-            str(length),
-            "-e",
-            str(eps),
-            "--log",
-            str(out_dir / "log.txt"),
-            "--level",
-            str(int(stage_cfg.get("ftetwild_level", 2))),
-            "--no-binary",
-        ]
-        if attempt.get("use_floodfill", stage_cfg.get("use_floodfill", True)):
-            ftetwild_cmd.append("--use-floodfill")
-        if attempt.get("use_general_wn", stage_cfg.get("use_general_wn", False)):
-            ftetwild_cmd.append("--use-general-wn")
-        if attempt.get("use_input_for_wn", stage_cfg.get("use_input_for_wn", False)):
-            ftetwild_cmd.append("--use-input-for-wn")
-        if attempt.get("manifold_surface", stage_cfg.get("manifold_surface", True)):
-            ftetwild_cmd.append("--manifold-surface")
-        if attempt.get("skip_simplify", stage_cfg.get("skip_simplify", False)):
-            ftetwild_cmd.append("--skip-simplify")
-        if stage_cfg.get("ftetwild_threads") is not None and _executable_supports_option(ftetwild_bin, "--max-threads"):
-            ftetwild_cmd.extend(["--max-threads", str(int(stage_cfg.get("ftetwild_threads", 8)))])
-        if coarsen:
-            ftetwild_cmd.append("--coarsen")
-        result = run_command(
-            ftetwild_cmd,
-            timeout=attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
-            log_path=ftetwild_log,
-            dry_run=dry_run,
-        )
-        last_command = ftetwild_cmd
-        last_log = ftetwild_log
-        if not result.ok:
-            failure = _command_failure_summary("fTetWild", result)
-            errors.append(f"{attempt_name}: {failure}")
-            attempt_metadata.append(
-                {
-                    "attempt": attempt_name,
-                    "tool": "fTetWild",
-                    "epsilon": eps,
-                    "edge_length": length,
-                    "coarsen": coarsen,
-                    "returncode": result.returncode,
-                    "elapsed_sec": result.elapsed_sec,
-                    "timed_out": result.timed_out,
-                    "timeout_sec": attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
-                    "failure": failure,
-                }
+            ftetwild_cmd = [
+                ftetwild_bin,
+                "--input",
+                str(manmesh),
+                "--output",
+                str(tetmesh),
+                "-q",
+                "-l",
+                str(length),
+                "-e",
+                str(eps),
+                "--log",
+                str(out_dir / "log.txt"),
+                "--level",
+                str(int(stage_cfg.get("ftetwild_level", 2))),
+                "--no-binary",
+            ]
+            if attempt.get("use_floodfill", stage_cfg.get("use_floodfill", True)):
+                ftetwild_cmd.append("--use-floodfill")
+            if attempt.get("use_general_wn", stage_cfg.get("use_general_wn", False)):
+                ftetwild_cmd.append("--use-general-wn")
+            if attempt.get("use_input_for_wn", stage_cfg.get("use_input_for_wn", False)):
+                ftetwild_cmd.append("--use-input-for-wn")
+            if attempt.get("manifold_surface", stage_cfg.get("manifold_surface", True)):
+                ftetwild_cmd.append("--manifold-surface")
+            if attempt.get("skip_simplify", stage_cfg.get("skip_simplify", False)):
+                ftetwild_cmd.append("--skip-simplify")
+            if stage_cfg.get("ftetwild_threads") is not None and _executable_supports_option(ftetwild_bin, "--max-threads"):
+                ftetwild_cmd.extend(["--max-threads", str(int(stage_cfg.get("ftetwild_threads", 8)))])
+            if coarsen:
+                ftetwild_cmd.append("--coarsen")
+            result = run_command(
+                ftetwild_cmd,
+                timeout=attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
+                log_path=ftetwild_log,
+                dry_run=dry_run,
             )
-            continue
-        if dry_run:
+            last_command = ftetwild_cmd
+            last_log = ftetwild_log
+            if not result.ok:
+                failure = _command_failure_summary("fTetWild", result)
+                errors.append(f"{attempt_name}: {failure}")
+                attempt_metadata.append(
+                    {
+                        "attempt": attempt_name,
+                        "input_variant": input_variant,
+                        "input_mesh": str(prepared_source_mesh),
+                        "tool": "fTetWild",
+                        "epsilon": eps,
+                        "edge_length": length,
+                        "coarsen": coarsen,
+                        "returncode": result.returncode,
+                        "elapsed_sec": result.elapsed_sec,
+                        "timed_out": result.timed_out,
+                        "timeout_sec": attempt.get("timeout_sec", stage_cfg.get("ftetwild_timeout_sec")),
+                        "failure": failure,
+                    }
+                )
+                continue
+            if dry_run:
+                return _base_record(
+                    cfg,
+                    category,
+                    mesh_id,
+                    "tetra",
+                    started,
+                    status="dry_run",
+                    output_path=out_dir,
+                    log_path=last_log,
+                    command=last_command,
+                )
+            validation_metadata: dict[str, Any] = {}
+            validation_error = None
+            if stage_cfg.get("validate", True):
+                validation_error, validation_metadata = inspect_tetra_output(
+                    out_dir,
+                    require_single_component=bool(stage_cfg.get("require_single_component", False)),
+                    min_tetra_count=int(stage_cfg.get("min_tetra_count", 20)),
+                    min_surface_faces=int(stage_cfg.get("min_surface_faces", 20)),
+                )
+            if validation_error:
+                errors.append(f"{attempt_name}: validation failed: {validation_error}")
+                attempt_metadata.append(
+                    {
+                        "attempt": attempt_name,
+                        "input_variant": input_variant,
+                        "input_mesh": str(prepared_source_mesh),
+                        "tool": "validation",
+                        "epsilon": eps,
+                        "edge_length": length,
+                        "coarsen": coarsen,
+                        "failure": validation_error,
+                        "metadata": validation_metadata,
+                    }
+                )
+                continue
+            metadata = {
+                "epsilon": eps,
+                "edge_length": length,
+                "coarsen": coarsen,
+                "attempt": attempt_name,
+                "input_variant": input_variant,
+                "input_mesh": str(prepared_source_mesh),
+                "previous_attempts": attempt_metadata,
+            }
+            if input_repair_metadata:
+                metadata["input_repair"] = input_repair_metadata
+            if validation_metadata:
+                metadata["validation"] = validation_metadata
             return _base_record(
                 cfg,
                 category,
                 mesh_id,
                 "tetra",
                 started,
-                status="dry_run",
+                status="success",
                 output_path=out_dir,
                 log_path=last_log,
                 command=last_command,
+                metadata=metadata,
             )
-        validation_metadata: dict[str, Any] = {}
-        validation_error = None
-        if stage_cfg.get("validate", True):
-            validation_error, validation_metadata = inspect_tetra_output(
-                out_dir,
-                require_single_component=bool(stage_cfg.get("require_single_component", False)),
-                min_tetra_count=int(stage_cfg.get("min_tetra_count", 20)),
-                min_surface_faces=int(stage_cfg.get("min_surface_faces", 20)),
-            )
-        if validation_error:
-            errors.append(f"{attempt_name}: validation failed: {validation_error}")
-            attempt_metadata.append(
-                {
-                    "attempt": attempt_name,
-                    "tool": "validation",
-                    "epsilon": eps,
-                    "edge_length": length,
-                    "coarsen": coarsen,
-                    "failure": validation_error,
-                    "metadata": validation_metadata,
-                }
-            )
-            continue
-        metadata = {
-            "epsilon": eps,
-            "edge_length": length,
-            "coarsen": coarsen,
-            "attempt": attempt_name,
-            "previous_attempts": attempt_metadata,
-        }
-        if input_repair_metadata:
-            metadata["input_repair"] = input_repair_metadata
-        if validation_metadata:
-            metadata["validation"] = validation_metadata
-        return _base_record(
-            cfg,
-            category,
-            mesh_id,
-            "tetra",
-            started,
-            status="success",
-            output_path=out_dir,
-            log_path=last_log,
-            command=last_command,
-            metadata=metadata,
-        )
 
     shutil.rmtree(out_dir, ignore_errors=True)
     return _base_record(

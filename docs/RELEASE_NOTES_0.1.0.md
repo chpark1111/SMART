@@ -44,8 +44,7 @@ From a source checkout:
 
 ```bash
 python -m pip install -e ".[pipeline]"
-smart --config configs/smoke_5.yaml build-tools --only-manifold-binding
-smart --config configs/smoke_5.yaml build-cpp
+smart --config configs/smoke_5.yaml build-tools
 smart --config configs/smoke_5.yaml doctor
 ```
 

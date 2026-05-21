@@ -203,6 +203,20 @@ def _native_thread_link_args() -> list[str]:
     return []
 
 
+def _tool_root_path(configured: object, default: str) -> Path:
+    value = configured if configured not in (None, "") else default
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path
+    tools_root = os.environ.get("SMART_TOOLS_ROOT")
+    if tools_root:
+        return Path(tools_root).expanduser() / path
+    cwd_candidate = Path.cwd() / path
+    if cwd_candidate.exists() or Path.cwd() != REPO_ROOT:
+        return cwd_candidate
+    return REPO_ROOT / path
+
+
 def _pybind_include_dir() -> Path:
     try:
         import pybind11  # type: ignore[import-not-found]
@@ -503,8 +517,7 @@ def _git_source_detail(path: Path, *, expected_remote: str | None = None) -> str
 def build_tools(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
     tools = cfg.get("tools", {})
     assert isinstance(tools, dict)
-    root = repo_path(tools.get("mesh2tet_external_root", "external/mesh2tet"))
-    assert root is not None
+    root = _tool_root_path(tools.get("mesh2tet_external_root"), "external/mesh2tet")
     if not dry_run:
         root.mkdir(parents=True, exist_ok=True)
     logs = repo_path(cfg.get("workspace", "runs/demo"))
@@ -561,30 +574,139 @@ def build_tools(cfg: dict[str, Any], *, dry_run: bool = False) -> list[str]:
         )
     )
 
-    coacd_root = repo_path(tools.get("coacd_external_root", "external/CoACD"))
-    if coacd_root is not None:
-        if not _source_ready(coacd_root):
-            if coacd_root.exists() and not dry_run:
-                shutil.rmtree(coacd_root)
-            result = run_command(
-                ["git", "clone", "--recursive", COACD_REPO, str(coacd_root)],
-                timeout=3600,
-                log_path=log_root / "clone-coacd.log",
-                dry_run=dry_run,
-            )
-            messages.append(_line("CoACD source clone", result.returncode, dry_run))
-        if _bool_env_or_config("SMART_COACD_BUILD", tools.get("coacd_build"), default=False):
-            messages.extend(_cmake_build(coacd_root, log_root, "coacd", dry_run=dry_run))
-        else:
-            messages.append(
-                f"CoACD source checkout: {'dry-run -> ' if dry_run else ''}{coacd_root}; "
-                "runtime uses the upstream CoACD CLI when available"
-            )
+    coacd_root = _tool_root_path(tools.get("coacd_external_root"), "external/CoACD")
+    if not _source_ready(coacd_root):
+        if coacd_root.exists() and not dry_run:
+            shutil.rmtree(coacd_root)
+        result = run_command(
+            ["git", "clone", "--recursive", COACD_REPO, str(coacd_root)],
+            timeout=3600,
+            log_path=log_root / "clone-coacd.log",
+            dry_run=dry_run,
+        )
+        messages.append(_line("CoACD source clone", result.returncode, dry_run))
+    if _bool_env_or_config("SMART_COACD_BUILD", tools.get("coacd_build"), default=False):
+        messages.extend(_cmake_build(coacd_root, log_root, "coacd", dry_run=dry_run))
+    messages.extend(_prepare_coacd_runtime(coacd_root, log_root, tools, dry_run=dry_run))
 
     messages.extend(build_vendored_manifold_binding(cfg, dry_run=dry_run))
+    if _bool_env_or_config("SMART_BUILD_CPP_WITH_TOOLS", tools.get("build_cpp_with_tools"), default=True):
+        messages.extend(build_cpp_extension(cfg, dry_run=dry_run, release=True, asan=False))
     messages.append(f"Set SMART_MANIFOLDPLUS_BIN={manifoldplus / 'build' / 'manifold'} if it is not on PATH.")
     messages.append(f"Set SMART_FTETWILD_BIN={ftetwild / 'build' / 'FloatTetwild_bin'} if it is not on PATH.")
+    messages.append(f"Set SMART_COACD_BIN={coacd_root / 'python' / 'package' / 'bin' / 'coacd'} if it is not on PATH.")
     return messages
+
+
+def _prepare_coacd_runtime(
+    coacd_root: Path,
+    log_root: Path,
+    tools: dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> list[str]:
+    messages: list[str] = [
+        f"CoACD source checkout: {'dry-run -> ' if dry_run else ''}{coacd_root}"
+    ]
+    coacd_script = coacd_root / "python" / "package" / "bin" / "coacd"
+    if not dry_run:
+        preflight_target = _coacd_probe_target(coacd_script)
+        if preflight_target is not None:
+            preflight = run_command(
+                _command_for_coacd_probe(preflight_target),
+                timeout=60,
+                log_path=log_root / "coacd-cli-preflight.log",
+            )
+            if preflight.ok:
+                messages.append(_line(f"CoACD CLI probe ({preflight_target})", preflight.returncode, dry_run))
+                return messages
+            messages.append(
+                "CoACD CLI preflight: warning "
+                f"rc={preflight.returncode}; preparing Python runtime"
+            )
+    install_python = _bool_env_or_config(
+        "SMART_COACD_INSTALL_PYTHON",
+        tools.get("coacd_install_python"),
+        default=True,
+    )
+    if install_python:
+        deps_result = run_command(
+            [sys.executable, "-m", "pip", "install", "trimesh"],
+            timeout=1800,
+            log_path=log_root / "coacd-python-deps-install.log",
+            dry_run=dry_run,
+        )
+        if deps_result.ok or dry_run:
+            messages.append(_line("CoACD Python dependency install", deps_result.returncode, dry_run))
+        else:
+            messages.append(
+                "CoACD Python dependency install: warning "
+                f"rc={deps_result.returncode}; continuing if CLI probe passes"
+            )
+            messages.extend(_install_coacd_pypi_runtime(log_root, dry_run=dry_run))
+        if deps_result.ok or dry_run:
+            install_result = run_command(
+                [sys.executable, "-m", "pip", "install", "-e", str(coacd_root)],
+                timeout=7200,
+                log_path=log_root / "coacd-python-install.log",
+                dry_run=dry_run,
+            )
+            if install_result.ok or dry_run:
+                messages.append(_line("CoACD Python runtime install", install_result.returncode, dry_run))
+            else:
+                messages.append(
+                    "CoACD source editable install: warning "
+                    f"rc={install_result.returncode}; trying PyPI CoACD runtime fallback"
+                )
+                messages.extend(_install_coacd_pypi_runtime(log_root, dry_run=dry_run))
+    else:
+        messages.append("CoACD Python runtime install: skipped by SMART_COACD_INSTALL_PYTHON=0")
+
+    if dry_run:
+        messages.append(f"CoACD CLI probe: dry-run -> {coacd_script}")
+        return messages
+
+    probe_target = _coacd_probe_target(coacd_script)
+    if probe_target is None:
+        messages.append(f"CoACD CLI probe: failed; missing {coacd_script} and no coacd on PATH")
+        return messages
+    probe = run_command(
+        _command_for_coacd_probe(probe_target),
+        timeout=60,
+        log_path=log_root / "coacd-cli-probe.log",
+    )
+    messages.append(_line(f"CoACD CLI probe ({probe_target})", probe.returncode, dry_run))
+    return messages
+
+
+def _install_coacd_pypi_runtime(log_root: Path, *, dry_run: bool = False) -> list[str]:
+    pypi_result = run_command(
+        [sys.executable, "-m", "pip", "install", "coacd"],
+        timeout=7200,
+        log_path=log_root / "coacd-pypi-install.log",
+        dry_run=dry_run,
+    )
+    if pypi_result.ok or dry_run:
+        return [_line("CoACD PyPI runtime install", pypi_result.returncode, dry_run)]
+    return [
+        "CoACD PyPI runtime install: warning "
+        f"rc={pypi_result.returncode}; continuing if CLI probe passes"
+    ]
+
+
+def _coacd_probe_target(coacd_script: Path) -> Path | None:
+    if coacd_script.exists():
+        return coacd_script
+    installed_coacd = shutil.which("coacd")
+    if installed_coacd:
+        return Path(installed_coacd)
+    return None
+
+
+def _command_for_coacd_probe(coacd_script: Path) -> list[str]:
+    if os.access(coacd_script, os.X_OK):
+        return [str(coacd_script), "--help"]
+    return [sys.executable, str(coacd_script), "--help"]
 
 
 def _env_or_config_path(env_name: str, configured: object) -> str | None:
