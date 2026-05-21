@@ -90,6 +90,16 @@ def _manifold_cmake_cache_backend() -> str:
     return "NONE"
 
 
+def _find_manifold_lib() -> Path | None:
+    if MANIFOLD_LIB.exists():
+        return MANIFOLD_LIB
+    build_root = MANIFOLD_ROOT / "build"
+    if not build_root.exists():
+        return None
+    matches = sorted(build_root.glob("**/libmanifold.a"))
+    return matches[0] if matches else None
+
+
 def _manifold_link_args() -> list[str]:
     backend = _manifold_cmake_cache_backend()
     if backend == "TBB":
@@ -130,11 +140,12 @@ def _include_dirs() -> list[str]:
 
 
 def _extension() -> Extension:
+    manifold_lib = _find_manifold_lib()
     missing = [
         path
         for path in [
             PYBIND_INCLUDE / "pybind11/pybind11.h",
-            MANIFOLD_LIB,
+            manifold_lib or MANIFOLD_LIB,
             ROOT / "cpp/smart_cpp_module.cpp",
             ROOT / "cpp/smart_native_core.cpp",
             ROOT / "cpp/manifold_bridge.cpp",
@@ -168,7 +179,7 @@ def _extension() -> Extension:
         ],
         include_dirs=_include_dirs(),
         extra_compile_args=compile_args,
-        extra_objects=[str(MANIFOLD_LIB)],
+        extra_objects=[str(manifold_lib or MANIFOLD_LIB)],
         extra_link_args=link_args,
         language="c++",
     )
@@ -235,6 +246,7 @@ class BuildPyWithoutSourceArtifacts(_build_py):
         native_source = ROOT / "cpp/smart_native_core.cpp"
         engine_source = ROOT / "cpp/smart_native_engine.cpp"
         bridge_source = ROOT / "cpp/manifold_bridge.cpp"
+        manifold_lib = _find_manifold_lib()
         missing = [
             path
             for path in [
@@ -244,7 +256,7 @@ class BuildPyWithoutSourceArtifacts(_build_py):
                 bridge_source,
                 ROOT / "cpp/smart_native_core.hpp",
                 ROOT / "cpp/smart_native_engine.hpp",
-                MANIFOLD_LIB,
+                manifold_lib or MANIFOLD_LIB,
             ]
             if not path.exists()
         ]
@@ -273,7 +285,7 @@ class BuildPyWithoutSourceArtifacts(_build_py):
         command[1:1] = _macos_min_version_flags()
         for include_dir in _include_dirs():
             command.extend(["-I", include_dir])
-        command.append(str(MANIFOLD_LIB))
+        command.append(str(manifold_lib or MANIFOLD_LIB))
         command.extend(_manifold_link_args())
         if sys.platform != "darwin":
             command.append("-lstdc++")

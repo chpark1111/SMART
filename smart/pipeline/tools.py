@@ -629,6 +629,16 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
         f"MANIFOLD_PAR={manifold_parallel}, "
         f"MANIFOLD_USE_CUDA={'ON' if manifold_use_cuda else 'OFF'}"
     )
+    manifold_lib = _find_vendored_manifold_lib(source)
+    if dry_run:
+        messages.append(f"vendored-manifold static library: dry-run -> {source / 'build' / 'src' / 'manifold' / 'libmanifold.a'}")
+    elif manifold_lib is None:
+        messages.append(
+            "vendored-manifold static library: failed; missing "
+            f"{source / 'build' / 'src' / 'manifold' / 'libmanifold.a'}"
+        )
+    else:
+        messages.append(f"vendored-manifold static library: ok -> {manifold_lib}")
     messages.append(_stage_pymanifold_runtime(build / "bindings" / "python", dry_run=dry_run))
     return messages
 
@@ -671,7 +681,8 @@ def build_cpp_extension(
     pybind_include = REPO_ROOT / "smart/vendor/manifold/bindings/python/third_party/pybind11/include"
     manifold_root = REPO_ROOT / "smart/vendor/manifold"
     manifold_lib_dir = manifold_root / "build/src/manifold"
-    manifold_lib = manifold_lib_dir / "libmanifold.a"
+    default_manifold_lib = manifold_lib_dir / "libmanifold.a"
+    manifold_lib = _find_vendored_manifold_lib(manifold_root)
     module_source = REPO_ROOT / "cpp/smart_cpp_module.cpp"
     native_source = REPO_ROOT / "cpp/smart_native_core.cpp"
     engine_source = REPO_ROOT / "cpp/smart_native_engine.cpp"
@@ -682,7 +693,7 @@ def build_cpp_extension(
         path
         for path in [
             pybind_include / "pybind11/pybind11.h",
-            manifold_lib,
+            manifold_lib or default_manifold_lib,
             module_source,
             native_source,
             engine_source,
@@ -732,7 +743,7 @@ def build_cpp_extension(
     ]
     for include_dir in include_dirs:
         command.extend(["-I", str(include_dir)])
-    command.append(str(manifold_lib))
+    command.append(str(manifold_lib or default_manifold_lib))
     command.extend(_manifold_native_link_args(manifold_root))
     if sys.platform == "darwin":
         command.extend(["-undefined", "dynamic_lookup"])
@@ -770,7 +781,7 @@ def build_cpp_extension(
     ]
     for include_dir in include_dirs:
         cli_command.extend(["-I", str(include_dir)])
-    cli_command.append(str(manifold_lib))
+    cli_command.append(str(manifold_lib or default_manifold_lib))
     cli_command.extend(_manifold_native_link_args(manifold_root))
     if sys.platform != "darwin":
         cli_command.append("-lstdc++")
@@ -806,7 +817,7 @@ def build_cpp_extension(
         ]
         for include_dir in include_dirs:
             asan_command.extend(["-I", str(include_dir)])
-        asan_command.append(str(manifold_lib))
+        asan_command.append(str(manifold_lib or default_manifold_lib))
         asan_command.extend(_manifold_native_link_args(manifold_root))
         asan_command.append("-fsanitize=address")
         if sys.platform != "darwin":
@@ -841,6 +852,17 @@ def build_cpp_extension(
         asan_output.chmod(asan_output.stat().st_mode | 0o755)
         messages.append(f"smart-cpp-native ASan executable: ok -> {asan_output}")
     return messages
+
+
+def _find_vendored_manifold_lib(manifold_root: Path) -> Path | None:
+    default = manifold_root / "build" / "src" / "manifold" / "libmanifold.a"
+    if default.exists():
+        return default
+    build_root = manifold_root / "build"
+    if not build_root.exists():
+        return None
+    matches = sorted(build_root.glob("**/libmanifold.a"))
+    return matches[0] if matches else None
 
 
 def _cmake_build(

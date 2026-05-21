@@ -17,6 +17,10 @@ from .pipeline.stages import (
 from .pipeline.tools import build_cpp_extension, build_tools, diagnose_environment
 
 
+def _build_messages_failed(messages: list[str]) -> bool:
+    return any(": failed" in message or message.startswith("Missing ") for message in messages)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="smart", description="SMART official pipeline")
     parser.add_argument("--config", default="configs/demo.yaml", help="Pipeline config path")
@@ -428,13 +432,13 @@ def main(argv: list[str] | None = None) -> int:
             messages = build_tools(cfg, dry_run=args.dry_run)
         for message in messages:
             print(message)
-        return 0
+        return 1 if not args.dry_run and _build_messages_failed(messages) else 0
 
     if args.command == "build-cpp":
         messages = build_cpp_extension(cfg, dry_run=args.dry_run, release=not args.debug, asan=args.asan)
         for message in messages:
             print(message)
-        return 0
+        return 1 if not args.dry_run and _build_messages_failed(messages) else 0
 
     if args.command == "audit-wheel":
         from scripts.audit_release_wheel import main as audit_release_wheel_main
