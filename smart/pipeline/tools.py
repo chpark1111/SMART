@@ -78,6 +78,48 @@ def _manifold_use_cuda(cfg: dict[str, Any]) -> bool:
     return _bool_env_or_config("SMART_MANIFOLD_USE_CUDA", configured, default=False)
 
 
+def _manifold_relax_werror(cfg: dict[str, Any]) -> bool:
+    configured = (
+        _nested_get(cfg, ("build_tools", "manifold_relax_werror"))
+        or _nested_get(cfg, ("manifold", "relax_werror"))
+        or _nested_get(cfg, ("tools", "manifold_relax_werror"))
+    )
+    return _bool_env_or_config("SMART_MANIFOLD_RELAX_WERROR", configured, default=True)
+
+
+def _werror_filter_compiler(log_root: Path, *, dry_run: bool = False) -> Path:
+    wrapper = log_root / "cxx-filter-werror.py"
+    if dry_run:
+        return wrapper
+    real_cxx = os.environ.get("CXX") or shutil.which("c++") or "c++"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import subprocess",
+                "import sys",
+                f"REAL_CXX = {real_cxx!r}",
+                "args = [arg for arg in sys.argv[1:] if arg != '-Werror']",
+                "raise SystemExit(subprocess.call([REAL_CXX, *args]))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    return wrapper
+
+
+def _cmake_cache_value(cache: Path, key: str) -> str | None:
+    if not cache.exists():
+        return None
+    for line in cache.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if line.startswith(f"{key}:"):
+            return line.rsplit("=", 1)[-1].strip()
+    return None
+
+
 def _optional_tool_prefix(env_name: str, package_name: str) -> Path | None:
     configured = os.environ.get(env_name)
     candidates = []
@@ -603,6 +645,7 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
     log_root = workspace / "logs" / "build-tools"
     manifold_parallel = _manifold_parallel_backend(cfg)
     manifold_use_cuda = _manifold_use_cuda(cfg)
+    manifold_relax_werror = _manifold_relax_werror(cfg)
     cmake_args = [
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         "-DMANIFOLD_PYBIND=ON",
@@ -616,6 +659,12 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
         cmake_args.append(
             "-DCMAKE_CXX_FLAGS=-D_VSTD=std -Wno-error=missing-template-arg-list-after-template-kw"
         )
+    if manifold_relax_werror:
+        compiler_wrapper = build / "cxx-filter-werror.py"
+        cached_compiler = _cmake_cache_value(build / "CMakeCache.txt", "CMAKE_CXX_COMPILER")
+        if cached_compiler and cached_compiler != str(compiler_wrapper) and not dry_run:
+            shutil.rmtree(build)
+        cmake_args.append(f"-DCMAKE_CXX_COMPILER={_werror_filter_compiler(build, dry_run=dry_run)}")
     messages = _cmake_build(
         source,
         log_root,
@@ -628,7 +677,8 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
     messages.append(
         "Vendored Manifold build backend: "
         f"MANIFOLD_PAR={manifold_parallel}, "
-        f"MANIFOLD_USE_CUDA={'ON' if manifold_use_cuda else 'OFF'}"
+        f"MANIFOLD_USE_CUDA={'ON' if manifold_use_cuda else 'OFF'}, "
+        f"RELAX_WERROR={'ON' if manifold_relax_werror else 'OFF'}"
     )
     manifold_lib = _find_vendored_manifold_lib(source)
     if dry_run:
