@@ -62,6 +62,16 @@ class ManifestWriter:
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
 
+    def write_stage_records(self, records: list[StageRecord]) -> None:
+        by_stage: dict[str, list[StageRecord]] = {}
+        for record in records:
+            by_stage.setdefault(record.stage, []).append(record)
+        for stage, stage_records in by_stage.items():
+            path = self.root / f"{stage}.jsonl"
+            with path.open("w", encoding="utf-8") as file:
+                for record in stage_records:
+                    file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
+
     def write_summary(self, records: list[StageRecord]) -> Path:
         summary: dict[str, dict[str, int]] = {}
         for record in records:

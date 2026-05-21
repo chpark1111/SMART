@@ -124,6 +124,7 @@ def run_pipeline(
                 writer.append(record)
                 records.append(record)
 
+    writer.write_stage_records(records)
     writer.write_summary(records)
     return records
 
@@ -162,6 +163,7 @@ def run_native_pipelines(
             writer.append(record)
             records.append(record)
 
+    writer.write_stage_records(records)
     writer.write_summary(records)
     return records
 

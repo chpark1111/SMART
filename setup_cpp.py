@@ -174,6 +174,21 @@ def _extension() -> Extension:
     )
 
 
+def _should_build_extension() -> bool:
+    # PEP 517/660 metadata hooks run setup.py before any project command has
+    # built the vendored Manifold static library. Keep those metadata/editable
+    # probes pure-Python; the native extension is attached only to real binary
+    # build commands.
+    build_commands = {
+        "bdist_egg",
+        "bdist_wheel",
+        "build",
+        "build_ext",
+        "install",
+    }
+    return any(arg in build_commands for arg in sys.argv[1:])
+
+
 ENTRY_POINTS = {
     "console_scripts": [
         "smart=smart.cli:main",
@@ -310,7 +325,7 @@ setup(
             "pymanifold_runtime/pymanifold*.dylib",
         ],
     },
-    ext_modules=[_extension()],
+    ext_modules=[_extension()] if _should_build_extension() else [],
     cmdclass={"build_py": BuildPyWithoutSourceArtifacts},
     entry_points=ENTRY_POINTS,
     classifiers=[

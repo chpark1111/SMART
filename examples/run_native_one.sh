@@ -6,7 +6,11 @@ cd "${ROOT}"
 
 MESH_ID="${1:-1f5537f4747ec847622c69c3abc6f80}"
 
-smart-cpp-native run-pipeline \
+if [[ ! -x build/smart-cpp-native ]]; then
+  python3 -m smart --config configs/example_3x3.yaml build-cpp
+fi
+
+build/smart-cpp-native run-pipeline \
   --input "examples/sample_shapes/shapenet_airplane/${MESH_ID}/model.obj" \
   --work_dir "examples/runs/native_one/${MESH_ID}" \
   --manifoldplus_bin "external/mesh2tet/ManifoldPlus/build/manifold" \

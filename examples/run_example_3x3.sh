@@ -7,6 +7,9 @@ cd "${ROOT}"
 rm -rf examples/runs/example_3x3
 
 python3 -m smart --config configs/example_3x3.yaml check-data
+if [[ ! -x build/smart-cpp-native ]]; then
+  python3 -m smart --config configs/example_3x3.yaml build-cpp
+fi
 python3 -m smart --config configs/example_3x3.yaml doctor
 python3 -m smart --config configs/example_3x3.yaml run
 python3 -m smart --config configs/example_3x3.yaml summary
