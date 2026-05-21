@@ -604,6 +604,7 @@ def build_vendored_manifold_binding(cfg: dict[str, Any], *, dry_run: bool = Fals
     manifold_parallel = _manifold_parallel_backend(cfg)
     manifold_use_cuda = _manifold_use_cuda(cfg)
     cmake_args = [
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         "-DMANIFOLD_PYBIND=ON",
         "-DMANIFOLD_CBIND=OFF",
         f"-DMANIFOLD_PAR={manifold_parallel}",

@@ -24,17 +24,39 @@ jobs:
       - name: Install build bootstrap dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PyYAML numpy cmake wheel
+          python -m pip install PyYAML numpy "cmake<4" wheel
 
       - name: Build fixed Manifold Python runtime
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding
+        run: |
+          set -eux
+          python -VV
+          cmake --version
+          python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding || {
+            for log in runs/smoke_5/logs/build-tools/vendored-manifold-*.log; do
+              [ -f "$log" ] || continue
+              echo "::group::$log"
+              sed -n '1,260p' "$log"
+              echo "::endgroup::"
+            done
+            exit 1
+          }
 
       - name: Build native C++ extension
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: python -m smart --config configs/smoke_5.yaml build-cpp
+        run: |
+          set -eux
+          python -m smart --config configs/smoke_5.yaml build-cpp || {
+            for log in runs/smoke_5/logs/build-cpp/*.log; do
+              [ -f "$log" ] || continue
+              echo "::group::$log"
+              sed -n '1,260p' "$log"
+              echo "::endgroup::"
+            done
+            exit 1
+          }
 
       - name: Install test dependencies
         run: python -m pip install pytest PyYAML numpy trimesh scipy scikit-learn twine wheel
@@ -68,17 +90,39 @@ jobs:
       - name: Install native package bootstrap dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PyYAML numpy cmake wheel twine
+          python -m pip install PyYAML numpy "cmake<4" wheel twine
 
       - name: Build fixed Manifold Python runtime
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding
+        run: |
+          set -eux
+          python -VV
+          cmake --version
+          python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding || {
+            for log in runs/smoke_5/logs/build-tools/vendored-manifold-*.log; do
+              [ -f "$log" ] || continue
+              echo "::group::$log"
+              sed -n '1,260p' "$log"
+              echo "::endgroup::"
+            done
+            exit 1
+          }
 
       - name: Build native C++ extension
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: python -m smart --config configs/smoke_5.yaml build-cpp
+        run: |
+          set -eux
+          python -m smart --config configs/smoke_5.yaml build-cpp || {
+            for log in runs/smoke_5/logs/build-cpp/*.log; do
+              [ -f "$log" ] || continue
+              echo "::group::$log"
+              sed -n '1,260p' "$log"
+              echo "::endgroup::"
+            done
+            exit 1
+          }
 
       - name: Build and audit native C++ wheel
         env:

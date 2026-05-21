@@ -69,6 +69,6 @@ norecursedirs = ["past_codes", "smart/vendor", "runs", "external"]
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-*"
 skip = "pp* *-musllinux* *-win32 *-win_amd64"
-before-build = "python -m pip install PyYAML numpy cmake && python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding"
+before-build = "python -m pip install PyYAML numpy 'cmake<4' && python -m smart --config configs/smoke_5.yaml build-tools --only-manifold-binding"
 test-requires = ["PyYAML", "numpy"]
 test-command = "cd {project}/.. && python -c \"import smart, smart.native as sn, smart.cpp as sc, smart.pymesh_compat as compat, pymesh; from smart.pipeline.config import load_config; from smart.pipeline.tools import diagnose_environment; status = diagnose_environment(load_config('smoke_5.yaml')); checks = {c['name']: c for c in status['checks']}; assert sn.using_cpp(); assert sc.using_cpp(); assert smart.cpp_native_available(); assert smart.NativeSmartEngine is sc.NativeSmartEngine; assert smart.native_executable_path() is not None; assert compat.form_mesh is pymesh.form_mesh; assert checks['pymanifold']['ok']; assert checks['SMART_MANIFOLD_PYTHON']['ok']; assert checks['smart-cpp-extension']['ok']; assert checks['smart-cpp-native']['ok']\""
