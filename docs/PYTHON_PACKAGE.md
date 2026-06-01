@@ -119,6 +119,27 @@ result = sc.run_builtin_deepset_policy_refine(
 )
 ```
 
+The same router is also wired into the normal pipeline as an opt-in refine
+setting:
+
+```yaml
+refine:
+  backend: cpp_native
+  learned_router:
+    enabled: true
+    policy: default
+    profile: auto
+    overrides: {}
+```
+
+or from the CLI:
+
+```bash
+smart --config configs/smoke_5.yaml refine \
+  --set refine.learned_router.enabled=true \
+  --set refine.learned_router.profile=auto
+```
+
 The release default remains exact native SMART. Use the learned router only
 when you are benchmarking the acceleration/quality tradeoff.
 The bundled `auto` profile sends small one-box states to exact native refine and
@@ -148,6 +169,14 @@ Current local validation snapshot for the bundled `default` policy
 
 Treat these numbers as a research baseline, not a paper metric.  Re-run the
 benchmark on your category split before promoting a learned-router profile.
+
+The same saved exact-call budget can be reinvested into more refinement turns.
+In a local 4-turn exact baseline vs 6-turn learned-router probe, the router
+improved final score with no quality-loss cases: hard airplane states improved
+by +0.4010 mean score while using 58.2% fewer exact checks and 18.4% less wall
+time; the mixed case41 split improved by +0.3464 mean score while using 25.1%
+fewer exact checks at essentially equal wall time.  This is still research
+evidence, so it remains opt-in.
 
 ## Config Profiles
 

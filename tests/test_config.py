@@ -741,6 +741,62 @@ def test_cpp_native_refine_uses_direct_file_runner_when_metadata_exists(tmp_path
     assert record.output_path.endswith("bboxs_steps0")
 
 
+def test_cpp_native_refine_learned_router_is_pipeline_opt_in(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    segment = tetra_dir / "greedy_segment0_coacd_mgeps0.02_fm.txt"
+    segment.write_text("1\n0\n", encoding="utf-8")
+    (Path(str(segment) + ".bbox_params.json")).write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {"init_type": "coacd", "merge_eps": 0.02, "fast_merge": True},
+        "refine": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "learned_router": {
+                "enabled": True,
+                "policy": "default",
+                "profile": "auto",
+                "overrides": {"budget": 6},
+            },
+        },
+    }
+
+    record = run_refine_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart._cpp", "run_builtin_deepset_policy_refine"]
+    assert record.metadata["learned_router"] is True
+    assert "_deepset_auto" in record.output_path
+
+
 def test_cpp_native_mcts_uses_direct_file_runner_when_metadata_exists(tmp_path, monkeypatch) -> None:
     from smart import native_runner
 

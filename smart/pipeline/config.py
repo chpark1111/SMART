@@ -181,6 +181,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "manifold_volume_method": "mesh",
         "stateful_union_cache": True,
         "stateful_cache_capacity": 65536,
+        "learned_router": {
+            "enabled": False,
+            "policy": "default",
+            "profile": "auto",
+            "overrides": {},
+        },
         "strict_legacy_bbox_params": True,
         "stateful_unscored_apply": False,
         "native_axis_rollout_step": False,

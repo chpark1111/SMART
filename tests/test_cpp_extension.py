@@ -1229,6 +1229,69 @@ def test_cpp_native_file_runner_refine_exports_legacy_bbox_layout(tmp_path) -> N
     assert (output.parent / "native_stats.json").exists()
 
 
+def test_cpp_native_file_runner_refine_can_use_packaged_deepset_router(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(native_runner, "native_executable_path", lambda: Path("smart-cpp-native"))
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    path = tmp_path / "one_tet.msh"
+    sc.native_save_gmsh(str(path), vertices, sc.native_tetra_surface_faces(voxels), voxels)
+    metadata = tmp_path / "bbox_params.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                    {
+                        "index": 1,
+                        "bounds": [0.0, 0.0, 0.0, 0.5, 0.5, 0.5],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = native_runner.run_refine_from_files(
+        msh_path=path,
+        bbox_metadata_path=metadata,
+        output_root=tmp_path / "refine",
+        exp_name="native_deepset",
+        mesh_id="mesh-a",
+        category="tet",
+        max_step=1,
+        cover_penalty=100.0,
+        action_unit=0.1,
+        num_action_scale=2,
+        stateful_union_cache=True,
+        cache_capacity=128,
+        volume_method="mesh",
+        learned_router=True,
+        learned_router_profile="auto",
+        learned_router_policy="default",
+        learned_router_overrides={
+            "candidate_count": 8,
+            "budget": 4,
+            "fallback_budget": 4,
+            "adaptive_high_budget": 0,
+            "small_pool_exact_threshold": 0,
+        },
+    )
+
+    assert result["status"] == "success"
+    assert result["command"][0] == "smart._cpp"
+    assert result["metadata"]["backend"] == "cpp_native_deepset_file_runner"
+    assert result["metadata"]["learned_router"] is True
+    assert result["metadata"]["result"]["learned_router_used"] is True
+    output = tmp_path / "refine" / "native_deepset" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
+    assert (output / "bbox0.obj").exists()
+    assert (output / "native_stats.json").exists()
+
+
 def test_legacy_grd_bbox_params_are_generated_from_segment_txt(tmp_path) -> None:
     vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
     voxels = [[0, 1, 2, 3]]

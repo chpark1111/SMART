@@ -285,6 +285,14 @@ packaged DeepSets candidate router while preserving exact Manifold scoring for
 the checked candidates. This is opt-in; the paper reproduction default is still
 the exact native SMART path. The bundled `auto` profile is conservative; use
 `profile="hard"` for faster research sweeps after validating on your split.
+The same router can be enabled in the normal pipeline:
+
+```bash
+smart --config configs/smoke_5.yaml refine \
+  --set refine.learned_router.enabled=true \
+  --set refine.learned_router.profile=auto
+```
+
 See [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md)
 for profile details.
 

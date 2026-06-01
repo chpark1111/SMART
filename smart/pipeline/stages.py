@@ -2167,8 +2167,32 @@ def _cpp_native_refine_exp_name(
         f"_acunit{float(stage_cfg.get('action_unit', 0.01)):.5g}"
         f"_mgeps{float(merge_cfg.get('merge_eps', 0.02)):.5g}_timing"
     )
+    router_cfg = _refine_learned_router_config(stage_cfg)
+    if router_cfg["enabled"]:
+        name += f"_deepset_{router_cfg['profile']}"
     exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
     return f"{name}_{exp_tag}" if exp_tag else name
+
+
+def _refine_learned_router_config(stage_cfg: dict[str, Any]) -> dict[str, Any]:
+    raw = stage_cfg.get("learned_router", False)
+    if isinstance(raw, dict):
+        enabled = bool(raw.get("enabled", False))
+        policy = str(raw.get("policy", stage_cfg.get("learned_router_policy", "default")))
+        profile = str(raw.get("profile", stage_cfg.get("learned_router_profile", "auto")))
+        overrides_raw = raw.get("overrides", stage_cfg.get("learned_router_overrides", {}))
+    else:
+        enabled = bool(raw)
+        policy = str(stage_cfg.get("learned_router_policy", "default"))
+        profile = str(stage_cfg.get("learned_router_profile", "auto"))
+        overrides_raw = stage_cfg.get("learned_router_overrides", {})
+    overrides = dict(overrides_raw) if isinstance(overrides_raw, dict) else {}
+    return {
+        "enabled": enabled,
+        "policy": policy,
+        "profile": profile,
+        "overrides": overrides,
+    }
 
 
 def _cpp_native_mcts_exp_name(
@@ -2224,6 +2248,7 @@ def _run_cpp_native_refine_file_runner(
         return None
     if not metadata_path.exists():
         return None
+    learned_router_cfg = _refine_learned_router_config(stage_cfg)
     return native_runner.run_refine_from_files(
         msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
         bbox_metadata_path=metadata_path,
@@ -2242,6 +2267,10 @@ def _run_cpp_native_refine_file_runner(
         volume_method=str(stage_cfg.get("manifold_volume_method", "mesh")),
         native_recenter=bool(stage_cfg.get("native_recenter", False))
         or (bbox_init == "grd_merged" and bool(stage_cfg.get("strict_legacy_bbox_params", True))),
+        learned_router=bool(learned_router_cfg["enabled"]),
+        learned_router_profile=str(learned_router_cfg["profile"]),
+        learned_router_policy=str(learned_router_cfg["policy"]),
+        learned_router_overrides=dict(learned_router_cfg["overrides"]),
         dry_run=dry_run,
     )
 

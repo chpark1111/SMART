@@ -829,18 +829,39 @@ def run_refine_from_files(
     cache_capacity: int,
     volume_method: str,
     native_recenter: bool = False,
+    learned_router: bool = False,
+    learned_router_profile: str = "auto",
+    learned_router_policy: str = "default",
+    learned_router_overrides: dict[str, Any] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    command = [
-        "smart-cpp-native",
-        "refine",
-        "--msh",
-        str(msh_path),
-        "--bbox_params",
-        str(bbox_metadata_path),
-        "--max_step",
-        str(int(max_step)),
-    ]
+    learned_router_overrides = dict(learned_router_overrides or {})
+    if learned_router:
+        command = [
+            "smart._cpp",
+            "run_builtin_deepset_policy_refine",
+            "--msh",
+            str(msh_path),
+            "--bbox_params",
+            str(bbox_metadata_path),
+            "--max_step",
+            str(int(max_step)),
+            "--profile",
+            str(learned_router_profile),
+            "--policy",
+            str(learned_router_policy),
+        ]
+    else:
+        command = [
+            "smart-cpp-native",
+            "refine",
+            "--msh",
+            str(msh_path),
+            "--bbox_params",
+            str(bbox_metadata_path),
+            "--max_step",
+            str(int(max_step)),
+        ]
     mesh_root = Path(output_root) / exp_name / "result" / "updated0" / mesh_id
     bbox_dir = mesh_root / "bboxs_steps0"
     if dry_run:
@@ -848,11 +869,18 @@ def run_refine_from_files(
             "status": "dry_run",
             "output_path": bbox_dir,
             "command": command,
-            "metadata": {"backend": "cpp_native_file_runner"},
+            "metadata": {
+                "backend": "cpp_native_deepset_file_runner"
+                if learned_router
+                else "cpp_native_file_runner",
+                "learned_router": bool(learned_router),
+                "learned_router_profile": str(learned_router_profile),
+                "learned_router_policy": str(learned_router_policy),
+            },
         }
 
     native_bin = native_executable_path()
-    if native_bin is not None:
+    if native_bin is not None and not learned_router:
         args = [
             "refine",
             "--msh",
@@ -930,22 +958,57 @@ def run_refine_from_files(
         str(volume_method),
     )
     initial_score = float(engine.recompute_score(float(cover_penalty), 1.0))
-    result = dict(engine.run_refine(max(0, int(max_step)), float(cover_penalty), 1.0))
+    route_diagnostics: dict[str, Any] | None = None
+    if learned_router:
+        route_diagnostics = dict(
+            smart_native.native_deepset_route_diagnostics(
+                engine,
+                cover_penalty=float(cover_penalty),
+                pen_rate=1.0,
+                profile=str(learned_router_profile),
+                **learned_router_overrides,
+            )
+        )
+        result = dict(
+            smart_native.run_builtin_deepset_policy_refine(
+                engine,
+                max_steps=max(0, int(max_step)),
+                policy=str(learned_router_policy),
+                cover_penalty=float(cover_penalty),
+                pen_rate=1.0,
+                profile=str(learned_router_profile),
+                **learned_router_overrides,
+            )
+        )
+    else:
+        result = dict(engine.run_refine(max(0, int(max_step)), float(cover_penalty), 1.0))
     mesh_root.mkdir(parents=True, exist_ok=True)
     exported = int(engine.export_bbox_dir(str(bbox_dir)))
     elapsed = time.time() - started
     stats = dict(engine.stats())
     stats.update(
         {
-            "backend": "cpp_native_file_runner",
+            "backend": "cpp_native_deepset_file_runner"
+            if learned_router
+            else "cpp_native_file_runner",
             "initial_bbox_score": initial_score,
             "elapsed_sec": elapsed,
             "exported_boxes": exported,
             "result": result,
+            "learned_router": bool(learned_router),
+            "learned_router_profile": str(learned_router_profile),
+            "learned_router_policy": str(learned_router_policy),
+            "learned_router_overrides": learned_router_overrides,
         }
     )
+    if route_diagnostics is not None:
+        stats["learned_router_route"] = route_diagnostics
     (mesh_root / "time.txt").write_text(
         f"{len(bounds)}\n{exported}\n{elapsed}\n", encoding="utf-8"
+    )
+    (bbox_dir / "native_stats.json").write_text(
+        json.dumps(stats, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
     (mesh_root / "native_stats.json").write_text(
         json.dumps(stats, indent=2, sort_keys=True), encoding="utf-8"
