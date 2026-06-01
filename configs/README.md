@@ -6,6 +6,7 @@ YAML configs define the pipeline, parameters, data roots, and backend choices.
 
 - `smoke_5.yaml`: fastest local smoke profile.
 - `example_3x3.yaml`: local 3-per-category example profile.
+- `learned_frontier.yaml`: opt-in guarded DeepSets MCTS-prior research profile.
 - `demo.yaml`: small demo data profile.
 - `paper_like.yaml`: paper-style parameters.
 - `expanded_full.yaml`: larger local ShapeNet layout.

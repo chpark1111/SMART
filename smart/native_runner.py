@@ -23,6 +23,25 @@ def cpp_native_file_runner_available() -> bool:
     )
 
 
+def cpp_native_deepset_router_available() -> bool:
+    return bool(
+        smart_native is not None
+        and getattr(smart_native, "native_core_available", lambda: False)()
+        and hasattr(smart_native, "native_smart_engine_from_gmsh")
+        and hasattr(smart_native, "run_builtin_deepset_policy_refine")
+        and hasattr(smart_native, "native_deepset_route_diagnostics")
+    )
+
+
+def cpp_native_deepset_mcts_prior_available() -> bool:
+    return bool(
+        smart_native is not None
+        and getattr(smart_native, "native_core_available", lambda: False)()
+        and hasattr(smart_native, "native_smart_engine_from_gmsh")
+        and hasattr(smart_native, "run_builtin_deepset_prior_mcts")
+    )
+
+
 def find_bbox_params_metadata(root: str | Path, mesh_id: str) -> Path | None:
     path = Path(root)
     if path.is_file() and path.name == "bbox_params.json":
@@ -864,6 +883,11 @@ def run_refine_from_files(
         ]
     mesh_root = Path(output_root) / exp_name / "result" / "updated0" / mesh_id
     bbox_dir = mesh_root / "bboxs_steps0"
+    if learned_router and not dry_run and not cpp_native_deepset_router_available():
+        raise RuntimeError(
+            "learned refine router requires the smart._cpp extension. "
+            "Run `smart build-cpp` or disable refine.learned_router.enabled."
+        )
     if dry_run:
         return {
             "status": "dry_run",
@@ -1306,6 +1330,148 @@ def run_mcts_from_files(
     )
     (mesh_root / "native_stats.json").write_text(
         json.dumps(stats, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return {
+        "status": "success" if bbox_dir.exists() else "failed",
+        "output_path": bbox_dir,
+        "command": command,
+        "metadata": stats,
+    }
+
+
+def run_deepset_prior_mcts_from_files(
+    *,
+    msh_path: str | Path,
+    bbox_metadata_path: str | Path,
+    output_root: str | Path,
+    exp_name: str,
+    mesh_id: str,
+    category: str,
+    mode: str = "guarded",
+    policy: str = "default",
+    num_iter: int | None = None,
+    max_step: int | None = None,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    action_unit: float = 0.02,
+    num_action_scale: int = 2,
+    exp_weight: float = 0.001,
+    gamma: float = 1.0,
+    seed: int = 7777,
+    transposition_table: bool = True,
+    transposition_table_size: int = 8192,
+    stateful_union_cache: bool = True,
+    cache_capacity: int = 65536,
+    volume_method: str = "mesh",
+    overrides: dict[str, Any] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Run opt-in DeepSets-prior native MCTS from tetra/bbox files.
+
+    This path keeps the exact native SMART reward and uses the packaged
+    DeepSets policy only to prune/order MCTS actions.
+    """
+
+    mesh_root = Path(output_root) / exp_name / "result" / "updated0" / mesh_id
+    bbox_dir = mesh_root / "bboxs_steps0"
+    command = [
+        "smart._cpp",
+        "run_builtin_deepset_prior_mcts",
+        "--msh",
+        str(msh_path),
+        "--bbox_params",
+        str(bbox_metadata_path),
+        "--mode",
+        str(mode),
+    ]
+    if num_iter is not None:
+        command.extend(["--num_iter", str(int(num_iter))])
+    if max_step is not None:
+        command.extend(["--max_step", str(int(max_step))])
+    if transposition_table:
+        command.append("--transposition_table")
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "output_path": bbox_dir,
+            "command": command,
+            "metadata": {
+                "backend": "cpp_native_deepset_mcts_prior",
+                "learned_mcts_prior": True,
+                "learned_mcts_prior_mode": str(mode),
+                "learned_mcts_prior_policy": str(policy),
+                "transposition_table": bool(transposition_table),
+            },
+        }
+    if not cpp_native_deepset_mcts_prior_available():
+        raise RuntimeError(
+            "smart._cpp was built without DeepSets MCTS prior support. "
+            "Run `smart build-cpp` or disable mcts.learned_prior.enabled."
+        )
+
+    started = time.time()
+    bounds, rotations = load_bbox_params(bbox_metadata_path)
+    engine = smart_native.native_smart_engine_from_gmsh(
+        str(msh_path),
+        bounds,
+        rotations,
+        str(category),
+        int(num_action_scale),
+        float(action_unit),
+        0.0,
+        0.0,
+        bool(stateful_union_cache),
+        int(cache_capacity),
+        str(volume_method),
+    )
+    initial_score = float(engine.recompute_score(float(cover_penalty), float(pen_rate)))
+    result = dict(
+        smart_native.run_builtin_deepset_prior_mcts(
+            engine,
+            num_iter=None if num_iter is None else int(num_iter),
+            max_step=None if max_step is None else int(max_step),
+            mode=str(mode),
+            policy=str(policy),
+            cover_penalty=float(cover_penalty),
+            pen_rate=float(pen_rate),
+            exp_weight=float(exp_weight),
+            gamma=float(gamma),
+            seed=int(seed),
+            transposition_table=bool(transposition_table),
+            transposition_table_size=int(transposition_table_size),
+            num_action_scale=int(num_action_scale),
+            **dict(overrides or {}),
+        )
+    )
+    mesh_root.mkdir(parents=True, exist_ok=True)
+    exported = int(engine.export_bbox_dir(str(bbox_dir)))
+    elapsed = time.time() - started
+    stats = dict(engine.stats())
+    stats.update(
+        {
+            "backend": "cpp_native_deepset_mcts_prior",
+            "initial_bbox_score": initial_score,
+            "learned_mcts_prior": True,
+            "learned_mcts_prior_mode": str(mode),
+            "learned_mcts_prior_policy": str(policy),
+            "learned_mcts_prior_overrides": dict(overrides or {}),
+            "transposition_table": bool(transposition_table),
+            "transposition_table_size": int(transposition_table_size),
+            "elapsed_sec": elapsed,
+            "exported_boxes": exported,
+            "result": result,
+        }
+    )
+    (mesh_root / "time.txt").write_text(
+        f"{len(bounds)}\n{exported}\n{elapsed}\n", encoding="utf-8"
+    )
+    (bbox_dir / "native_stats.json").write_text(
+        json.dumps(stats, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (mesh_root / "native_stats.json").write_text(
+        json.dumps(stats, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
     return {
         "status": "success" if bbox_dir.exists() else "failed",

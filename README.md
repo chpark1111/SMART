@@ -77,6 +77,8 @@ Maintainer and research docs:
   and PyPI publishing.
 - [Release Notes 0.1.0](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE_NOTES_0.1.0.md): current release scope and
   verification notes.
+- [Learned Geometry Router](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md): opt-in DeepSets router,
+  exact-call reduction, and quality reinvestment experiments.
 - [Research Plan](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
   memory/table-based search, and promotion rules.
 
@@ -285,6 +287,24 @@ packaged DeepSets candidate router while preserving exact Manifold scoring for
 the checked candidates. This is opt-in; the paper reproduction default is still
 the exact native SMART path. The bundled `auto` profile is conservative; use
 `profile="hard"` for faster research sweeps after validating on your split.
+The current research portfolio helper,
+`smart.cpp.run_builtin_deepset_portfolio_refine(...)`, routes one-box states to
+native exact C++ refine and multibox states to the learned router.
+`smart.cpp.run_builtin_deepset_prior_mcts(...)` exposes the same policy as an
+opt-in native MCTS action prior.  Current research presets include
+`mode="speed"`, `mode="balanced"`, `mode="quality"`, `mode="frontier"`, and
+`mode="guarded"`.  `frontier` is the aggressive top-1 multibox search preset;
+`guarded` is the recommended research default because it automatically falls
+back to exact shallow MCTS on low-confidence multibox states.
+For full pipeline experiments, enable it with `mcts.learned_prior.enabled=true`
+and `mcts.learned_prior.mode=guarded`.
+The same setting is packaged as `configs/learned_frontier.yaml` for quick
+local validation:
+
+```bash
+smart --config configs/learned_frontier.yaml run
+```
+
 The same router can be enabled in the normal pipeline:
 
 ```bash

@@ -1430,6 +1430,60 @@ def test_cpp_native_file_runner_mcts_accepts_static_prior(tmp_path) -> None:
     assert (output / "bbox0.obj").exists()
 
 
+def test_cpp_native_file_runner_mcts_accepts_packaged_deepset_prior(tmp_path) -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    path = tmp_path / "one_tet.msh"
+    sc.native_save_gmsh(str(path), vertices, sc.native_tetra_surface_faces(voxels), voxels)
+    metadata = tmp_path / "bbox_params.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = native_runner.run_deepset_prior_mcts_from_files(
+        msh_path=path,
+        bbox_metadata_path=metadata,
+        output_root=tmp_path / "mcts",
+        exp_name="native_deepset",
+        mesh_id="mesh-a",
+        category="tet",
+        mode="frontier",
+        num_iter=1,
+        max_step=1,
+        cover_penalty=100.0,
+        action_unit=0.1,
+        num_action_scale=2,
+        exp_weight=0.001,
+        gamma=1.0,
+        seed=7,
+        transposition_table=True,
+        transposition_table_size=128,
+        stateful_union_cache=True,
+        cache_capacity=128,
+        volume_method="mesh",
+        overrides={"candidate_count": 16},
+    )
+
+    assert result["status"] == "success"
+    assert result["metadata"]["backend"] == "cpp_native_deepset_mcts_prior"
+    assert result["metadata"]["learned_mcts_prior"] is True
+    assert result["metadata"]["learned_mcts_prior_mode"] == "frontier"
+    assert result["metadata"]["result"]["learned_mcts_prior_used"] is True
+    output = tmp_path / "mcts" / "native_deepset" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
+    assert (output / "bbox0.obj").exists()
+
+
 def test_cpp_native_file_runner_mcts_can_apply_native_recenter_action(tmp_path) -> None:
     vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
     voxels = [[0, 1, 2, 3]]
@@ -2930,6 +2984,12 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     hard_defaults = sc.native_deepset_refine_defaults("hard")
     assert hard_defaults["budget"] == 6
     assert hard_defaults["adaptive_high_budget"] == 72
+    speed_portfolio = sc.native_deepset_portfolio_defaults("speed")
+    assert speed_portfolio["single_box_steps"] == 5
+    assert speed_portfolio["multibox_profile"] == "auto"
+    balanced_portfolio = sc.native_deepset_portfolio_defaults("balanced")
+    assert balanced_portfolio["single_box_steps"] == 6
+    assert balanced_portfolio["multibox_profile"] == "hard"
     builtin_policy_path = sc.builtin_deepset_policy_path()
     assert builtin_policy_path.endswith("deepset_setaware_v2_h128_v1.smartmlp")
     builtin_policy = sc.NativeDeepSetCandidateScorer(builtin_policy_path)
@@ -2949,6 +3009,37 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert "nonfinite_proxy_rescue_checks" in helper_result
     assert "proxy_rescue_checks" in helper_result
     assert helper_result["exact_checks"] >= 0
+    prior_logits = sc.deepset_axis_prior_logits(
+        engine,
+        policy,
+        candidate_count=16,
+        num_action_scale=2,
+    )
+    assert len(prior_logits) == sc.native_action_count(1, 2)
+    assert all(isinstance(value, float) for value in prior_logits)
+    mcts_prior_defaults = sc.native_deepset_mcts_prior_defaults("balanced")
+    assert mcts_prior_defaults["multibox_top_k"] == 6
+    assert mcts_prior_defaults["single_box_top_k"] == 15
+    assert mcts_prior_defaults["multibox_max_step"] == 3
+    assert mcts_prior_defaults["single_box_max_step"] == 2
+    quality_mcts_prior_defaults = sc.native_deepset_mcts_prior_defaults("quality")
+    assert quality_mcts_prior_defaults["recommended_num_iter"] == 50
+    assert quality_mcts_prior_defaults["multibox_top_k"] == 4
+    assert quality_mcts_prior_defaults["multibox_max_step"] == 4
+    assert quality_mcts_prior_defaults["single_box_max_step"] == 4
+    frontier_mcts_prior_defaults = sc.native_deepset_mcts_prior_defaults("frontier")
+    assert frontier_mcts_prior_defaults["recommended_num_iter"] == 25
+    assert frontier_mcts_prior_defaults["multibox_top_k"] == 1
+    assert frontier_mcts_prior_defaults["multibox_max_step"] == 4
+    assert frontier_mcts_prior_defaults["single_box_max_step"] == 4
+    guarded_mcts_prior_defaults = sc.native_deepset_mcts_prior_defaults("guarded")
+    assert guarded_mcts_prior_defaults["recommended_num_iter"] == 25
+    assert guarded_mcts_prior_defaults["multibox_top_k"] == 1
+    assert guarded_mcts_prior_defaults["guard_multibox_score_gt"] == -0.5
+    assert guarded_mcts_prior_defaults["guard_top_k"] == 0
+    assert guarded_mcts_prior_defaults["guard_prior_weight"] == 0.0
+    assert guarded_mcts_prior_defaults["guard_fast_score_gt"] == -0.05
+    assert guarded_mcts_prior_defaults["guard_fast_num_iter"] == 30
 
     auto_engine = sc.NativeSmartEngine(
         vertices,
@@ -3033,6 +3124,163 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert builtin_auto_result["learned_router_used"] is False
     assert builtin_auto_result["exact_checks"] > 0
     assert builtin_auto_result["builtin_policy"] == "default"
+
+    portfolio_single_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    portfolio_single_result = sc.run_builtin_deepset_portfolio_refine(
+        portfolio_single_engine,
+        mode="speed",
+        max_steps=1,
+    )
+    assert portfolio_single_result["router_profile"] == "portfolio_exact_native"
+    assert portfolio_single_result["learned_router_used"] is False
+    assert portfolio_single_result["portfolio_mode"] == "speed"
+
+    portfolio_multi_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        [bounds[0], bounds[0]],
+        [rotations[0], rotations[0]],
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    portfolio_multi_result = sc.run_native_deepset_portfolio_refine(
+        portfolio_multi_engine,
+        policy,
+        mode="balanced",
+        max_steps=1,
+    )
+    assert portfolio_multi_result["learned_router_used"] is True
+    assert portfolio_multi_result["portfolio_multibox_profile"] == "hard"
+    assert portfolio_multi_result["portfolio_mode"] == "balanced"
+
+    mcts_prior_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    mcts_prior_result = sc.run_builtin_deepset_prior_mcts(
+        mcts_prior_engine,
+        num_iter=2,
+        candidate_count=16,
+    )
+    assert mcts_prior_result["learned_mcts_prior_used"] is True
+    assert mcts_prior_result["mcts_prior_top_k"] == 15
+    assert mcts_prior_result["mcts_prior_max_step"] == 2
+    assert mcts_prior_result["mcts_prior_num_iter"] == 2
+    default_iter_result = sc.run_builtin_deepset_prior_mcts(
+        mcts_prior_engine,
+        mode="frontier",
+        candidate_count=16,
+    )
+    assert default_iter_result["mcts_prior_num_iter"] == 25
+    assert default_iter_result["mcts_prior_guarded"] is False
+
+    guarded_mcts_prior_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        [bounds[0], bounds[0]],
+        [rotations[0], rotations[0]],
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    guarded_result = sc.run_builtin_deepset_prior_mcts(
+        guarded_mcts_prior_engine,
+        mode="guarded",
+        candidate_count=16,
+        guard_multibox_score_gt=-999.0,
+    )
+    assert guarded_result["mcts_prior_guarded"] is True
+    assert guarded_result["mcts_prior_guard_fast"] is False
+    assert guarded_result["mcts_prior_top_k"] == 0
+    assert guarded_result["mcts_prior_weight"] == 0.0
+    assert guarded_result["mcts_prior_max_step"] == 2
+    assert guarded_result["mcts_prior_num_iter"] == 35
+
+    guarded_fast_result = sc.run_builtin_deepset_prior_mcts(
+        guarded_mcts_prior_engine,
+        mode="guarded",
+        candidate_count=16,
+        guard_multibox_score_gt=-999.0,
+        guard_fast_score_gt=-999.0,
+    )
+    assert guarded_fast_result["mcts_prior_guarded"] is True
+    assert guarded_fast_result["mcts_prior_guard_fast"] is True
+    assert guarded_fast_result["mcts_prior_num_iter"] == 30
+
+    dynamic_mcts_prior_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    dynamic_mcts_prior_result = sc.run_builtin_deepset_dynamic_prior_mcts(
+        dynamic_mcts_prior_engine,
+        num_iter=2,
+        candidate_count=16,
+    )
+    assert dynamic_mcts_prior_result["learned_mcts_prior_used"] is True
+    assert dynamic_mcts_prior_result["dynamic_mcts_prior_used"] is True
+    assert dynamic_mcts_prior_result["dynamic_deepset_prior"] is True
+    assert dynamic_mcts_prior_result["dynamic_prior_refreshes"] >= 1
+    assert dynamic_mcts_prior_result["mcts_prior_top_k"] == 15
+    assert dynamic_mcts_prior_result["mcts_prior_max_step"] == 2
 
 
 def test_cpp_native_smart_engine_can_apply_recenter_action_in_mcts() -> None:

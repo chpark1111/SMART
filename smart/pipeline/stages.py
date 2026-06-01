@@ -2207,8 +2207,44 @@ def _cpp_native_mcts_exp_name(
         f"_covpen{int(stage_cfg.get('cover_penalty', 100))}"
         f"_acunit{float(stage_cfg.get('action_unit', 0.02)):.5g}_timing"
     )
+    learned_prior_cfg = _mcts_learned_prior_config(stage_cfg)
+    if learned_prior_cfg["enabled"]:
+        name += f"_deepsetmcts_{learned_prior_cfg['mode']}"
     exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
     return f"{name}_{exp_tag}" if exp_tag else name
+
+
+def _mcts_learned_prior_config(stage_cfg: dict[str, Any]) -> dict[str, Any]:
+    raw = stage_cfg.get("learned_prior", False)
+    if isinstance(raw, dict):
+        enabled = bool(raw.get("enabled", False))
+        policy = str(raw.get("policy", stage_cfg.get("learned_prior_policy", "default")))
+        mode = str(raw.get("mode", stage_cfg.get("learned_prior_mode", "guarded")))
+        overrides_raw = raw.get("overrides", stage_cfg.get("learned_prior_overrides", {}))
+        num_iter = raw.get("num_iter", stage_cfg.get("learned_prior_num_iter", None))
+        max_step = raw.get("max_step", stage_cfg.get("learned_prior_max_step", None))
+        transposition_table = raw.get(
+            "transposition_table",
+            stage_cfg.get("learned_prior_transposition_table", True),
+        )
+    else:
+        enabled = bool(raw)
+        policy = str(stage_cfg.get("learned_prior_policy", "default"))
+        mode = str(stage_cfg.get("learned_prior_mode", "guarded"))
+        overrides_raw = stage_cfg.get("learned_prior_overrides", {})
+        num_iter = stage_cfg.get("learned_prior_num_iter", None)
+        max_step = stage_cfg.get("learned_prior_max_step", None)
+        transposition_table = stage_cfg.get("learned_prior_transposition_table", True)
+    overrides = dict(overrides_raw) if isinstance(overrides_raw, dict) else {}
+    return {
+        "enabled": enabled,
+        "policy": policy,
+        "mode": mode,
+        "num_iter": None if num_iter is None else int(num_iter),
+        "max_step": None if max_step is None else int(max_step),
+        "transposition_table": bool(transposition_table),
+        "overrides": overrides,
+    }
 
 
 def _run_cpp_native_refine_file_runner(
@@ -2227,7 +2263,11 @@ def _run_cpp_native_refine_file_runner(
         from smart import native_runner
     except Exception:
         return None
-    if not native_runner.cpp_native_file_runner_available():
+    learned_router_cfg = _refine_learned_router_config(stage_cfg)
+    if bool(learned_router_cfg["enabled"]):
+        if not dry_run and not native_runner.cpp_native_deepset_router_available():
+            return None
+    elif not native_runner.cpp_native_file_runner_available():
         return None
     bbox_init = str(stage_cfg.get("bbox_init", "grd_merged"))
     if bbox_init == "grd_merged":
@@ -2248,7 +2288,6 @@ def _run_cpp_native_refine_file_runner(
         return None
     if not metadata_path.exists():
         return None
-    learned_router_cfg = _refine_learned_router_config(stage_cfg)
     return native_runner.run_refine_from_files(
         msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
         bbox_metadata_path=metadata_path,
@@ -2286,14 +2325,19 @@ def _run_cpp_native_mcts_file_runner(
 ) -> dict[str, Any] | None:
     if not _cpp_native_search_direct_enabled(stage_cfg):
         return None
+    learned_prior_cfg = _mcts_learned_prior_config(stage_cfg)
     uses_static_prior = (
         float(stage_cfg.get("action_prior_weight", 0.0) or 0.0) != 0.0
         or float(stage_cfg.get("puct_prior_weight", 0.0) or 0.0) != 0.0
         or float(stage_cfg.get("action_value_weight", 0.0) or 0.0) != 0.0
     )
-    if uses_static_prior and not stage_cfg.get("action_prior_path"):
+    if uses_static_prior and not stage_cfg.get("action_prior_path") and not learned_prior_cfg["enabled"]:
         return None
-    if int(stage_cfg.get("action_prior_top_k", 0) or 0) > 0 and not uses_static_prior:
+    if (
+        int(stage_cfg.get("action_prior_top_k", 0) or 0) > 0
+        and not uses_static_prior
+        and not learned_prior_cfg["enabled"]
+    ):
         return None
     if str(stage_cfg.get("action_prior_select", "legacy") or "legacy") != "legacy":
         return None
@@ -2301,11 +2345,42 @@ def _run_cpp_native_mcts_file_runner(
         from smart import native_runner
     except Exception:
         return None
-    if not native_runner.cpp_native_file_runner_available():
+    if learned_prior_cfg["enabled"]:
+        if not dry_run and not native_runner.cpp_native_deepset_mcts_prior_available():
+            return None
+    elif not native_runner.cpp_native_file_runner_available():
         return None
     metadata_path = native_runner.find_bbox_params_metadata(bbox_input_root, mesh_id)
     if metadata_path is None or not metadata_path.exists():
         return None
+    if learned_prior_cfg["enabled"]:
+        return native_runner.run_deepset_prior_mcts_from_files(
+            msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
+            bbox_metadata_path=metadata_path,
+            output_root=stage_root(cfg, "mcts", category),
+            exp_name=_cpp_native_mcts_exp_name(cfg, category, stage_cfg),
+            mesh_id=mesh_id,
+            category=category["name"],
+            mode=str(learned_prior_cfg["mode"]),
+            policy=str(learned_prior_cfg["policy"]),
+            num_iter=learned_prior_cfg["num_iter"],
+            max_step=learned_prior_cfg["max_step"],
+            cover_penalty=float(stage_cfg.get("cover_penalty", 100)),
+            action_unit=float(stage_cfg.get("action_unit", 0.02)),
+            num_action_scale=native_runner.effective_native_num_action_scale(
+                stage_cfg.get("num_action_scale", 1)
+            ),
+            exp_weight=float(stage_cfg.get("exp_w", 0.001)),
+            gamma=float(stage_cfg.get("gamma", 1.0)),
+            seed=int(stage_cfg.get("seed", stage_cfg.get("cpp_rng_seed", 7777))),
+            transposition_table=bool(learned_prior_cfg["transposition_table"]),
+            transposition_table_size=int(stage_cfg.get("transposition_table_size", 8192)),
+            stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", True)),
+            cache_capacity=int(stage_cfg.get("stateful_cache_capacity", 65536)),
+            volume_method=str(stage_cfg.get("manifold_volume_method", "mesh")),
+            overrides=dict(learned_prior_cfg["overrides"]),
+            dry_run=dry_run,
+        )
     return native_runner.run_mcts_from_files(
         msh_path=mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh",
         bbox_metadata_path=metadata_path,

@@ -74,6 +74,7 @@ def test_smart_cli_lists_config_profiles(capsys) -> None:
 
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
+    assert "learned_frontier.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -114,7 +115,63 @@ def test_public_api_lists_config_profiles() -> None:
 
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
+    assert "learned_frontier.yaml" in names
     assert all("_experimental" not in name for name in names)
+
+
+def test_public_api_exposes_documented_load_config_alias() -> None:
+    cfg = smart.load_config("configs/learned_frontier.yaml")
+
+    assert cfg["run_name"] == "learned_frontier"
+    assert cfg["mcts"]["learned_prior"]["enabled"] is True
+
+
+def test_public_api_exposes_documented_run_alias(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = smart.load_config(
+        None,
+        overrides={
+            "workspace": str(tmp_path / "runs"),
+            "categories": [
+                {
+                    "name": "airplane",
+                    "mesh_root": str(tmp_path / "data" / "airplane"),
+                    "meshes": ["mesh_a"],
+                    "tetra": {"epsilon": 0.003, "edge_length": 0.2},
+                }
+            ],
+        },
+    )
+
+    records = smart.run(cfg, stage="normalize", dry_run=True)
+
+    assert records
+    assert records[0]["stage"] == "normalize"
+    assert records[0]["status"] == "dry_run"
+
+
+def test_learned_frontier_config_enables_deepset_mcts_prior() -> None:
+    cfg = load_config("configs/learned_frontier.yaml")
+
+    assert cfg["run_name"] == "learned_frontier"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["mcts"]["backend"] == "cpp_native"
+    assert cfg["mcts"]["direct_file_runner"] is True
+    assert cfg["mcts"]["num_action_scale"] == 2
+    assert cfg["mcts"]["learned_prior"] == {
+        "enabled": True,
+        "policy": "default",
+        "mode": "guarded",
+        "num_iter": None,
+        "max_step": None,
+        "transposition_table": True,
+        "overrides": {},
+    }
 
 
 def test_public_api_lists_and_resolves_packaged_assets() -> None:
@@ -797,6 +854,56 @@ def test_cpp_native_refine_learned_router_is_pipeline_opt_in(tmp_path, monkeypat
     assert "_deepset_auto" in record.output_path
 
 
+def test_cpp_native_refine_learned_router_requires_extension(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "cpp_native_deepset_router_available", lambda: False)
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    segment = tetra_dir / "greedy_segment0_coacd_mgeps0.02_fm.txt"
+    segment.write_text("1\n0\n", encoding="utf-8")
+    (Path(str(segment) + ".bbox_params.json")).write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {"init_type": "coacd", "merge_eps": 0.02, "fast_merge": True},
+        "refine": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "direct_file_runner_required": True,
+            "learned_router": {"enabled": True, "profile": "auto"},
+        },
+    }
+
+    record = run_refine_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=False,
+        force=True,
+    )
+
+    assert record.status == "failed"
+    assert "cpp_native refine file runner required but unavailable" in record.error
+
+
 def test_cpp_native_mcts_uses_direct_file_runner_when_metadata_exists(tmp_path, monkeypatch) -> None:
     from smart import native_runner
 
@@ -916,6 +1023,67 @@ def test_cpp_native_mcts_direct_file_runner_accepts_static_prior(tmp_path, monke
     assert "--action_prior_path" in record.command
     assert record.command[record.command.index("--action_prior_weight") + 1] == "0.1"
     assert record.command[record.command.index("--action_prior_top_k") + 1] == "1"
+
+
+def test_cpp_native_mcts_direct_file_runner_accepts_deepset_prior(tmp_path, monkeypatch) -> None:
+    from smart import native_runner
+
+    monkeypatch.setattr(native_runner, "cpp_native_deepset_mcts_prior_available", lambda: True)
+    mesh_root = tmp_path / "table_meshes"
+    tetra_dir = tmp_path / "tetra" / "table_meshes_raw_e0.004_l0.2" / "mesh-a"
+    tetra_dir.mkdir(parents=True)
+    (tetra_dir / "tetra.msh").write_text("$MeshFormat\n", encoding="utf-8")
+    bbox_dir = tmp_path / "refine" / "table" / "exp" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
+    bbox_dir.mkdir(parents=True)
+    (bbox_dir / "bbox_params.json").write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [0, 0, 0, 1, 1, 1],
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "workspace": str(tmp_path),
+        "python": "python3",
+        "normalization": {"enabled": False},
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "merge": {},
+        "mcts": {
+            "backend": "cpp_native",
+            "direct_file_runner": True,
+            "learned_prior": {
+                "enabled": True,
+                "mode": "guarded",
+                "policy": "default",
+                "num_iter": 25,
+                "max_step": 4,
+                "transposition_table": True,
+            },
+        },
+    }
+
+    record = run_mcts_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root)},
+        "mesh-a",
+        dry_run=True,
+        force=True,
+    )
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart._cpp", "run_builtin_deepset_prior_mcts"]
+    assert "--mode" in record.command
+    assert record.command[record.command.index("--mode") + 1] == "guarded"
+    assert record.metadata["learned_mcts_prior"] is True
+    assert record.metadata["learned_mcts_prior_mode"] == "guarded"
+    assert "_deepsetmcts_guarded" in record.output_path
 
 
 def test_cpp_native_mcts_can_run_combined_refine_mcts_file_runner(tmp_path) -> None:

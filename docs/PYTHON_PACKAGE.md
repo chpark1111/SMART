@@ -119,6 +119,77 @@ result = sc.run_builtin_deepset_policy_refine(
 )
 ```
 
+For the current research portfolio, let SMART choose the exact-native or
+learned-router route based on box count:
+
+```python
+result = sc.run_builtin_deepset_portfolio_refine(engine, mode="speed")
+```
+
+`mode="speed"` uses native exact C++ refine for one-box states and learned
+`auto` routing for multibox states.  `mode="balanced"` uses native exact C++
+refine for one-box states and learned `hard` routing for multibox states.
+
+The same packaged policy can be used as a native MCTS action prior:
+
+```python
+mcts = sc.run_builtin_deepset_prior_mcts(
+    engine,
+    mode="guarded",
+    transposition_table=True,
+)
+```
+
+Available MCTS-prior modes are `speed`, `balanced`, `quality`, `frontier`, and
+`guarded`.  They are research presets that prune/order MCTS actions with the
+packaged DeepSets scorer while final state rewards still come from exact native
+SMART/Manifold scoring.  `guarded` is the recommended research mode: it uses the
+aggressive frontier route when the state looks reliable and falls back to exact
+shallow MCTS for low-confidence multibox states.
+
+The same route can be enabled in YAML:
+
+```yaml
+mcts:
+  backend: cpp_native
+  direct_file_runner: true
+  learned_prior:
+    enabled: true
+    policy: default
+    mode: guarded
+    transposition_table: true
+```
+
+The repository also ships `configs/learned_frontier.yaml`, which applies this
+profile to the packaged three-category example layout.
+
+For deeper research there is a state-refreshed node-prior variant:
+
+```python
+mcts = sc.run_builtin_deepset_dynamic_prior_mcts(engine, num_iter=100)
+```
+
+This refreshes DeepSets candidate scores inside the C++ MCTS tree when each
+node is created.  It is currently research-only: on the 114-state local check,
+dynamic top6/top15 was safe but slower than the tuned static-root prior, and
+dynamic top4/top15 introduced quality-loss cases.
+
+This is also opt-in research code.  In local probes, top6 was safe for hard
+airplane multibox states, while one-box states needed top15/top20 to avoid
+quality loss.  On a combined 114-state local check, the tuned box-count top-k
+rule cut MCTS wall time by 70.3% with zero quality-loss cases at fixed MCTS
+budget.  With budget reinvestment, the current strongest validation preset is
+`mode="guarded"`: multibox top1, one-box top15, depth4, 25 iterations, and
+`transposition_table=True`, with an exact fallback for multibox states whose
+initial score is above `-0.5`.  Against exact MCTS 50/depth2 it preserves the
+frontier gain on the 114-state pool and removes the quality-loss cases observed
+on the larger unseen multibox probe.
+The fallback uses exact depth2/35 iterations, with a faster 30-iteration tier
+for very near-zero risky states.
+Passing `transposition_table=True` gave a small additional runtime gain in the
+same local check without changing quality, but the main acceleration came from
+DeepSets top-k pruning.
+
 The same router is also wired into the normal pipeline as an opt-in refine
 setting:
 
@@ -169,14 +240,25 @@ Current local validation snapshot for the bundled `default` policy
 
 Treat these numbers as a research baseline, not a paper metric.  Re-run the
 benchmark on your category split before promoting a learned-router profile.
+See [`docs/LEARNED_ROUTER.md`](LEARNED_ROUTER.md) for the current research
+summary and quality reinvestment results.
 
 The same saved exact-call budget can be reinvested into more refinement turns.
-In a local 4-turn exact baseline vs 6-turn learned-router probe, the router
-improved final score with no quality-loss cases: hard airplane states improved
-by +0.4010 mean score while using 58.2% fewer exact checks and 18.4% less wall
-time; the mixed case41 split improved by +0.3464 mean score while using 25.1%
-fewer exact checks at essentially equal wall time.  This is still research
+In local 4-turn exact baseline probes, hard airplane states improved by +0.4010
+mean score with 58.2% fewer exact checks and 18.4% less wall time using hard
+router 6-turn.  The mixed case41 split improved by +0.3449 mean score with
+55.2% fewer exact checks and 9.6% less wall time using hard router 6-turn.  A
+more conservative auto router 5-turn mixed run improved by +0.1817 mean score
+with 40.6% fewer exact checks and 20.8% less wall time.  This is still research
 evidence, so it remains opt-in.
+
+Latest portfolio validation separates learned and exact-native routes.  On 28
+hard airplane multibox states, `mode="speed"` selected learned `auto` 5-turn
+and improved mean score by +0.8821 with 25.3% fewer exact checks and 3.3%
+lower wall time.  `mode="balanced"` selected learned `hard` 6-turn and improved
+mean score by +1.0744 with 45.1% fewer exact checks, but was 4.1% slower.  On
+86 one-box live states the portfolio uses native exact C++ refine, not the
+learned router, because learned-only routing was slower there.
 
 ## Config Profiles
 

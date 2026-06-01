@@ -1199,6 +1199,450 @@ def native_deepset_route_diagnostics(
     }
 
 
+def deepset_axis_prior_logits(
+    engine: Any,
+    checkpoint_or_policy: Any,
+    *,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    candidate_count: int = 128,
+    turn: int = 0,
+    hist_bins: int = 3,
+    num_action_scale: int = 2,
+    floor_margin: float = 1.0,
+) -> list[float]:
+    """Create full action prior logits for native MCTS from DeepSets ranking.
+
+    The DeepSets model scores axis-edit candidates for the current state.  This
+    helper expands those sparse candidate scores into the full SMART action
+    vector expected by ``NativeSmartEngine.run_mcts``.  Unranked actions receive
+    a conservative floor below the worst ranked action, so they are still
+    available unless MCTS is explicitly run with ``action_prior_top_k``.
+    """
+
+    try:
+        stats = dict(engine.stats())
+        num_boxes = int(stats.get("num_boxes", 0) or 0)
+    except Exception:
+        num_boxes = 0
+    num_actions = native_action_count(num_boxes, int(num_action_scale))
+    if num_actions <= 0:
+        return []
+    if NativeDeepSetCandidateScorer is None:
+        raise RuntimeError("smart._cpp NativeDeepSetCandidateScorer is unavailable")
+    policy = (
+        checkpoint_or_policy
+        if hasattr(checkpoint_or_policy, "score_setaware_axis_candidates")
+        else NativeDeepSetCandidateScorer(str(checkpoint_or_policy))
+    )
+    rows = list(
+        engine.rank_deepset_policy_axis_metrics(
+            policy,
+            float(cover_penalty),
+            float(pen_rate),
+            int(candidate_count),
+            int(turn),
+            int(hist_bins),
+        )
+    )
+    if not rows:
+        return [0.0] * num_actions
+    scores = [float(row[4]) for row in rows]
+    span = max(scores) - min(scores)
+    floor = min(scores) - max(float(floor_margin), span)
+    logits = [float(floor)] * num_actions
+    for row in rows:
+        action = int(row[0])
+        if 0 <= action < num_actions:
+            logits[action] = float(row[4])
+    return logits
+
+
+def builtin_deepset_axis_prior_logits(
+    engine: Any,
+    *,
+    policy: str = "default",
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    candidate_count: int = 128,
+    turn: int = 0,
+    hist_bins: int = 3,
+    num_action_scale: int = 2,
+    floor_margin: float = 1.0,
+) -> list[float]:
+    """Create native MCTS prior logits from the packaged DeepSets policy."""
+
+    return deepset_axis_prior_logits(
+        engine,
+        load_builtin_deepset_policy(policy),
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        candidate_count=candidate_count,
+        turn=turn,
+        hist_bins=hist_bins,
+        num_action_scale=num_action_scale,
+        floor_margin=floor_margin,
+    )
+
+
+_DEEPSET_MCTS_PRIOR_PRESETS: dict[str, dict[str, Any]] = {
+    "balanced": {
+        "recommended_num_iter": 100,
+        "candidate_count": 128,
+        "hist_bins": 3,
+        "prior_weight": 0.05,
+        "multibox_top_k": 6,
+        "single_box_top_k": 15,
+        "multibox_max_step": 3,
+        "single_box_max_step": 2,
+        "floor_margin": 1.0,
+    },
+    "speed": {
+        "recommended_num_iter": 50,
+        "candidate_count": 128,
+        "hist_bins": 3,
+        "prior_weight": 0.05,
+        "multibox_top_k": 6,
+        "single_box_top_k": 15,
+        "multibox_max_step": 2,
+        "single_box_max_step": 2,
+        "floor_margin": 1.0,
+    },
+    "quality": {
+        "recommended_num_iter": 50,
+        "candidate_count": 128,
+        "hist_bins": 3,
+        "prior_weight": 0.05,
+        "multibox_top_k": 4,
+        "single_box_top_k": 15,
+        "multibox_max_step": 4,
+        "single_box_max_step": 4,
+        "floor_margin": 1.0,
+    },
+    "frontier": {
+        "recommended_num_iter": 25,
+        "candidate_count": 128,
+        "hist_bins": 3,
+        "prior_weight": 0.05,
+        "multibox_top_k": 1,
+        "single_box_top_k": 15,
+        "multibox_max_step": 4,
+        "single_box_max_step": 4,
+        "floor_margin": 1.0,
+    },
+    "guarded": {
+        "recommended_num_iter": 25,
+        "candidate_count": 128,
+        "hist_bins": 3,
+        "prior_weight": 0.05,
+        "multibox_top_k": 1,
+        "single_box_top_k": 15,
+        "multibox_max_step": 4,
+        "single_box_max_step": 4,
+        "floor_margin": 1.0,
+        "guard_multibox_score_gt": -0.5,
+        "guard_num_iter": 35,
+        "guard_max_step": 2,
+        "guard_top_k": 0,
+        "guard_prior_weight": 0.0,
+        "guard_fast_score_gt": -0.05,
+        "guard_fast_num_iter": 30,
+    },
+}
+
+
+def native_deepset_mcts_prior_defaults(mode: str = "balanced") -> dict[str, Any]:
+    """Return current experimental DeepSets MCTS-prior defaults."""
+
+    key = str(mode or "balanced").lower()
+    if key not in _DEEPSET_MCTS_PRIOR_PRESETS:
+        valid = ", ".join(sorted(_DEEPSET_MCTS_PRIOR_PRESETS))
+        raise ValueError(f"unknown DeepSets MCTS prior mode {mode!r}; expected one of: {valid}")
+    return dict(_DEEPSET_MCTS_PRIOR_PRESETS[key])
+
+
+def run_builtin_deepset_prior_mcts(
+    engine: Any,
+    *,
+    num_iter: int | None = None,
+    max_step: int | None = None,
+    mode: str = "balanced",
+    policy: str = "default",
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    exp_weight: float = 0.001,
+    gamma: float = 1.0,
+    seed: int = 7777,
+    transposition_table: bool = False,
+    transposition_table_size: int = 8192,
+    num_action_scale: int = 2,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run native MCTS with packaged DeepSets action-prior logits.
+
+    This is an opt-in research helper.  MCTS reward evaluation remains exact;
+    the DeepSets policy only biases/prunes action expansion.
+    """
+
+    settings = native_deepset_mcts_prior_defaults(mode)
+    settings.update(overrides)
+    try:
+        stats = dict(engine.stats())
+        num_boxes = int(stats.get("num_boxes", 0) or 0)
+        has_score = "last_bbox_score" in stats or "best_bbox_score" in stats
+        current_score = float(stats.get("last_bbox_score", stats.get("best_bbox_score", 0.0)) or 0.0)
+        if not has_score and hasattr(engine, "recompute_score"):
+            current_score = float(engine.recompute_score(float(cover_penalty), float(pen_rate)))
+            stats = dict(engine.stats())
+            num_boxes = int(stats.get("num_boxes", num_boxes) or num_boxes)
+    except Exception:
+        num_boxes = 0
+        current_score = 0.0
+    scheduled_num_iter = int(settings.get("recommended_num_iter", 50) if num_iter is None else num_iter)
+    guard_threshold = settings.get("guard_multibox_score_gt")
+    guard_triggered = (
+        num_boxes > 1
+        and guard_threshold is not None
+        and current_score > float(guard_threshold)
+    )
+    top_k = (
+        int(settings["single_box_top_k"])
+        if num_boxes <= 1
+        else int(settings["multibox_top_k"])
+    )
+    scheduled_max_step = (
+        int(settings["single_box_max_step"])
+        if num_boxes <= 1
+        else int(settings["multibox_max_step"])
+    )
+    if max_step is not None:
+        scheduled_max_step = int(max_step)
+    prior_weight = float(settings["prior_weight"])
+    guard_fast_triggered = False
+    if guard_triggered and num_iter is None:
+        scheduled_num_iter = int(settings.get("guard_num_iter", scheduled_num_iter))
+        fast_guard_score = settings.get("guard_fast_score_gt")
+        if fast_guard_score is not None and current_score > float(fast_guard_score):
+            scheduled_num_iter = int(settings.get("guard_fast_num_iter", scheduled_num_iter))
+            guard_fast_triggered = True
+    if guard_triggered and max_step is None:
+        scheduled_max_step = int(settings.get("guard_max_step", scheduled_max_step))
+    if guard_triggered:
+        top_k = int(settings.get("guard_top_k", top_k))
+        prior_weight = float(settings.get("guard_prior_weight", prior_weight))
+    logits = [] if prior_weight == 0.0 and top_k == 0 else builtin_deepset_axis_prior_logits(
+        engine,
+        policy=policy,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        candidate_count=int(settings["candidate_count"]),
+        turn=0,
+        hist_bins=int(settings["hist_bins"]),
+        num_action_scale=int(num_action_scale),
+        floor_margin=float(settings["floor_margin"]),
+    )
+    out = dict(
+        engine.run_mcts(
+            int(scheduled_num_iter),
+            int(scheduled_max_step),
+            float(cover_penalty),
+            float(pen_rate),
+            float(exp_weight),
+            float(gamma),
+            int(seed),
+            logits,
+            [],
+            float(prior_weight),
+            0.0,
+            bool(transposition_table),
+            int(transposition_table_size),
+            int(top_k),
+        )
+    )
+    out["learned_mcts_prior_used"] = True
+    out["mcts_prior_mode"] = str(mode or "balanced")
+    out["mcts_prior_top_k"] = int(top_k)
+    out["mcts_prior_max_step"] = int(scheduled_max_step)
+    out["mcts_prior_weight"] = float(prior_weight)
+    out["mcts_prior_num_iter"] = int(scheduled_num_iter)
+    out["mcts_prior_guarded"] = bool(guard_triggered)
+    out["mcts_prior_guard_fast"] = bool(guard_fast_triggered)
+    out["mcts_prior_initial_score"] = float(current_score)
+    out["num_boxes"] = int(num_boxes)
+    return out
+
+
+def run_builtin_deepset_dynamic_prior_mcts(
+    engine: Any,
+    *,
+    num_iter: int | None = None,
+    max_step: int | None = None,
+    mode: str = "balanced",
+    policy: str = "default",
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    exp_weight: float = 0.001,
+    gamma: float = 1.0,
+    seed: int = 7777,
+    transposition_table: bool = False,
+    transposition_table_size: int = 8192,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run native MCTS with state-refreshed DeepSets priors.
+
+    Unlike :func:`run_builtin_deepset_prior_mcts`, which computes one prior at
+    the root state, this opt-in research helper asks the C++ engine to refresh
+    DeepSets candidate scores when each MCTS node is created.  Exact SMART
+    reward evaluation remains unchanged; the learned model only prunes/orders
+    action expansion.
+    """
+
+    if not hasattr(engine, "run_deepset_prior_mcts"):
+        raise RuntimeError("smart._cpp was built without dynamic DeepSets MCTS support")
+    settings = native_deepset_mcts_prior_defaults(mode)
+    settings.update(overrides)
+    try:
+        stats = dict(engine.stats())
+        num_boxes = int(stats.get("num_boxes", 0) or 0)
+    except Exception:
+        num_boxes = 0
+    scheduled_num_iter = int(settings.get("recommended_num_iter", 50) if num_iter is None else num_iter)
+    top_k = (
+        int(settings["single_box_top_k"])
+        if num_boxes <= 1
+        else int(settings["multibox_top_k"])
+    )
+    scheduled_max_step = (
+        int(settings["single_box_max_step"])
+        if num_boxes <= 1
+        else int(settings["multibox_max_step"])
+    )
+    if max_step is not None:
+        scheduled_max_step = int(max_step)
+    out = dict(
+        engine.run_deepset_prior_mcts(
+            load_builtin_deepset_policy(policy),
+            int(scheduled_num_iter),
+            int(scheduled_max_step),
+            float(cover_penalty),
+            float(pen_rate),
+            float(exp_weight),
+            float(gamma),
+            int(seed),
+            float(settings["prior_weight"]),
+            int(settings["candidate_count"]),
+            int(settings["hist_bins"]),
+            int(top_k),
+            float(settings["floor_margin"]),
+            bool(transposition_table),
+            int(transposition_table_size),
+        )
+    )
+    out["learned_mcts_prior_used"] = True
+    out["dynamic_mcts_prior_used"] = True
+    out["mcts_prior_mode"] = str(mode or "balanced")
+    out["mcts_prior_top_k"] = int(top_k)
+    out["mcts_prior_max_step"] = int(scheduled_max_step)
+    out["mcts_prior_weight"] = float(settings["prior_weight"])
+    out["mcts_prior_num_iter"] = int(scheduled_num_iter)
+    out["num_boxes"] = int(num_boxes)
+    return out
+
+
+_DEEPSET_PORTFOLIO_PRESETS: dict[str, dict[str, Any]] = {
+    "speed": {
+        "single_box_steps": 5,
+        "multibox_steps": 5,
+        "multibox_profile": "auto",
+    },
+    "balanced": {
+        "single_box_steps": 6,
+        "multibox_steps": 6,
+        "multibox_profile": "hard",
+    },
+    "quality": {
+        "single_box_steps": 6,
+        "multibox_steps": 6,
+        "multibox_profile": "hard",
+    },
+}
+
+
+def native_deepset_portfolio_defaults(mode: str = "balanced") -> dict[str, Any]:
+    """Return the current research portfolio settings.
+
+    The portfolio is deliberately simple: exact native refine is used for
+    one-box states, where learned routing has not helped, while multibox states
+    use the packaged DeepSets router.  This helper is opt-in research code, not
+    the default SMART release path.
+    """
+
+    key = str(mode or "balanced").lower()
+    if key not in _DEEPSET_PORTFOLIO_PRESETS:
+        valid = ", ".join(sorted(_DEEPSET_PORTFOLIO_PRESETS))
+        raise ValueError(f"unknown DeepSets portfolio mode {mode!r}; expected one of: {valid}")
+    return dict(_DEEPSET_PORTFOLIO_PRESETS[key])
+
+
+def run_native_deepset_portfolio_refine(
+    engine: Any,
+    checkpoint_or_policy: Any,
+    *,
+    mode: str = "balanced",
+    max_steps: int | None = None,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run the current best-known opt-in refine portfolio.
+
+    ``mode="speed"`` prefers lower wall time on multibox states.  ``balanced``
+    and ``quality`` spend more router turns for a higher score.  The accepted
+    action is always exact-scored by SMART/Manifold; the portfolio only chooses
+    whether to use native exact refine or the learned candidate router.
+    """
+
+    settings = native_deepset_portfolio_defaults(mode)
+    settings.update(overrides.pop("portfolio", {}) or {})
+    try:
+        stats = dict(engine.stats())
+        num_boxes = int(stats.get("num_boxes", 0) or 0)
+    except Exception:
+        num_boxes = 0
+
+    if num_boxes <= 1:
+        steps = int(max_steps or settings["single_box_steps"])
+        out = dict(engine.run_refine(steps, float(cover_penalty), float(pen_rate)))
+        if "total_reward" not in out:
+            out["total_reward"] = float(sum(float(value) for value in out.get("rewards", [])))
+        out.setdefault("exact_checks", 0)
+        out.setdefault("exact_errors", 0)
+        out.setdefault("adaptive_high_budget_uses", 0)
+        out.setdefault("small_pool_exact_uses", 0)
+        out.setdefault("nonfinite_proxy_rescue_checks", 0)
+        out["router_profile"] = "portfolio_exact_native"
+        out["portfolio_mode"] = str(mode or "balanced")
+        out["learned_router_used"] = False
+        out["num_boxes"] = num_boxes
+        return out
+
+    profile = str(settings["multibox_profile"])
+    steps = int(max_steps or settings["multibox_steps"])
+    out = run_native_deepset_policy_refine(
+        engine,
+        checkpoint_or_policy,
+        max_steps=steps,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        profile=profile,
+        **overrides,
+    )
+    out["portfolio_mode"] = str(mode or "balanced")
+    out["portfolio_multibox_profile"] = profile
+    out["num_boxes"] = num_boxes
+    return out
+
+
 def run_builtin_deepset_policy_refine(
     engine: Any,
     *,
@@ -1225,6 +1669,31 @@ def run_builtin_deepset_policy_refine(
         cover_penalty=cover_penalty,
         pen_rate=pen_rate,
         profile=profile,
+        **overrides,
+    )
+    out.setdefault("builtin_policy", str(policy or "default"))
+    return out
+
+
+def run_builtin_deepset_portfolio_refine(
+    engine: Any,
+    *,
+    mode: str = "balanced",
+    max_steps: int | None = None,
+    policy: str = "default",
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run the packaged DeepSets portfolio with the built-in checkpoint."""
+
+    out = run_native_deepset_portfolio_refine(
+        engine,
+        load_builtin_deepset_policy(policy),
+        mode=mode,
+        max_steps=max_steps,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
         **overrides,
     )
     out.setdefault("builtin_policy", str(policy or "default"))

@@ -17,10 +17,19 @@ Then run the example profile:
 bash examples/run_example_3x3.sh
 ```
 
+To run the opt-in guarded learned MCTS profile on the same sample layout:
+
+```bash
+bash examples/run_learned_frontier.sh
+```
+
+This uses exact native SMART scoring, but prunes/orders MCTS actions with the
+packaged DeepSets policy in `smart._cpp`.  The profile uses the guarded preset,
+which falls back to exact shallow MCTS for low-confidence multibox states.
+
 Generated example meshes and outputs are local only:
 
 ```text
 examples/sample_shapes/
 examples/runs/
 ```
-
