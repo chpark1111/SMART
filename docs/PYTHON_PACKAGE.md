@@ -102,6 +102,53 @@ record = smart.run_native_pipeline(
 print(record)
 ```
 
+Opt-in learned candidate routing is available for research runs that want to
+reduce exact action checks inside native refine. The bundled DeepSets router
+orders candidate actions, but SMART still exact-scores the checked candidates
+with the native Manifold reward before applying an action:
+
+```python
+import smart.cpp as sc
+
+engine = sc.NativeSmartEngine(...)
+print(sc.native_deepset_route_diagnostics(engine, profile="auto"))
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=200,
+    profile="auto",
+)
+```
+
+The release default remains exact native SMART. Use the learned router only
+when you are benchmarking the acceleration/quality tradeoff.
+The bundled `auto` profile sends small one-box states to exact native refine and
+uses the learned router on larger multibox states with a conservative adaptive
+exact-check budget. It also exact-scores small candidate pools to avoid known
+low-pool routing misses inside the C++ router path. For more aggressive
+research runs, use `profile="hard"` or override `small_pool_exact_threshold`
+after validating on your split.
+
+Built-in learned-router profiles:
+
+| profile | intent |
+| --- | --- |
+| `auto` | safest opt-in profile; exact route for one-box states and small candidate pools |
+| `mixed` | balanced research profile for mixed-category multibox validation |
+| `hard` | faster hard-case research profile; fewer small-pool exact fallbacks |
+| `fast` | most aggressive probe profile; use only when measuring quality drift |
+
+Current local validation snapshot for the bundled `default` policy
+(`max_turns=4`):
+
+| split | profile | quality | exact-call change | wall-time change |
+| --- | --- | --- | --- | --- |
+| unseen probe50, 120 states | `auto` | zero regret, no oracle-loss cases | 67.1% fewer exact checks | 1.38x vs oracle pool |
+| mixed case41, 39 states | `auto` | zero regret, no oracle-loss cases | 55.5% fewer exact checks | 1.59x vs oracle pool |
+| hard airplane multibox, 28 states | `hard` | zero regret, no oracle-loss cases | 79.9% fewer exact checks | 2.02x vs oracle pool |
+
+Treat these numbers as a research baseline, not a paper metric.  Re-run the
+benchmark on your category split before promoting a learned-router profile.
+
 ## Config Profiles
 
 Packaged public profiles:

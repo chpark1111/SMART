@@ -2683,6 +2683,7 @@ def test_cpp_native_smart_engine_runs_without_python_env_callbacks(tmp_path) -> 
     assert mcts["iterations_run"] == 4
     assert mcts["node_count"] >= 2
     assert mcts_engine.stats()["native_mcts_axis_only"] == 1.0
+
     assert mcts_engine.stats()["native_mcts_tree"] == 1.0
 
     tt_engine = sc.NativeSmartEngine(
@@ -2747,6 +2748,228 @@ def test_cpp_native_smart_engine_runs_without_python_env_callbacks(tmp_path) -> 
     assert combined["stats"]["native_refine_then_mcts_runs"] == 1.0
     assert combined["stats"]["native_refine_then_mcts_single_state_bridge"] == 1.0
     assert combined["stats"]["native_mcts_transposition_table"] == 1.0
+
+
+def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> None:
+    assert sc.NativeSmartEngine is not None
+    assert sc.NativeDeepSetCandidateScorer is not None
+
+    bundle = tmp_path / "dummy_deepset.smartmlp"
+
+    def vector(name: str, values: list[float]) -> str:
+        return f"vector {name} {len(values)}\n" + " ".join(str(v) for v in values) + "\n"
+
+    def matrix(name: str, rows: int, cols: int, values: list[float]) -> str:
+        assert len(values) == rows * cols
+        return (
+            f"matrix {name} {rows} {cols}\n"
+            + " ".join(str(v) for v in values)
+            + "\n"
+        )
+
+    dim = 58
+    hidden = 2
+    bundle.write_text(
+        "SMART_DEEPSET_V1\n"
+        f"dim {dim}\n"
+        f"hidden {hidden}\n"
+        "phi_depth 1\n"
+        "rho_depth 1\n"
+        "feature_schema setaware_v2\n"
+        + vector("mean", [0.0] * dim)
+        + vector("std", [1.0] * dim)
+        + matrix("phi_w0", hidden, dim, [0.0] * (hidden * dim))
+        + vector("phi_b0", [0.0] * hidden)
+        + vector("phi_ln_w0", [1.0] * hidden)
+        + vector("phi_ln_b0", [0.0] * hidden)
+        + matrix("rho_w0", hidden, hidden * 3, [0.0] * (hidden * hidden * 3))
+        + vector("rho_b0", [0.0] * hidden)
+        + vector("rho_ln_w0", [1.0] * hidden)
+        + vector("rho_ln_b0", [0.0] * hidden)
+        + matrix("out_w", 1, hidden, [0.0] * hidden)
+        + vector("out_b", [0.0]),
+        encoding="utf-8",
+    )
+
+    vertices = [[x, y, z] for x in [0.0, 1.0] for y in [0.0, 1.0] for z in [0.0, 1.0]]
+    faces = [
+        [1, 3, 0],
+        [1, 5, 7],
+        [4, 6, 7],
+        [0, 2, 6],
+        [2, 3, 7],
+        [0, 5, 1],
+        [3, 2, 0],
+        [1, 7, 3],
+        [4, 7, 5],
+        [0, 6, 4],
+        [2, 7, 6],
+        [0, 4, 5],
+    ]
+    rotations = [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]]
+    bounds = [[-0.1, 0.0, 0.0, 1.0, 1.0, 1.0]]
+    policy = sc.NativeDeepSetCandidateScorer(str(bundle))
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+
+    result = engine.run_deepset_policy_refine(
+        policy,
+        1,
+        100.0,
+        1.0,
+        64,
+        2,
+        8,
+        20,
+        0.0,
+        "action_id",
+        3,
+        32,
+        1.0,
+        8,
+        0,
+        4,
+        2,
+    )
+
+    assert "actions" in result
+    assert "adaptive_high_budget_uses" in result
+    assert "small_pool_exact_uses" in result
+    assert "nonfinite_proxy_rescue_checks" in result
+    assert "proxy_rescue_checks" in result
+    assert result["exact_checks"] >= 0
+
+    mixed_defaults = sc.native_deepset_refine_defaults("mixed")
+    assert mixed_defaults["budget"] == 6
+    assert mixed_defaults["small_pool_exact_threshold"] == 32
+    assert mixed_defaults["adaptive_high_budget"] == 72
+    assert mixed_defaults["proxy_rescue_budget"] == 0
+    assert sc.native_deepset_refine_defaults("balanced") == mixed_defaults
+    auto_defaults = sc.native_deepset_refine_defaults("auto")
+    assert auto_defaults["budget"] == 6
+    assert auto_defaults["auto_exact_max_boxes"] == 1
+    assert auto_defaults["small_pool_exact_threshold"] == 64
+    hard_defaults = sc.native_deepset_refine_defaults("hard")
+    assert hard_defaults["budget"] == 6
+    assert hard_defaults["adaptive_high_budget"] == 72
+    builtin_policy_path = sc.builtin_deepset_policy_path()
+    assert builtin_policy_path.endswith("deepset_setaware_v2_h128_v1.smartmlp")
+    builtin_policy = sc.NativeDeepSetCandidateScorer(builtin_policy_path)
+    assert builtin_policy.feature_schema() == "setaware_v2"
+    assert builtin_policy.dim() == 58
+    uncached_builtin_policy = sc.load_builtin_deepset_policy(cache=False)
+    assert uncached_builtin_policy.feature_schema() == "setaware_v2"
+    assert sc.load_builtin_deepset_policy() is sc.load_builtin_deepset_policy()
+    helper_result = sc.run_native_deepset_policy_refine(
+        engine,
+        policy,
+        max_steps=1,
+        profile="fast",
+        candidate_count=64,
+        proxy_rescue_budget=2,
+    )
+    assert "nonfinite_proxy_rescue_checks" in helper_result
+    assert "proxy_rescue_checks" in helper_result
+    assert helper_result["exact_checks"] >= 0
+
+    auto_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    auto_result = sc.run_native_deepset_policy_refine(
+        auto_engine,
+        policy,
+        max_steps=1,
+        profile="auto",
+    )
+    assert auto_result["router_profile"] == "auto_exact"
+    assert auto_result["learned_router_used"] is False
+    assert auto_result["exact_checks"] > 0
+    route_info = sc.native_deepset_route_diagnostics(auto_engine, profile="auto")
+    assert route_info["route"] == "exact_native"
+    assert route_info["reason"] == "auto_exact_max_boxes"
+
+    small_pool_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        [bounds[0], bounds[0]],
+        [rotations[0], rotations[0]],
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    small_pool_route = sc.native_deepset_route_diagnostics(
+        small_pool_engine,
+        profile="auto",
+        small_pool_exact_threshold=10_000,
+    )
+    assert small_pool_route["route"] == "deepset_router"
+    assert small_pool_route["reason"] == "small_candidate_pool_exact_scoring"
+    assert small_pool_route["learned_router_used"] is True
+    assert small_pool_route["small_pool_exact_scoring"] is True
+
+    builtin_auto_engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        [[0, 1, 2, 4]],
+        [1.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "cube",
+        2,
+        0.1,
+        1.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    builtin_auto_result = sc.run_builtin_deepset_policy_refine(
+        builtin_auto_engine,
+        max_steps=1,
+        profile="auto",
+    )
+    assert builtin_auto_result["router_profile"] == "auto_exact"
+    assert builtin_auto_result["learned_router_used"] is False
+    assert builtin_auto_result["exact_checks"] > 0
+    assert builtin_auto_result["builtin_policy"] == "default"
 
 
 def test_cpp_native_smart_engine_can_apply_recenter_action_in_mcts() -> None:

@@ -56,7 +56,8 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
     void* handle, std::size_t num_action_scale, double action_unit,
     double cover_penalty, double pen_rate, std::size_t max_steps,
     const double* action_scales, std::intptr_t* out_actions,
-    double* out_rewards, std::size_t* out_steps, double* out_last_score);
+    double* out_rewards, std::size_t* out_steps, double* out_last_score,
+    std::size_t* out_exact_checks);
 extern "C" int smart_manifold_state_greedy_axis_rollout_segment(
     void* handle, const std::uint8_t* bbox_mask,
     std::size_t num_action_scale, double action_unit, double cover_penalty,

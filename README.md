@@ -279,6 +279,15 @@ print(records[-1])
 
 Package/API details are in [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md).
 
+Research acceleration hooks are also exposed from `smart.cpp`. For example,
+`smart.cpp.run_builtin_deepset_policy_refine(...)` runs native refine with a
+packaged DeepSets candidate router while preserving exact Manifold scoring for
+the checked candidates. This is opt-in; the paper reproduction default is still
+the exact native SMART path. The bundled `auto` profile is conservative; use
+`profile="hard"` for faster research sweeps after validating on your split.
+See [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md)
+for profile details.
+
 ## Repository Layout
 
 ```text

@@ -349,6 +349,7 @@ setup(
             "configs/*.yaml",
             "assets/priors/*.json",
             "assets/gates/*.json",
+            "assets/policies/*.smartmlp",
             "legacy/renderer/*.blend",
             "legacy/renderer/*.txt",
             "bin/smart-cpp-native",

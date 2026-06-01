@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable
 
 
 if os.environ.get("SMART_DISABLE_CPP", "").lower() in {"1", "true", "yes", "on"}:
@@ -32,12 +33,59 @@ def _require_backend():
     return _backend
 
 
+_BUILTIN_DEEPSET_POLICIES = {
+    "deepset_setaware_v2_h128_v1": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+    "h128_v1": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+    "default": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+}
+_BUILTIN_DEEPSET_POLICY_CACHE: dict[str, Any] = {}
+
+
+def builtin_deepset_policy_path(name: str = "default") -> str:
+    """Return a packaged opt-in DeepSets router checkpoint.
+
+    The bundled policy is research/acceleration metadata only.  It orders
+    candidate actions; exact SMART/Manifold scoring still chooses among the
+    checked candidates.
+    """
+
+    key = str(name or "default")
+    if key not in _BUILTIN_DEEPSET_POLICIES:
+        valid = ", ".join(sorted(_BUILTIN_DEEPSET_POLICIES))
+        raise ValueError(f"unknown built-in DeepSets policy {name!r}; expected one of: {valid}")
+    path = Path(__file__).resolve().parent / _BUILTIN_DEEPSET_POLICIES[key]
+    if not path.exists():
+        raise FileNotFoundError(f"built-in DeepSets policy is missing from the package: {path}")
+    return str(path)
+
+
+def load_builtin_deepset_policy(name: str = "default", *, cache: bool = True) -> Any:
+    """Load a packaged DeepSets candidate router for C++ native refine.
+
+    The returned scorer is a C++ inference object.  It is safe to reuse across
+    multiple ``NativeSmartEngine`` instances because engine state is passed into
+    each scoring call.
+    """
+
+    if NativeDeepSetCandidateScorer is None:
+        raise RuntimeError("smart._cpp NativeDeepSetCandidateScorer is unavailable")
+    path = builtin_deepset_policy_path(name)
+    if cache and path in _BUILTIN_DEEPSET_POLICY_CACHE:
+        return _BUILTIN_DEEPSET_POLICY_CACHE[path]
+    policy = NativeDeepSetCandidateScorer(path)
+    if cache:
+        _BUILTIN_DEEPSET_POLICY_CACHE[path] = policy
+    return policy
+
+
 ManifoldState = _backend.ManifoldState if _backend is not None and hasattr(_backend, "ManifoldState") else None  # type: ignore
 BBoxState = _backend.BBoxState if _backend is not None and hasattr(_backend, "BBoxState") else None  # type: ignore
 ManifoldBridgeMesh = _backend.ManifoldBridgeMesh if _backend is not None and hasattr(_backend, "ManifoldBridgeMesh") else None  # type: ignore
 CandidateBitsetState = _backend.CandidateBitsetState if _backend is not None and hasattr(_backend, "CandidateBitsetState") else None  # type: ignore
 TetClippingState = _backend.TetClippingState if _backend is not None and hasattr(_backend, "TetClippingState") else None  # type: ignore
 ActionMlpPolicy = _backend.ActionMlpPolicy if _backend is not None and hasattr(_backend, "ActionMlpPolicy") else None  # type: ignore
+NativeFastGeometryMlpPolicy = _backend.NativeFastGeometryMlpPolicy if _backend is not None and hasattr(_backend, "NativeFastGeometryMlpPolicy") else None  # type: ignore
+NativeDeepSetCandidateScorer = _backend.NativeDeepSetCandidateScorer if _backend is not None and hasattr(_backend, "NativeDeepSetCandidateScorer") else None  # type: ignore
 NativeSmartEngine = _backend.NativeSmartEngine if _backend is not None and hasattr(_backend, "NativeSmartEngine") else None  # type: ignore
 
 
@@ -740,6 +788,111 @@ def native_centroid_proxy_axis_rewards(
     ]
 
 
+def native_centroid_proxy_axis_metrics(
+    centroids: Iterable[Iterable[float]],
+    volumes: Iterable[float],
+    bounds: Iterable[Iterable[float]],
+    rotations: Iterable[Iterable[float]],
+    num_action_scale: int,
+    action_unit: float,
+    volume_sum: float,
+    last_bbox_score: float,
+    cover_penalty: float,
+    pen_rate: float,
+) -> list[tuple[int, float, float, float]]:
+    return [
+        (int(action), float(reward), float(coverage), float(bvs))
+        for action, reward, coverage, bvs in _require_backend().native_centroid_proxy_axis_metrics(
+            [[float(v) for v in row] for row in centroids],
+            [float(value) for value in volumes],
+            [[float(v) for v in row] for row in bounds],
+            [[float(v) for v in row] for row in rotations],
+            int(num_action_scale),
+            float(action_unit),
+            float(volume_sum),
+            float(last_bbox_score),
+            float(cover_penalty),
+            float(pen_rate),
+        )
+    ]
+
+
+class NativeFastGeometryMlpPolicy:
+    """C++ fast_v1 geometry-candidate MLP used by research evaluators.
+
+    The policy keeps weights in the native extension and ranks centroid-proxy
+    axis candidates without constructing per-candidate feature rows in Python.
+    Exact SMART reward is still evaluated separately by the caller.
+    """
+
+    def __init__(
+        self,
+        mean: Iterable[float],
+        std: Iterable[float],
+        weights: Iterable[Iterable[Iterable[float]]],
+        biases: Iterable[Iterable[float]],
+    ) -> None:
+        self._impl = _require_backend().NativeFastGeometryMlpPolicy(
+            [float(value) for value in mean],
+            [float(value) for value in std],
+            [
+                [[float(value) for value in row] for row in layer]
+                for layer in weights
+            ],
+            [[float(value) for value in row] for row in biases],
+        )
+
+    @property
+    def impl(self):
+        return self._impl
+
+    def rank_centroid_proxy_axis_metrics(
+        self,
+        centroids: Iterable[Iterable[float]],
+        volumes: Iterable[float],
+        bounds: Iterable[Iterable[float]],
+        rotations: Iterable[Iterable[float]],
+        category: str,
+        turn: int,
+        num_action_scale: int,
+        action_unit: float,
+        volume_sum: float,
+        last_bbox_score: float,
+        cover_penalty: float,
+        pen_rate: float,
+        covered_before: float,
+        bvs_before: float,
+        candidate_count: int,
+    ) -> list[tuple[int, float, float, float, float, int]]:
+        return [
+            (
+                int(action),
+                float(reward),
+                float(coverage),
+                float(bvs),
+                float(score),
+                int(proxy_rank),
+            )
+            for action, reward, coverage, bvs, score, proxy_rank in self._impl.rank_centroid_proxy_axis_metrics(
+                [[float(v) for v in row] for row in centroids],
+                [float(value) for value in volumes],
+                [[float(v) for v in row] for row in bounds],
+                [[float(v) for v in row] for row in rotations],
+                str(category),
+                int(turn),
+                int(num_action_scale),
+                float(action_unit),
+                float(volume_sum),
+                float(last_bbox_score),
+                float(cover_penalty),
+                float(pen_rate),
+                float(covered_before),
+                float(bvs_before),
+                int(candidate_count),
+            )
+        ]
+
+
 def native_partition_summaries(
     vertices: Iterable[Iterable[float]],
     voxels: Iterable[Iterable[int]],
@@ -822,6 +975,262 @@ def run_greedy_refine_callbacks(args, env) -> tuple[list[float], int]:
     return [float(value) for value in rewards], int(count)
 
 
+_DEEPSET_REFINE_PRESETS: dict[str, dict[str, Any]] = {
+    "auto": {
+        "candidate_count": 128,
+        "multibox_min_boxes": 2,
+        "budget": 6,
+        "fallback_budget": 20,
+        "tie_eps": 0.0,
+        "tie_break": "action_id",
+        "hist_bins": 3,
+        "adaptive_high_budget": 72,
+        "adaptive_margin_threshold": 2.0,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 64,
+        "nonfinite_proxy_rescue_budget": 4,
+        "proxy_rescue_budget": 0,
+        "auto_exact_max_boxes": 1,
+    },
+    "hard": {
+        "candidate_count": 128,
+        "multibox_min_boxes": 2,
+        "budget": 6,
+        "fallback_budget": 20,
+        "tie_eps": 0.0,
+        "tie_break": "action_id",
+        "hist_bins": 3,
+        "adaptive_high_budget": 72,
+        "adaptive_margin_threshold": 2.0,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 0,
+        "nonfinite_proxy_rescue_budget": 4,
+        "proxy_rescue_budget": 0,
+    },
+    "mixed": {
+        "candidate_count": 128,
+        "multibox_min_boxes": 2,
+        "budget": 6,
+        "fallback_budget": 20,
+        "tie_eps": 0.0,
+        "tie_break": "action_id",
+        "hist_bins": 3,
+        "adaptive_high_budget": 72,
+        "adaptive_margin_threshold": 2.0,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 32,
+        "nonfinite_proxy_rescue_budget": 4,
+        "proxy_rescue_budget": 0,
+    },
+    "fast": {
+        "candidate_count": 128,
+        "multibox_min_boxes": 2,
+        "budget": 8,
+        "fallback_budget": 8,
+        "tie_eps": 0.0,
+        "tie_break": "action_id",
+        "hist_bins": 3,
+        "adaptive_high_budget": 0,
+        "adaptive_margin_threshold": 0.0,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 0,
+        "nonfinite_proxy_rescue_budget": 4,
+        "proxy_rescue_budget": 0,
+    },
+}
+
+
+def native_deepset_refine_defaults(profile: str = "mixed") -> dict[str, Any]:
+    """Return recommended C++ DeepSets refine routing settings.
+
+    The learned policy is a candidate router only: selected candidates are still
+    exact-scored by the native SMART/Manifold reward before applying an action.
+    """
+
+    key = str(profile or "mixed").lower()
+    if key == "balanced":
+        key = "mixed"
+    if key not in _DEEPSET_REFINE_PRESETS:
+        valid = ", ".join(sorted(_DEEPSET_REFINE_PRESETS))
+        raise ValueError(f"unknown DeepSets refine profile {profile!r}; expected one of: {valid}")
+    return dict(_DEEPSET_REFINE_PRESETS[key])
+
+
+def run_native_deepset_policy_refine(
+    engine: Any,
+    checkpoint_or_policy: Any,
+    *,
+    max_steps: int,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    profile: str = "mixed",
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run native exact refine with a DeepSets candidate-ordering policy.
+
+    ``checkpoint_or_policy`` may be either a ``.smartmlp`` path or an already
+    constructed ``NativeDeepSetCandidateScorer``.  This helper keeps the long
+    C++ signature stable for experiments while preserving exact final scoring.
+    """
+
+    settings = native_deepset_refine_defaults(profile)
+    settings.update(overrides)
+    auto_exact_max_boxes = int(settings.pop("auto_exact_max_boxes", -1))
+    if auto_exact_max_boxes >= 0:
+        try:
+            stats = dict(engine.stats())
+            num_boxes = int(stats.get("num_boxes", 0))
+        except Exception:
+            num_boxes = 0
+        if num_boxes <= auto_exact_max_boxes:
+            out = dict(engine.run_refine(int(max_steps), float(cover_penalty), float(pen_rate)))
+            if "total_reward" not in out:
+                out["total_reward"] = float(sum(float(value) for value in out.get("rewards", [])))
+            out.setdefault("exact_checks", 0)
+            out.setdefault("exact_errors", 0)
+            out.setdefault("adaptive_high_budget_uses", 0)
+            out.setdefault("small_pool_exact_uses", 0)
+            out.setdefault("nonfinite_proxy_rescue_checks", 0)
+            out["router_profile"] = "auto_exact"
+            out["learned_router_used"] = False
+            out["auto_exact_max_boxes"] = auto_exact_max_boxes
+            return out
+
+    if NativeDeepSetCandidateScorer is None:
+        raise RuntimeError("smart._cpp NativeDeepSetCandidateScorer is unavailable")
+    policy = (
+        checkpoint_or_policy
+        if hasattr(checkpoint_or_policy, "score_setaware_axis_candidates")
+        else NativeDeepSetCandidateScorer(str(checkpoint_or_policy))
+    )
+    route_profile = str(profile or "mixed")
+    out = dict(
+        engine.run_deepset_policy_refine(
+            policy,
+            int(max_steps),
+            float(cover_penalty),
+            float(pen_rate),
+            int(settings["candidate_count"]),
+            int(settings["multibox_min_boxes"]),
+            int(settings["budget"]),
+            int(settings["fallback_budget"]),
+            float(settings["tie_eps"]),
+            str(settings["tie_break"]),
+            int(settings["hist_bins"]),
+            int(settings["adaptive_high_budget"]),
+            float(settings["adaptive_margin_threshold"]),
+            int(settings["adaptive_margin_rank"]),
+            int(settings["small_pool_exact_threshold"]),
+            int(settings["nonfinite_proxy_rescue_budget"]),
+            int(settings["proxy_rescue_budget"]),
+        )
+    )
+    out["router_profile"] = route_profile
+    out["learned_router_used"] = True
+    return out
+
+
+def native_deepset_route_diagnostics(
+    engine: Any,
+    *,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    profile: str = "auto",
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Explain which native refine route the DeepSets helper will prefer.
+
+    This is intentionally cheap: it uses native engine stats and, only when a
+    small-pool exact threshold is configured, the centroid-proxy candidate pool
+    size.  It does not run Manifold exact action scoring.
+    """
+
+    settings = native_deepset_refine_defaults(profile)
+    settings.update(overrides)
+    try:
+        stats = dict(engine.stats())
+    except Exception:
+        stats = {}
+    num_boxes = int(stats.get("num_boxes", 0) or 0)
+    auto_exact_max_boxes = int(settings.get("auto_exact_max_boxes", -1))
+    if auto_exact_max_boxes >= 0 and num_boxes <= auto_exact_max_boxes:
+        return {
+            "route": "exact_native",
+            "reason": "auto_exact_max_boxes",
+            "num_boxes": num_boxes,
+            "auto_exact_max_boxes": auto_exact_max_boxes,
+            "learned_router_used": False,
+        }
+
+    candidate_pool_size: int | None = None
+    small_pool_exact_threshold = int(settings.get("small_pool_exact_threshold", 0) or 0)
+    if small_pool_exact_threshold > 0 and hasattr(engine, "centroid_proxy_axis_metrics"):
+        try:
+            candidate_pool_size = len(
+                engine.centroid_proxy_axis_metrics(
+                    float(cover_penalty),
+                    float(pen_rate),
+                    int(settings["candidate_count"]),
+                )
+            )
+        except Exception:
+            candidate_pool_size = None
+        if candidate_pool_size is not None and 0 < candidate_pool_size <= small_pool_exact_threshold:
+            return {
+                "route": "deepset_router",
+                "reason": "small_candidate_pool_exact_scoring",
+                "num_boxes": num_boxes,
+                "candidate_pool_size": candidate_pool_size,
+                "small_pool_exact_threshold": small_pool_exact_threshold,
+                "learned_router_used": True,
+                "small_pool_exact_scoring": True,
+            }
+
+    return {
+        "route": "deepset_router",
+        "reason": "multibox_candidate_routing",
+        "num_boxes": num_boxes,
+        "candidate_pool_size": candidate_pool_size,
+        "candidate_count": int(settings["candidate_count"]),
+        "budget": int(settings["budget"]),
+        "fallback_budget": int(settings["fallback_budget"]),
+        "proxy_rescue_budget": int(settings.get("proxy_rescue_budget", 0)),
+        "learned_router_used": True,
+    }
+
+
+def run_builtin_deepset_policy_refine(
+    engine: Any,
+    *,
+    max_steps: int,
+    policy: str = "default",
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    profile: str = "auto",
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Run C++ native refine with the packaged opt-in DeepSets router.
+
+    This is the public convenience entry point for the current research
+    controller.  The router only reduces the exact candidate set; the final
+    action choice still uses the exact native SMART/Manifold score.  With the
+    default ``profile="auto"``, small one-box states use the exact native path
+    directly because the learned router does not help there.
+    """
+
+    out = run_native_deepset_policy_refine(
+        engine,
+        load_builtin_deepset_policy(policy),
+        max_steps=max_steps,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        profile=profile,
+        **overrides,
+    )
+    out.setdefault("builtin_policy", str(policy or "default"))
+    return out
+
+
 # Compatibility names used by legacy Python modules. The official native
 # implementation is C++, and smart.native resolves directly to this module.
 action_scales = native_action_scales
@@ -830,6 +1239,7 @@ action_upper_rewards = native_action_upper_rewards
 bbox_action_upper_rewards = native_bbox_action_upper_rewards
 total_bbox_volume = native_total_bbox_volume
 centroid_proxy_axis_rewards = native_centroid_proxy_axis_rewards
+centroid_proxy_axis_metrics = native_centroid_proxy_axis_metrics
 opposite_actions = native_opposite_actions
 mcts_child_action_mask = native_child_action_mask
 discounted_reward = native_discounted_reward

@@ -1201,6 +1201,134 @@ extern "C" int smart_native_centroid_proxy_axis_rewards(
   return 1;
 }
 
+extern "C" int smart_native_centroid_proxy_axis_metrics(
+    const double* centroids,
+    const double* volumes,
+    std::size_t n_points,
+    const double* bounds,
+    const double* rotations,
+    std::size_t n_boxes,
+    std::size_t num_action_scale,
+    double action_unit,
+    double volume_sum,
+    double last_bbox_score,
+    double cover_penalty,
+    double pen_rate,
+    std::size_t* out_actions,
+    double* out_rewards,
+    double* out_coverage,
+    double* out_bvs,
+    std::size_t* out_n_rewards) {
+  if ((n_points > 0 && (centroids == nullptr || volumes == nullptr)) ||
+      (n_boxes > 0 && (bounds == nullptr || rotations == nullptr)) ||
+      out_actions == nullptr || out_rewards == nullptr ||
+      out_coverage == nullptr || out_bvs == nullptr ||
+      out_n_rewards == nullptr || volume_sum <= 0.0 ||
+      !valid_action_scale_count(num_action_scale)) {
+    return 0;
+  }
+
+  const std::size_t word_count = (n_points + 63) / 64;
+  std::vector<std::vector<std::uint64_t>> base_masks(
+      n_boxes, std::vector<std::uint64_t>(word_count, 0));
+  std::vector<double> bbox_volumes(n_boxes, 0.0);
+  double total_bbox_volume = 0.0;
+  for (std::size_t bbox_idx = 0; bbox_idx < n_boxes; ++bbox_idx) {
+    const double* bbox = bounds + bbox_idx * 6;
+    const double* rotation = rotations + bbox_idx * 9;
+    if (bbox_valid_at(bounds, bbox_idx)) {
+      const double volume = bbox_volume_at(bounds, bbox_idx);
+      bbox_volumes[bbox_idx] = volume;
+      total_bbox_volume += volume;
+      for (std::size_t point_idx = 0; point_idx < n_points; ++point_idx) {
+        if (point_in_oriented_bounds(centroids + point_idx * 3, bbox,
+                                     rotation)) {
+          base_masks[bbox_idx][point_idx / 64] |=
+              static_cast<std::uint64_t>(1) << (point_idx % 64);
+        }
+      }
+    }
+  }
+
+  const std::size_t actions_per_bbox = 6 * num_action_scale + 1;
+  std::size_t cursor = 0;
+  for (std::size_t bbox_idx = 0; bbox_idx < n_boxes; ++bbox_idx) {
+    const double* base_bbox = bounds + bbox_idx * 6;
+    const double* rotation = rotations + bbox_idx * 9;
+    for (std::size_t coord_idx = 0; coord_idx < 6; ++coord_idx) {
+      for (std::size_t scale_idx = 0; scale_idx < num_action_scale;
+           ++scale_idx) {
+        const std::size_t action =
+            bbox_idx * actions_per_bbox + coord_idx * num_action_scale +
+            scale_idx;
+        out_actions[cursor] = action;
+
+        double candidate[6] = {base_bbox[0], base_bbox[1], base_bbox[2],
+                               base_bbox[3], base_bbox[4], base_bbox[5]};
+        candidate[coord_idx] +=
+            action_scale_at(scale_idx, num_action_scale) * action_unit;
+        if (!(candidate[0] < candidate[3] && candidate[1] < candidate[4] &&
+              candidate[2] < candidate[5])) {
+          out_rewards[cursor] = -std::numeric_limits<double>::infinity();
+          out_coverage[cursor] = 0.0;
+          out_bvs[cursor] = std::numeric_limits<double>::infinity();
+          ++cursor;
+          continue;
+        }
+
+        std::vector<std::uint64_t> union_mask(word_count, 0);
+        for (std::size_t point_idx = 0; point_idx < n_points; ++point_idx) {
+          if (point_in_oriented_bounds(centroids + point_idx * 3, candidate,
+                                       rotation)) {
+            union_mask[point_idx / 64] |=
+                static_cast<std::uint64_t>(1) << (point_idx % 64);
+          }
+        }
+        for (std::size_t other_idx = 0; other_idx < n_boxes; ++other_idx) {
+          if (other_idx == bbox_idx) {
+            continue;
+          }
+          for (std::size_t word_idx = 0; word_idx < word_count; ++word_idx) {
+            union_mask[word_idx] |= base_masks[other_idx][word_idx];
+          }
+        }
+
+        double covered_volume = 0.0;
+        for (std::size_t word_idx = 0; word_idx < word_count; ++word_idx) {
+          std::uint64_t remaining = union_mask[word_idx];
+          while (remaining != 0) {
+            const std::size_t bit =
+                static_cast<std::size_t>(__builtin_ctzll(remaining));
+            const std::size_t point_idx = word_idx * 64 + bit;
+            if (point_idx < n_points) {
+              covered_volume += volumes[point_idx];
+            }
+            remaining &= remaining - 1;
+          }
+        }
+
+        const double covered = covered_volume / volume_sum;
+        const double candidate_volume =
+            std::max(0.0, candidate[3] - candidate[0]) *
+            std::max(0.0, candidate[4] - candidate[1]) *
+            std::max(0.0, candidate[5] - candidate[2]);
+        const double new_total =
+            total_bbox_volume - bbox_volumes[bbox_idx] + candidate_volume;
+        const double bvs = new_total / volume_sum;
+        const double proxy_score =
+            -std::abs(bvs - 1.0) -
+            (1.0 - covered) * pen_rate * cover_penalty;
+        out_rewards[cursor] = proxy_score - last_bbox_score;
+        out_coverage[cursor] = covered;
+        out_bvs[cursor] = bvs;
+        ++cursor;
+      }
+    }
+  }
+  *out_n_rewards = cursor;
+  return 1;
+}
+
 extern "C" int smart_native_partition_summaries(
     const double* vertices,
     std::size_t n_vertices,

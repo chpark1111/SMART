@@ -108,7 +108,8 @@ extern "C" int smart_manifold_state_best_axis_actions_for_mask(
     void* handle, const std::uint8_t* bbox_mask,
     std::size_t num_action_scale, double action_unit, double cover_penalty,
     double pen_rate, double initial_best, const double* action_scales,
-    std::intptr_t* out_actions, double* out_rewards);
+    std::intptr_t* out_actions, double* out_rewards,
+    std::size_t* out_exact_checks);
 extern "C" double smart_manifold_state_apply_axis_action(
     void* handle, std::intptr_t action, std::size_t num_action_scale,
     double action_unit, double cover_penalty, double pen_rate,
@@ -117,7 +118,8 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
     void* handle, std::size_t num_action_scale, double action_unit,
     double cover_penalty, double pen_rate, std::size_t max_steps,
     const double* action_scales, std::intptr_t* out_actions,
-    double* out_rewards, std::size_t* out_steps, double* out_last_score);
+    double* out_rewards, std::size_t* out_steps, double* out_last_score,
+    std::size_t* out_exact_checks);
 extern "C" int smart_manifold_state_greedy_axis_rollout_step(
     void* handle, const std::uint8_t* bbox_mask,
     std::size_t num_action_scale, double action_unit, double cover_penalty,
@@ -2058,6 +2060,1071 @@ native_centroid_proxy_axis_rewards_py(
   }
   return out;
 }
+
+std::vector<py::tuple> native_centroid_proxy_axis_metrics_py(
+    const std::vector<std::vector<double>>& centroids,
+    const std::vector<double>& volumes,
+    const std::vector<std::vector<double>>& bounds,
+    const std::vector<std::vector<double>>& rotations,
+    std::size_t num_action_scale,
+    double action_unit,
+    double volume_sum,
+    double last_bbox_score,
+    double cover_penalty,
+    double pen_rate) {
+  if (centroids.size() != volumes.size()) {
+    throw std::runtime_error("centroids and volumes must have same length");
+  }
+  if (bounds.size() != rotations.size()) {
+    throw std::runtime_error("bounds and rotations must have same length");
+  }
+  std::vector<double> flat_centroids =
+      flatten_double_rows(centroids, 3, "centroids");
+  std::vector<double> flat_bounds = flatten_double_rows(bounds, 6, "bounds");
+  std::vector<double> flat_rotations =
+      flatten_double_rows(rotations, 9, "rotations");
+  const std::size_t n_actions =
+      smart_native_action_count(bounds.size(), num_action_scale);
+  std::vector<std::size_t> actions(n_actions, 0);
+  std::vector<double> rewards(n_actions, 0.0);
+  std::vector<double> coverage(n_actions, 0.0);
+  std::vector<double> bvs(n_actions, 0.0);
+  std::size_t n_rewards = 0;
+  require_status(
+      smart_native_centroid_proxy_axis_metrics(
+          flat_centroids.data(), volumes.data(), centroids.size(),
+          flat_bounds.data(), flat_rotations.data(), bounds.size(),
+          num_action_scale, action_unit, volume_sum, last_bbox_score,
+          cover_penalty, pen_rate, actions.data(), rewards.data(),
+          coverage.data(), bvs.data(), &n_rewards),
+      "native centroid-proxy action metric calculation failed");
+  std::vector<py::tuple> out;
+  out.reserve(n_rewards);
+  for (std::size_t idx = 0; idx < n_rewards; ++idx) {
+    out.push_back(py::make_tuple(actions[idx], rewards[idx], coverage[idx],
+                                 bvs[idx]));
+  }
+  return out;
+}
+
+struct NativeFastMlpLinearLayer {
+  std::size_t out_dim = 0;
+  std::size_t in_dim = 0;
+  std::vector<double> weight;
+  std::vector<double> bias;
+};
+
+class NativeFastGeometryMlpPolicy {
+  struct FastCandidate {
+    std::size_t action = 0;
+    double reward = 0.0;
+    double coverage = 0.0;
+    double bvs = 0.0;
+    double score = 0.0;
+    std::size_t proxy_rank = 0;
+  };
+
+ public:
+  NativeFastGeometryMlpPolicy(
+      const std::vector<double>& mean,
+      const std::vector<double>& std,
+      const std::vector<std::vector<std::vector<double>>>& weights,
+      const std::vector<std::vector<double>>& biases)
+      : mean_(mean), inv_std_(std.size(), 1.0) {
+    if (mean_.empty() || mean_.size() != std.size()) {
+      throw std::runtime_error("mean and std must have the same non-zero length");
+    }
+    if (weights.empty() || weights.size() != biases.size()) {
+      throw std::runtime_error("weights and biases must have the same non-zero length");
+    }
+    for (std::size_t idx = 0; idx < std.size(); ++idx) {
+      inv_std_[idx] = std[idx] < 1.0e-6 ? 1.0 : 1.0 / std[idx];
+    }
+    std::size_t expected_in = mean_.size();
+    for (std::size_t layer_idx = 0; layer_idx < weights.size(); ++layer_idx) {
+      const auto& layer_weights = weights[layer_idx];
+      const auto& layer_bias = biases[layer_idx];
+      if (layer_weights.empty() || layer_weights.size() != layer_bias.size()) {
+        throw std::runtime_error("linear layer weight/bias shape mismatch");
+      }
+      const std::size_t in_dim = layer_weights.front().size();
+      if (in_dim != expected_in) {
+        throw std::runtime_error("linear layer input dimension mismatch");
+      }
+      NativeFastMlpLinearLayer layer;
+      layer.out_dim = layer_weights.size();
+      layer.in_dim = in_dim;
+      layer.bias = layer_bias;
+      layer.weight.reserve(layer.out_dim * layer.in_dim);
+      for (const auto& row : layer_weights) {
+        if (row.size() != layer.in_dim) {
+          throw std::runtime_error("ragged linear layer weight matrix");
+        }
+        layer.weight.insert(layer.weight.end(), row.begin(), row.end());
+      }
+      expected_in = layer.out_dim;
+      layers_.push_back(std::move(layer));
+    }
+  }
+
+  std::vector<py::tuple> rank_centroid_proxy_axis_metrics(
+      const std::vector<std::vector<double>>& centroids,
+      const std::vector<double>& volumes,
+      const std::vector<std::vector<double>>& bounds,
+      const std::vector<std::vector<double>>& rotations,
+      const std::string& category,
+      std::size_t turn,
+      std::size_t num_action_scale,
+      double action_unit,
+      double volume_sum,
+      double last_bbox_score,
+      double cover_penalty,
+      double pen_rate,
+      double covered_before,
+      double bvs_before,
+      std::size_t candidate_count) const {
+    if (centroids.size() != volumes.size()) {
+      throw std::runtime_error("centroids and volumes must have same length");
+    }
+    if (bounds.size() != rotations.size()) {
+      throw std::runtime_error("bounds and rotations must have same length");
+    }
+    if (candidate_count == 0 || bounds.empty()) {
+      return {};
+    }
+
+    std::vector<double> flat_centroids =
+        flatten_double_rows(centroids, 3, "centroids");
+    std::vector<double> flat_bounds = flatten_double_rows(bounds, 6, "bounds");
+    std::vector<double> flat_rotations =
+        flatten_double_rows(rotations, 9, "rotations");
+    const std::size_t n_actions =
+        smart_native_action_count(bounds.size(), num_action_scale);
+    std::vector<std::size_t> actions(n_actions, 0);
+    std::vector<double> rewards(n_actions, 0.0);
+    std::vector<double> coverage(n_actions, 0.0);
+    std::vector<double> bvs(n_actions, 0.0);
+    std::size_t n_rewards = 0;
+    require_status(
+        smart_native_centroid_proxy_axis_metrics(
+            flat_centroids.data(), volumes.data(), centroids.size(),
+            flat_bounds.data(), flat_rotations.data(), bounds.size(),
+            num_action_scale, action_unit, volume_sum, last_bbox_score,
+            cover_penalty, pen_rate, actions.data(), rewards.data(),
+            coverage.data(), bvs.data(), &n_rewards),
+        "native centroid-proxy action metric calculation failed");
+
+    std::vector<FastCandidate> candidates;
+    candidates.reserve(n_rewards);
+    for (std::size_t idx = 0; idx < n_rewards; ++idx) {
+      candidates.push_back(
+          FastCandidate{actions[idx], rewards[idx], coverage[idx], bvs[idx],
+                        0.0, 0});
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const FastCandidate& lhs,
+                                                       const FastCandidate& rhs) {
+      if (lhs.reward != rhs.reward) {
+        return lhs.reward > rhs.reward;
+      }
+      return lhs.action < rhs.action;
+    });
+    if (candidates.size() > candidate_count) {
+      candidates.resize(candidate_count);
+    }
+    for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+      candidates[rank].proxy_rank = rank;
+      candidates[rank].score = score_candidate(candidates[rank], bounds,
+                                               category, turn, num_action_scale,
+                                               action_unit, volume_sum,
+                                               covered_before, bvs_before);
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const FastCandidate& lhs,
+                                                       const FastCandidate& rhs) {
+      if (lhs.score != rhs.score) {
+        return lhs.score > rhs.score;
+      }
+      return lhs.proxy_rank < rhs.proxy_rank;
+    });
+
+    std::vector<py::tuple> out;
+    out.reserve(candidates.size());
+    for (const FastCandidate& row : candidates) {
+      out.push_back(py::make_tuple(row.action, row.reward, row.coverage,
+                                   row.bvs, row.score, row.proxy_rank));
+    }
+    return out;
+  }
+
+ private:
+  static double finite_or(double value, double fallback = 0.0) {
+    return std::isfinite(value) ? value : fallback;
+  }
+
+  static double gelu_tanh_approx_scalar(double x) {
+    const double clipped = std::max(-20.0, std::min(20.0, x));
+    constexpr double kPi = 3.141592653589793238462643383279502884;
+    const double inner =
+        std::sqrt(2.0 / kPi) *
+        (clipped + 0.044715 * clipped * clipped * clipped);
+    return 0.5 * x * (1.0 + std::tanh(inner));
+  }
+
+  double forward(std::vector<double> features) const {
+    if (features.size() != mean_.size()) {
+      throw std::runtime_error("fast geometry MLP feature dimension mismatch");
+    }
+    for (std::size_t idx = 0; idx < features.size(); ++idx) {
+      features[idx] =
+          std::max(-1.0e4, std::min(1.0e4,
+                                    finite_or((features[idx] - mean_[idx]) *
+                                              inv_std_[idx])));
+    }
+    std::vector<double> x = std::move(features);
+    for (std::size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
+      const NativeFastMlpLinearLayer& layer = layers_[layer_idx];
+      std::vector<double> next(layer.out_dim, 0.0);
+      for (std::size_t out_idx = 0; out_idx < layer.out_dim; ++out_idx) {
+        double value = layer.bias[out_idx];
+        const double* weight = layer.weight.data() + out_idx * layer.in_dim;
+        for (std::size_t in_idx = 0; in_idx < layer.in_dim; ++in_idx) {
+          value += weight[in_idx] * x[in_idx];
+        }
+        if (layer_idx + 1 < layers_.size()) {
+          value = gelu_tanh_approx_scalar(value);
+        }
+        next[out_idx] =
+            std::max(-1.0e6, std::min(1.0e6, finite_or(value)));
+      }
+      x = std::move(next);
+    }
+    return x.empty() ? -1.0e300 : finite_or(x.front(), -1.0e300);
+  }
+
+  std::vector<double> score_features(
+      const FastCandidate& candidate,
+      const std::vector<std::vector<double>>& bounds,
+      const std::string& category,
+      std::size_t turn,
+      std::size_t num_action_scale,
+      double action_unit,
+      double volume_sum,
+      double covered_before,
+      double bvs_before) const {
+    const std::size_t actions_per_bbox = 6 * num_action_scale + 1;
+    const std::size_t bbox_idx = candidate.action / actions_per_bbox;
+    const std::size_t local = candidate.action % actions_per_bbox;
+    if (bbox_idx >= bounds.size() || local >= 6 * num_action_scale) {
+      return std::vector<double>(mean_.size(), 0.0);
+    }
+    const std::size_t coord_idx = local / num_action_scale;
+    const std::size_t scale_idx = local % num_action_scale;
+    const double delta_scale = action_scale_value_cpp(scale_idx, num_action_scale);
+    const std::size_t axis = coord_idx < 3 ? coord_idx : coord_idx - 3;
+
+    const auto& box = bounds[bbox_idx];
+    const double dx = std::max(0.0, box[3] - box[0]);
+    const double dy = std::max(0.0, box[4] - box[1]);
+    const double dz = std::max(0.0, box[5] - box[2]);
+    const double dims[3] = {dx, dy, dz};
+    const double dim_sum = std::max(dx + dy + dz, 1.0e-9);
+    const double volume = dx * dy * dz;
+    const double max_dim = std::max(dx, std::max(dy, dz));
+    const double min_dim = std::min(dx, std::min(dy, dz));
+    const double aspect = max_dim / std::max(min_dim, 1.0e-12);
+    const bool invalid = !std::isfinite(candidate.reward);
+
+    std::vector<double> out;
+    out.reserve(mean_.size());
+    out.push_back(category == "airplane" ? 1.0 : 0.0);
+    out.push_back(category == "chair" ? 1.0 : 0.0);
+    out.push_back(category == "table" ? 1.0 : 0.0);
+    out.push_back(category == "airplane" || category == "chair" ||
+                          category == "table"
+                      ? 0.0
+                      : 1.0);
+    out.push_back(static_cast<double>(turn) / 10.0);
+    out.push_back(static_cast<double>(bounds.size()) / 32.0);
+    out.push_back(std::log1p(std::max(0.0, volume_sum)) / 2.0);
+    out.push_back(finite_or(covered_before));
+    out.push_back(finite_or(bvs_before) / 10.0);
+
+    out.push_back(static_cast<double>(bbox_idx) /
+                  std::max(1.0, static_cast<double>(bounds.size())));
+    out.push_back(0.5 * (box[0] + box[3]));
+    out.push_back(0.5 * (box[1] + box[4]));
+    out.push_back(0.5 * (box[2] + box[5]));
+    out.push_back(dx);
+    out.push_back(dy);
+    out.push_back(dz);
+    out.push_back(volume / std::max(volume_sum, 1.0e-12) / 10.0);
+    out.push_back(dims[0] / dim_sum);
+    out.push_back(dims[1] / dim_sum);
+    out.push_back(dims[2] / dim_sum);
+    out.push_back(std::log1p(std::min(1.0e6, std::max(0.0, aspect))) / 16.0);
+
+    out.push_back(1.0);
+    out.push_back(0.0);
+    out.push_back(0.0);
+    out.push_back(static_cast<double>(bbox_idx) /
+                  std::max(1.0, static_cast<double>(bounds.size())));
+    out.push_back(static_cast<double>(coord_idx) / 6.0);
+    out.push_back(static_cast<double>(axis) / 3.0);
+    out.push_back(static_cast<double>(coord_idx));
+    out.push_back(delta_scale / 4.0);
+    out.push_back(delta_scale * action_unit / 0.05);
+    out.push_back(finite_or(candidate.coverage));
+    out.push_back(finite_or(candidate.coverage - covered_before));
+    out.push_back(finite_or(candidate.bvs) / 10.0);
+    out.push_back(finite_or(candidate.bvs - bvs_before));
+    out.push_back(finite_or(candidate.reward) / 100.0);
+    out.push_back(invalid ? 1.0 : 0.0);
+    if (out.size() != mean_.size()) {
+      throw std::runtime_error("fast_v1 feature builder produced unexpected dimension");
+    }
+    return out;
+  }
+
+  double score_candidate(
+      const FastCandidate& candidate,
+      const std::vector<std::vector<double>>& bounds,
+      const std::string& category,
+      std::size_t turn,
+      std::size_t num_action_scale,
+      double action_unit,
+      double volume_sum,
+      double covered_before,
+      double bvs_before) const {
+    return forward(score_features(candidate, bounds, category, turn,
+                                  num_action_scale, action_unit, volume_sum,
+                                  covered_before, bvs_before));
+  }
+
+  std::vector<double> mean_;
+  std::vector<double> inv_std_;
+  std::vector<NativeFastMlpLinearLayer> layers_;
+};
+
+class NativeDeepSetCandidateScorer {
+  struct Layer {
+    std::size_t rows = 0;
+    std::size_t cols = 0;
+    std::vector<double> weight;
+    std::vector<double> bias;
+    std::vector<double> ln_weight;
+    std::vector<double> ln_bias;
+  };
+
+ public:
+  explicit NativeDeepSetCandidateScorer(const std::string& path) {
+    std::ifstream input(path);
+    if (!input) {
+      throw std::runtime_error("failed to open DeepSets weight bundle: " + path);
+    }
+    expect_token(input, "SMART_DEEPSET_V1");
+    std::string key;
+    input >> key >> dim_;
+    if (key != "dim") throw std::runtime_error("DeepSets bundle missing dim");
+    input >> key >> hidden_;
+    if (key != "hidden") {
+      throw std::runtime_error("DeepSets bundle missing hidden");
+    }
+    std::size_t phi_depth = 0;
+    std::size_t rho_depth = 0;
+    input >> key >> phi_depth;
+    if (key != "phi_depth") {
+      throw std::runtime_error("DeepSets bundle missing phi_depth");
+    }
+    input >> key >> rho_depth;
+    if (key != "rho_depth") {
+      throw std::runtime_error("DeepSets bundle missing rho_depth");
+    }
+    input >> key >> feature_schema_;
+    if (key != "feature_schema") {
+      throw std::runtime_error("DeepSets bundle missing feature_schema");
+    }
+    mean_ = read_vector(input, "mean", dim_);
+    std_ = read_vector(input, "std", dim_);
+    for (double& value : std_) {
+      if (value < 1.0e-6) value = 1.0;
+    }
+
+    phi_.reserve(phi_depth);
+    for (std::size_t idx = 0; idx < phi_depth; ++idx) {
+      const std::size_t in_dim = idx == 0 ? dim_ : hidden_;
+      phi_.push_back(read_layer(input, "phi", idx, hidden_, in_dim));
+    }
+    rho_.reserve(rho_depth);
+    for (std::size_t idx = 0; idx < rho_depth; ++idx) {
+      const std::size_t in_dim = idx == 0 ? hidden_ * 3 : hidden_;
+      rho_.push_back(read_layer(input, "rho", idx, hidden_, in_dim));
+    }
+    out_weight_ = read_matrix(input, "out_w", 1, hidden_);
+    out_bias_ = read_vector(input, "out_b", 1).front();
+  }
+
+  std::string feature_schema() const { return feature_schema_; }
+  std::size_t dim() const { return dim_; }
+  std::size_t hidden() const { return hidden_; }
+
+  std::vector<double> debug_output_weight_stats() const {
+    double sum = 0.0;
+    double l2 = 0.0;
+    double minv = std::numeric_limits<double>::infinity();
+    double maxv = -std::numeric_limits<double>::infinity();
+    for (double value : out_weight_) {
+      sum += value;
+      l2 += value * value;
+      minv = std::min(minv, value);
+      maxv = std::max(maxv, value);
+    }
+    return {out_bias_, sum, std::sqrt(l2), minv, maxv,
+            static_cast<double>(out_weight_.size())};
+  }
+
+  std::vector<double> score_rows(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    return score_rows_vector_impl(rows, already_normalized);
+  }
+
+  std::vector<double> score_rows_list(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    return score_rows_vector_impl(rows, already_normalized);
+  }
+
+  std::vector<double> score_setaware_axis_candidates(
+      const std::vector<std::size_t>& actions,
+      const std::vector<double>& proxy_rewards,
+      const std::vector<double>& coverage_after,
+      const std::vector<double>& coverage_delta,
+      const std::vector<double>& bvs_after,
+      const std::vector<double>& bvs_delta,
+      const std::vector<std::vector<double>>& bounds,
+      const std::string& category,
+      std::size_t turn,
+      std::size_t num_action_scale,
+      double action_unit,
+      double volume_sum,
+      double current_coverage,
+      double current_bvs,
+      const std::vector<double>& centroid_extent,
+      const std::vector<double>& pca_extent,
+      const std::vector<double>& volume_histogram) const {
+    if (feature_schema_ != "setaware_v2" || dim_ != 58) {
+      throw std::runtime_error(
+          "native setaware candidate scoring requires setaware_v2 dim=58");
+    }
+    const std::size_t n = actions.size();
+    if (proxy_rewards.size() != n || coverage_after.size() != n ||
+        coverage_delta.size() != n || bvs_after.size() != n ||
+        bvs_delta.size() != n) {
+      throw std::runtime_error(
+          "candidate arrays must have the same length for setaware scoring");
+    }
+    if (bounds.empty()) {
+      return std::vector<double>(n, -1.0e300);
+    }
+
+    std::vector<std::size_t> proxy_order(n, 0);
+    for (std::size_t idx = 0; idx < n; ++idx) proxy_order[idx] = idx;
+    std::stable_sort(proxy_order.begin(), proxy_order.end(),
+                     [&](std::size_t left, std::size_t right) {
+                       return proxy_rewards[left] > proxy_rewards[right];
+                     });
+    std::vector<std::size_t> proxy_rank(n, 0);
+    for (std::size_t rank = 0; rank < n; ++rank) {
+      proxy_rank[proxy_order[rank]] = rank;
+    }
+
+    double proxy_mean = 0.0;
+    for (double value : proxy_rewards) proxy_mean += finite_or_zero(value);
+    proxy_mean /= std::max<std::size_t>(1, n);
+    double proxy_var = 0.0;
+    for (double value : proxy_rewards) {
+      const double diff = finite_or_zero(value) - proxy_mean;
+      proxy_var += diff * diff;
+    }
+    proxy_var /= std::max<std::size_t>(1, n);
+    double proxy_std = std::sqrt(proxy_var);
+    if (proxy_std <= 1.0e-9) proxy_std = 1.0;
+
+    const double proxy_top =
+        n > 0 ? finite_or_zero(proxy_rewards[proxy_order.front()]) : 0.0;
+    const double proxy_second =
+        n > 1 ? finite_or_zero(proxy_rewards[proxy_order[1]]) : proxy_top;
+    const double proxy_fifth =
+        n > 0 ? finite_or_zero(proxy_rewards[proxy_order[std::min<std::size_t>(4, n - 1)]])
+              : proxy_top;
+    const double proxy_top20 =
+        n > 0 ? finite_or_zero(proxy_rewards[proxy_order[std::min<std::size_t>(19, n - 1)]])
+              : proxy_top;
+    const double proxy_margin_top12 = proxy_top - proxy_second;
+    const double proxy_margin_top15 = proxy_top - proxy_fifth;
+
+    std::vector<std::size_t> same_bbox_best(
+        bounds.size(), std::numeric_limits<std::size_t>::max());
+    std::map<std::pair<std::size_t, std::size_t>, std::size_t>
+        same_axis_best;
+    const std::size_t per_bbox = 6 * std::max<std::size_t>(1, num_action_scale) + 1;
+    for (std::size_t rank = 0; rank < proxy_order.size(); ++rank) {
+      const std::size_t cand_idx = proxy_order[rank];
+      const std::size_t action = actions[cand_idx];
+      const std::size_t bbox_idx = action / per_bbox;
+      const std::size_t local = action % per_bbox;
+      if (bbox_idx >= bounds.size() || local >= 6 * num_action_scale) {
+        continue;
+      }
+      const std::size_t coord_idx = local / num_action_scale;
+      const std::size_t axis = coord_idx < 3 ? coord_idx : coord_idx - 3;
+      if (same_bbox_best[bbox_idx] == std::numeric_limits<std::size_t>::max()) {
+        same_bbox_best[bbox_idx] = rank;
+      }
+      same_axis_best.emplace(std::make_pair(bbox_idx, axis), rank);
+    }
+
+    double hist_mean = 0.0;
+    double hist_std = 0.0;
+    double hist_max = 0.0;
+    double hist_nonzero = 0.0;
+    if (!volume_histogram.empty()) {
+      for (double value : volume_histogram) {
+        const double safe = finite_or_zero(value);
+        hist_mean += safe;
+        hist_max = std::max(hist_max, safe);
+        if (safe != 0.0) hist_nonzero += 1.0;
+      }
+      hist_mean /= static_cast<double>(volume_histogram.size());
+      for (double value : volume_histogram) {
+        const double diff = finite_or_zero(value) - hist_mean;
+        hist_std += diff * diff;
+      }
+      hist_std = std::sqrt(hist_std / static_cast<double>(volume_histogram.size()));
+      hist_nonzero /= static_cast<double>(volume_histogram.size());
+    }
+
+    std::vector<double> rows(n * dim_, 0.0);
+    std::vector<std::uint8_t> valid(n, 1);
+    for (std::size_t cand_idx = 0; cand_idx < n; ++cand_idx) {
+      const std::size_t action = actions[cand_idx];
+      const std::size_t bbox_idx = action / per_bbox;
+      const std::size_t local = action % per_bbox;
+      if (bbox_idx >= bounds.size() || local >= 6 * num_action_scale) {
+        valid[cand_idx] = 0;
+        continue;
+      }
+      const std::size_t coord_idx = local / num_action_scale;
+      const std::size_t scale_idx = local % num_action_scale;
+      const std::size_t axis = coord_idx < 3 ? coord_idx : coord_idx - 3;
+      const double delta_scale = action_scale_value_cpp(scale_idx, num_action_scale);
+      const std::vector<double>& box = bounds[bbox_idx];
+      if (box.size() != 6) {
+        valid[cand_idx] = 0;
+        continue;
+      }
+      const double dx = std::max(0.0, box[3] - box[0]);
+      const double dy = std::max(0.0, box[4] - box[1]);
+      const double dz = std::max(0.0, box[5] - box[2]);
+      const double dims[3] = {dx, dy, dz};
+      const double dim_sum = std::max(dx + dy + dz, 1.0e-12);
+      const double volume = dx * dy * dz;
+      const double min_dim = std::max(std::min(dx, std::min(dy, dz)), 1.0e-12);
+      const double max_dim = std::max(dx, std::max(dy, dz));
+      const double aspect = max_dim / min_dim;
+
+      const double proxy = finite_or_zero(proxy_rewards[cand_idx]);
+      const std::size_t rank = proxy_rank[cand_idx];
+      const std::size_t next_rank = std::min<std::size_t>(rank + 1, n > 0 ? n - 1 : 0);
+      const double next_value =
+          n > 0 ? finite_or_zero(proxy_rewards[proxy_order[next_rank]]) : proxy;
+      std::size_t same_bbox_rank = rank;
+      if (bbox_idx < same_bbox_best.size() &&
+          same_bbox_best[bbox_idx] != std::numeric_limits<std::size_t>::max()) {
+        same_bbox_rank = same_bbox_best[bbox_idx];
+      }
+      std::size_t same_axis_rank = rank;
+      auto same_axis_it = same_axis_best.find(std::make_pair(bbox_idx, axis));
+      if (same_axis_it != same_axis_best.end()) {
+        same_axis_rank = same_axis_it->second;
+      }
+      const double rank_den = std::max(1.0, static_cast<double>(n > 0 ? n - 1 : 0));
+
+      std::vector<double> row;
+      row.reserve(dim_);
+      row.push_back(category == "airplane" ? 1.0 : 0.0);
+      row.push_back(category == "chair" ? 1.0 : 0.0);
+      row.push_back(category == "table" ? 1.0 : 0.0);
+      row.push_back(category == "airplane" || category == "chair" ||
+                            category == "table"
+                        ? 0.0
+                        : 1.0);
+      row.push_back(static_cast<double>(turn) / 10.0);
+      row.push_back(static_cast<double>(bounds.size()) / 32.0);
+      row.push_back(std::log1p(std::max(0.0, volume_sum)) / 2.0);
+      row.push_back(finite_or_zero(current_coverage));
+      row.push_back(finite_or_zero(current_bvs) / 10.0);
+      for (std::size_t idx = 0; idx < 3; ++idx) {
+        row.push_back(idx < centroid_extent.size() ? finite_or_zero(centroid_extent[idx]) : 0.0);
+      }
+      for (std::size_t idx = 0; idx < 3; ++idx) {
+        row.push_back(idx < pca_extent.size() ? finite_or_zero(pca_extent[idx]) : 0.0);
+      }
+      row.push_back(hist_mean);
+      row.push_back(hist_std);
+      row.push_back(hist_max);
+      row.push_back(hist_nonzero);
+
+      row.push_back(static_cast<double>(bbox_idx) /
+                    std::max(1.0, static_cast<double>(bounds.size())));
+      row.push_back(0.5 * (box[0] + box[3]));
+      row.push_back(0.5 * (box[1] + box[4]));
+      row.push_back(0.5 * (box[2] + box[5]));
+      row.push_back(dx);
+      row.push_back(dy);
+      row.push_back(dz);
+      row.push_back(volume / std::max(volume_sum, 1.0e-12) / 10.0);
+      row.push_back(dims[0] / dim_sum);
+      row.push_back(dims[1] / dim_sum);
+      row.push_back(dims[2] / dim_sum);
+      row.push_back(std::log1p(std::min(1.0e6, std::max(0.0, aspect))) / 16.0);
+
+      row.push_back(1.0);
+      row.push_back(0.0);
+      row.push_back(0.0);
+      row.push_back(static_cast<double>(bbox_idx) /
+                    std::max(1.0, static_cast<double>(bounds.size())));
+      row.push_back(static_cast<double>(coord_idx) / 6.0);
+      row.push_back(static_cast<double>(axis) / 3.0);
+      row.push_back(static_cast<double>(coord_idx));
+      row.push_back(delta_scale / 4.0);
+      row.push_back(delta_scale * action_unit / 0.05);
+      row.push_back(finite_or_zero(coverage_after[cand_idx]));
+      row.push_back(finite_or_zero(coverage_delta[cand_idx]));
+      row.push_back(finite_or_zero(bvs_after[cand_idx]) / 10.0);
+      row.push_back(finite_or_zero(bvs_delta[cand_idx]));
+      row.push_back(proxy / 100.0);
+      row.push_back((dx <= 0.0 || dy <= 0.0 || dz <= 0.0) ? 1.0 : 0.0);
+
+      row.push_back(static_cast<double>(n) / 128.0);
+      row.push_back(static_cast<double>(rank) / 128.0);
+      row.push_back(static_cast<double>(rank) / rank_den);
+      row.push_back((proxy - proxy_mean) / proxy_std);
+      row.push_back(proxy - proxy_mean);
+      row.push_back(proxy_top - proxy);
+      row.push_back(proxy - next_value);
+      row.push_back(proxy_margin_top12);
+      row.push_back(proxy_margin_top15);
+      row.push_back(proxy - proxy_top20);
+      row.push_back(static_cast<double>(same_bbox_rank) / rank_den);
+      row.push_back(static_cast<double>(same_axis_rank) / rank_den);
+
+      if (row.size() != dim_) {
+        throw std::runtime_error("native setaware feature builder dimension mismatch");
+      }
+      std::copy(row.begin(), row.end(), rows.begin() + cand_idx * dim_);
+    }
+
+    std::vector<double> normalized(rows.size(), 0.0);
+    for (std::size_t row = 0; row < n; ++row) {
+      if (!valid[row]) continue;
+      for (std::size_t col = 0; col < dim_; ++col) {
+        normalized[row * dim_ + col] =
+            finite_or_zero((rows[row * dim_ + col] - mean_[col]) / std_[col]);
+      }
+    }
+    std::vector<double> scores = score_normalized(normalized, n);
+    for (std::size_t idx = 0; idx < n; ++idx) {
+      if (!valid[idx]) scores[idx] = -1.0e300;
+    }
+    return scores;
+  }
+
+ private:
+  std::vector<double> score_rows_vector_impl(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    if (n_cols != dim_) {
+      throw std::runtime_error("DeepSets row dimension mismatch");
+    }
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> normalized(n_rows * dim_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < dim_; ++col) {
+        const double value = data[row * dim_ + col];
+        normalized[row * dim_ + col] =
+            already_normalized ? finite_or_zero(value)
+                               : finite_or_zero((value - mean_[col]) / std_[col]);
+      }
+    }
+    return score_normalized(normalized, n_rows);
+  }
+
+ public:
+  std::vector<double> debug_row_sums(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> sums(n_rows, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < n_cols; ++col) {
+        sums[row] += data[row * n_cols + col];
+      }
+    }
+    return sums;
+  }
+
+  std::vector<double> debug_phi_sums(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    if (n_cols != dim_) {
+      throw std::runtime_error("DeepSets row dimension mismatch");
+    }
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> normalized(n_rows * dim_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < dim_; ++col) {
+        const double value = data[row * dim_ + col];
+        normalized[row * dim_ + col] =
+            already_normalized ? finite_or_zero(value)
+                               : finite_or_zero((value - mean_[col]) / std_[col]);
+      }
+    }
+    std::vector<double> sums(n_rows, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      std::vector<double> current(normalized.data() + row * dim_,
+                                  normalized.data() + row * dim_ + dim_);
+      for (const Layer& layer : phi_) {
+        current = forward_layer(layer, current.data());
+      }
+      for (double value : current) sums[row] += value;
+    }
+    return sums;
+  }
+
+  std::vector<double> debug_rho0_sums(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    if (n_cols != dim_ || rho_.empty()) {
+      throw std::runtime_error("DeepSets row dimension mismatch");
+    }
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> normalized(n_rows * dim_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < dim_; ++col) {
+        const double value = data[row * dim_ + col];
+        normalized[row * dim_ + col] =
+            already_normalized ? finite_or_zero(value)
+                               : finite_or_zero((value - mean_[col]) / std_[col]);
+      }
+    }
+    std::vector<double> h(n_rows * hidden_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      std::vector<double> current(normalized.data() + row * dim_,
+                                  normalized.data() + row * dim_ + dim_);
+      for (const Layer& layer : phi_) current = forward_layer(layer, current.data());
+      std::copy(current.begin(), current.end(), h.begin() + row * hidden_);
+    }
+    std::vector<double> mean(hidden_, 0.0);
+    std::vector<double> maxv(hidden_, -std::numeric_limits<double>::infinity());
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      for (std::size_t col = 0; col < hidden_; ++col) {
+        mean[col] += item[col];
+        maxv[col] = std::max(maxv[col], item[col]);
+      }
+    }
+    for (double& value : mean) value /= std::max<std::size_t>(1, n_rows);
+    std::vector<double> sums(n_rows, 0.0);
+    std::vector<double> rho_input(hidden_ * 3, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      std::copy(item, item + hidden_, rho_input.begin());
+      std::copy(mean.begin(), mean.end(), rho_input.begin() + hidden_);
+      std::copy(maxv.begin(), maxv.end(), rho_input.begin() + hidden_ * 2);
+      const std::vector<double> first = forward_layer(rho_.front(), rho_input.data());
+      for (double value : first) sums[row] += value;
+    }
+    return sums;
+  }
+
+  std::vector<double> debug_rho_final_sums(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    if (n_cols != dim_) {
+      throw std::runtime_error("DeepSets row dimension mismatch");
+    }
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> normalized(n_rows * dim_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < dim_; ++col) {
+        const double value = data[row * dim_ + col];
+        normalized[row * dim_ + col] =
+            already_normalized ? finite_or_zero(value)
+                               : finite_or_zero((value - mean_[col]) / std_[col]);
+      }
+    }
+    std::vector<double> h(n_rows * hidden_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      std::vector<double> current(normalized.data() + row * dim_,
+                                  normalized.data() + row * dim_ + dim_);
+      for (const Layer& layer : phi_) current = forward_layer(layer, current.data());
+      std::copy(current.begin(), current.end(), h.begin() + row * hidden_);
+    }
+    std::vector<double> mean(hidden_, 0.0);
+    std::vector<double> maxv(hidden_, -std::numeric_limits<double>::infinity());
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      for (std::size_t col = 0; col < hidden_; ++col) {
+        mean[col] += item[col];
+        maxv[col] = std::max(maxv[col], item[col]);
+      }
+    }
+    for (double& value : mean) value /= std::max<std::size_t>(1, n_rows);
+    std::vector<double> sums(n_rows, 0.0);
+    std::vector<double> rho_input(hidden_ * 3, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      std::copy(item, item + hidden_, rho_input.begin());
+      std::copy(mean.begin(), mean.end(), rho_input.begin() + hidden_);
+      std::copy(maxv.begin(), maxv.end(), rho_input.begin() + hidden_ * 2);
+      std::vector<double> current = rho_input;
+      for (const Layer& layer : rho_) current = forward_layer(layer, current.data());
+      for (double value : current) sums[row] += value;
+    }
+    return sums;
+  }
+
+  py::array_t<double> debug_rho_final_matrix(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("DeepSets rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    if (n_cols != dim_) {
+      throw std::runtime_error("DeepSets row dimension mismatch");
+    }
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> normalized(n_rows * dim_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      for (std::size_t col = 0; col < dim_; ++col) {
+        const double value = data[row * dim_ + col];
+        normalized[row * dim_ + col] =
+            already_normalized ? finite_or_zero(value)
+                               : finite_or_zero((value - mean_[col]) / std_[col]);
+      }
+    }
+    std::vector<double> h(n_rows * hidden_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      std::vector<double> current(normalized.data() + row * dim_,
+                                  normalized.data() + row * dim_ + dim_);
+      for (const Layer& layer : phi_) current = forward_layer(layer, current.data());
+      std::copy(current.begin(), current.end(), h.begin() + row * hidden_);
+    }
+    std::vector<double> mean(hidden_, 0.0);
+    std::vector<double> maxv(hidden_, -std::numeric_limits<double>::infinity());
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      for (std::size_t col = 0; col < hidden_; ++col) {
+        mean[col] += item[col];
+        maxv[col] = std::max(maxv[col], item[col]);
+      }
+    }
+    for (double& value : mean) value /= std::max<std::size_t>(1, n_rows);
+    std::vector<double> flat(n_rows * hidden_, 0.0);
+    std::vector<double> rho_input(hidden_ * 3, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      std::copy(item, item + hidden_, rho_input.begin());
+      std::copy(mean.begin(), mean.end(), rho_input.begin() + hidden_);
+      std::copy(maxv.begin(), maxv.end(), rho_input.begin() + hidden_ * 2);
+      std::vector<double> current = rho_input;
+      for (const Layer& layer : rho_) current = forward_layer(layer, current.data());
+      std::copy(current.begin(), current.end(), flat.begin() + row * hidden_);
+    }
+    py::array_t<double> out({n_rows, hidden_});
+    std::memcpy(out.mutable_data(), flat.data(), flat.size() * sizeof(double));
+    return out;
+  }
+
+ private:
+  static void expect_token(std::istream& input, const std::string& expected) {
+    std::string token;
+    input >> token;
+    if (token != expected) {
+      throw std::runtime_error("DeepSets bundle expected token '" + expected +
+                               "', got '" + token + "'");
+    }
+  }
+
+  static double finite_or_zero(double value) {
+    return std::isfinite(value) ? value : 0.0;
+  }
+
+  static std::vector<double> read_vector(std::istream& input,
+                                         const std::string& name,
+                                         std::size_t expected) {
+    expect_token(input, "vector");
+    std::string got_name;
+    std::size_t size = 0;
+    input >> got_name >> size;
+    if (got_name != name || size != expected) {
+      throw std::runtime_error("DeepSets vector mismatch for " + name);
+    }
+    std::vector<double> values(size);
+    for (double& value : values) input >> value;
+    return values;
+  }
+
+  static std::vector<double> read_matrix(std::istream& input,
+                                         const std::string& name,
+                                         std::size_t rows,
+                                         std::size_t cols) {
+    expect_token(input, "matrix");
+    std::string got_name;
+    std::size_t got_rows = 0;
+    std::size_t got_cols = 0;
+    input >> got_name >> got_rows >> got_cols;
+    if (got_name != name || got_rows != rows || got_cols != cols) {
+      throw std::runtime_error("DeepSets matrix mismatch for " + name);
+    }
+    std::vector<double> values(rows * cols);
+    for (double& value : values) input >> value;
+    return values;
+  }
+
+  static Layer read_layer(std::istream& input,
+                          const std::string& prefix,
+                          std::size_t idx,
+                          std::size_t rows,
+                          std::size_t cols) {
+    Layer layer;
+    layer.rows = rows;
+    layer.cols = cols;
+    const std::string suffix = std::to_string(idx);
+    layer.weight = read_matrix(input, prefix + "_w" + suffix, rows, cols);
+    layer.bias = read_vector(input, prefix + "_b" + suffix, rows);
+    layer.ln_weight = read_vector(input, prefix + "_ln_w" + suffix, rows);
+    layer.ln_bias = read_vector(input, prefix + "_ln_b" + suffix, rows);
+    return layer;
+  }
+
+  static double gelu(double x) {
+    return 0.5 * x * (1.0 + std::erf(x * 0.70710678118654752440));
+  }
+
+  static std::vector<double> forward_layer(const Layer& layer,
+                                           const double* input) {
+    std::vector<double> out(layer.rows, 0.0);
+    for (std::size_t row = 0; row < layer.rows; ++row) {
+      double value = layer.bias[row];
+      const double* weights = layer.weight.data() + row * layer.cols;
+      for (std::size_t col = 0; col < layer.cols; ++col) {
+        value += weights[col] * input[col];
+      }
+      out[row] = gelu(value);
+    }
+    double mean = 0.0;
+    for (double value : out) mean += value;
+    mean /= std::max<std::size_t>(1, out.size());
+    double var = 0.0;
+    for (double value : out) {
+      const double diff = value - mean;
+      var += diff * diff;
+    }
+    var /= std::max<std::size_t>(1, out.size());
+    const double inv_std = 1.0 / std::sqrt(var + 1.0e-5);
+    for (std::size_t idx = 0; idx < out.size(); ++idx) {
+      out[idx] = (out[idx] - mean) * inv_std * layer.ln_weight[idx] +
+                 layer.ln_bias[idx];
+    }
+    return out;
+  }
+
+  std::vector<double> score_normalized(const std::vector<double>& rows,
+                                       std::size_t n_rows) const {
+    std::vector<double> h(n_rows * hidden_, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* input = rows.data() + row * dim_;
+      std::vector<double> current(input, input + dim_);
+      for (std::size_t layer_idx = 0; layer_idx < phi_.size(); ++layer_idx) {
+        current = forward_layer(phi_[layer_idx], current.data());
+      }
+      std::copy(current.begin(), current.end(), h.begin() + row * hidden_);
+    }
+
+    std::vector<double> mean(hidden_, 0.0);
+    std::vector<double> maxv(hidden_, -std::numeric_limits<double>::infinity());
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      for (std::size_t col = 0; col < hidden_; ++col) {
+        mean[col] += item[col];
+        maxv[col] = std::max(maxv[col], item[col]);
+      }
+    }
+    for (double& value : mean) value /= std::max<std::size_t>(1, n_rows);
+
+    std::vector<double> scores(n_rows, 0.0);
+    std::vector<double> rho_input(hidden_ * 3, 0.0);
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      const double* item = h.data() + row * hidden_;
+      std::copy(item, item + hidden_, rho_input.begin());
+      std::copy(mean.begin(), mean.end(), rho_input.begin() + hidden_);
+      std::copy(maxv.begin(), maxv.end(), rho_input.begin() + hidden_ * 2);
+      std::vector<double> current = rho_input;
+      for (std::size_t layer_idx = 0; layer_idx < rho_.size(); ++layer_idx) {
+        current = forward_layer(rho_[layer_idx], current.data());
+      }
+      double score = out_bias_;
+      for (std::size_t col = 0; col < hidden_; ++col) {
+        score += out_weight_[col] * current[col];
+      }
+      scores[row] = score;
+    }
+    return scores;
+  }
+
+  std::size_t dim_ = 0;
+  std::size_t hidden_ = 0;
+  std::string feature_schema_;
+  std::vector<double> mean_;
+  std::vector<double> std_;
+  std::vector<Layer> phi_;
+  std::vector<Layer> rho_;
+  std::vector<double> out_weight_;
+  double out_bias_ = 0.0;
+};
 
 py::tuple native_partition_summaries_py(
     const std::vector<std::vector<double>>& vertices,
@@ -4830,11 +5897,13 @@ class SmartCppManifoldState {
     std::vector<double> applied_rewards;
     std::vector<bool> next_mask;
     double last_score = -std::numeric_limits<double>::infinity();
+    std::size_t exact_checks = 0;
   };
 
   struct NativeBestAxisBatch {
     std::vector<std::intptr_t> actions;
     std::vector<double> rewards;
+    std::size_t exact_checks = 0;
   };
 
   SmartCppManifoldState(const std::vector<std::vector<double>>& vertices,
@@ -5094,12 +6163,14 @@ class SmartCppManifoldState {
     std::vector<std::uint8_t> flat_mask = bool_mask_to_u8(bbox_mask);
     std::vector<std::intptr_t> actions(n_boxes, -1);
     std::vector<double> rewards(n_boxes, initial_best);
+    std::size_t exact_checks = 0;
     require_status(smart_manifold_state_best_axis_actions_for_mask(
                        ptr_, flat_mask.data(), num_action_scale_, action_unit_,
                        cover_penalty, pen_rate, initial_best,
-                       action_scales_.data(), actions.data(), rewards.data()),
+                       action_scales_.data(), actions.data(), rewards.data(),
+                       &exact_checks),
                    "Manifold state batch action scoring failed");
-    return NativeBestAxisBatch{actions, rewards};
+    return NativeBestAxisBatch{actions, rewards, exact_checks};
   }
 
   py::tuple select_replacement_batch(
@@ -5300,11 +6371,12 @@ class SmartCppManifoldState {
     std::vector<double> rewards(max_steps, 0.0);
     std::size_t steps = 0;
     double last_score = 0.0;
+    std::size_t exact_checks = 0;
     require_status(smart_manifold_state_greedy_axis_refine_segment(
                        ptr_, num_action_scale_, action_unit_, cover_penalty,
                        pen_rate, max_steps, action_scales_.data(),
                        raw_actions.data(), rewards.data(), &steps,
-                       &last_score),
+                       &last_score, &exact_checks),
                    "Manifold state native greedy segment failed");
     raw_actions.resize(steps);
     rewards.resize(steps);
@@ -5339,11 +6411,12 @@ class SmartCppManifoldState {
     std::vector<double> rewards(max_steps, 0.0);
     std::size_t steps = 0;
     double last_score = 0.0;
+    std::size_t exact_checks = 0;
     require_status(smart_manifold_state_greedy_axis_refine_segment(
                        ptr_, num_action_scale_, action_unit_, cover_penalty,
                        pen_rate, max_steps, action_scales_.data(),
                        raw_actions.data(), rewards.data(), &steps,
-                       &last_score),
+                       &last_score, &exact_checks),
                    "Manifold state native greedy segment failed");
     raw_actions.resize(steps);
     rewards.resize(steps);
@@ -5355,7 +6428,8 @@ class SmartCppManifoldState {
       }
       actions.push_back(static_cast<std::size_t>(action));
     }
-    return NativeGreedySegment{actions, rewards, rewards, {}, last_score};
+    return NativeGreedySegment{actions, rewards, rewards, {}, last_score,
+                               exact_checks};
   }
 
  private:
@@ -5420,6 +6494,15 @@ class NativeSmartEngine {
     double volume = 0.0;
   };
 
+  struct ProxyAxisMetric {
+    std::size_t action = 0;
+    double reward = -std::numeric_limits<double>::infinity();
+    double coverage = 0.0;
+    double bvs = std::numeric_limits<double>::infinity();
+    double score = -std::numeric_limits<double>::infinity();
+    std::size_t proxy_rank = 0;
+  };
+
   NativeSmartEngine(const std::vector<std::vector<double>>& vertices,
                     const std::vector<std::vector<std::size_t>>& faces,
                     const std::vector<std::vector<std::size_t>>& voxels,
@@ -5456,6 +6539,7 @@ class NativeSmartEngine {
     }
     if (!centroids_.empty()) {
       check_row_width(centroids_, 3, "centroids");
+      flat_centroids_cache_ = flatten_double_rows(centroids_, 3, "centroids");
     }
     if (volume_sum_ <= 0.0) {
       throw std::runtime_error("NativeSmartEngine volume_sum must be positive");
@@ -5470,6 +6554,8 @@ class NativeSmartEngine {
     native_recenter_enabled_ =
         !vertices_.empty() && !voxels_.empty() && !centroids_.empty() &&
         voxels_.size() == centroids_.size();
+    centroid_extent_cache_ = centroid_extent();
+    weighted_pca_extent_cache_ = weighted_pca_extent();
     snapshot_best_from_state();
     stats_["engine_constructed"] = 1.0;
     stats_["cpp_native"] = 1.0;
@@ -5513,6 +6599,549 @@ class NativeSmartEngine {
     return out;
   }
 
+  std::vector<py::tuple> centroid_proxy_axis_metrics(
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count) const {
+    auto copied = state_->copy_bounds_rotations();
+    std::vector<py::tuple> rows = native_centroid_proxy_axis_metrics_py(
+        centroids_, tet_volumes_, copied.first, copied.second,
+        num_action_scale_, action_unit_, volume_sum_,
+        state_->last_bbox_score(), cover_penalty, pen_rate);
+    std::sort(rows.begin(), rows.end(), [](const py::tuple& lhs,
+                                           const py::tuple& rhs) {
+      const double left_reward = lhs[1].cast<double>();
+      const double right_reward = rhs[1].cast<double>();
+      if (left_reward != right_reward) {
+        return left_reward > right_reward;
+      }
+      return lhs[0].cast<std::size_t>() < rhs[0].cast<std::size_t>();
+    });
+    if (candidate_count > 0 && rows.size() > candidate_count) {
+      rows.resize(candidate_count);
+    }
+    return rows;
+  }
+
+  std::vector<py::tuple> rank_fast_policy_axis_metrics(
+      const NativeFastGeometryMlpPolicy& policy,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t turn) const {
+    auto copied = state_->copy_bounds_rotations();
+    return policy.rank_centroid_proxy_axis_metrics(
+        centroids_, tet_volumes_, copied.first, copied.second, category_, turn,
+        num_action_scale_, action_unit_, volume_sum_,
+        state_->last_bbox_score(), cover_penalty, pen_rate, state_->covered(),
+        state_->bvs(), candidate_count);
+  }
+
+  std::vector<py::tuple> rank_deepset_policy_axis_metrics(
+      const NativeDeepSetCandidateScorer& policy,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t turn,
+      std::size_t hist_bins = 3) const {
+    std::vector<ProxyAxisMetric> candidates =
+        rank_deepset_policy_axis_metrics_native(policy, cover_penalty, pen_rate,
+                                                candidate_count, turn,
+                                                hist_bins);
+    std::vector<py::tuple> out;
+    out.reserve(candidates.size());
+    for (const ProxyAxisMetric& row : candidates) {
+      out.push_back(py::make_tuple(row.action, row.reward, row.coverage,
+                                   row.bvs, row.score, row.proxy_rank));
+    }
+    return out;
+  }
+
+  std::vector<ProxyAxisMetric> rank_deepset_policy_axis_metrics_native(
+      const NativeDeepSetCandidateScorer& policy,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t turn,
+      std::size_t hist_bins = 3) const {
+    if (candidate_count == 0 || state_->num_boxes() == 0) {
+      return {};
+    }
+    auto copied = state_->copy_bounds_rotations();
+    std::vector<ProxyAxisMetric> candidates =
+        centroid_proxy_axis_metrics_raw(copied.first, copied.second,
+                                        cover_penalty, pen_rate);
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ProxyAxisMetric& lhs, const ProxyAxisMetric& rhs) {
+                if (lhs.reward != rhs.reward) {
+                  return lhs.reward > rhs.reward;
+                }
+                return lhs.action < rhs.action;
+              });
+    if (candidates.size() > candidate_count) {
+      candidates.resize(candidate_count);
+    }
+    if (candidates.empty()) {
+      return {};
+    }
+    for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+      candidates[rank].proxy_rank = rank;
+    }
+
+    std::vector<std::size_t> actions;
+    std::vector<double> proxy_rewards;
+    std::vector<double> coverage_after;
+    std::vector<double> coverage_delta;
+    std::vector<double> bvs_after;
+    std::vector<double> bvs_delta;
+    actions.reserve(candidates.size());
+    proxy_rewards.reserve(candidates.size());
+    coverage_after.reserve(candidates.size());
+    coverage_delta.reserve(candidates.size());
+    bvs_after.reserve(candidates.size());
+    bvs_delta.reserve(candidates.size());
+
+    const double current_coverage =
+        centroid_current_coverage(copied.first, copied.second);
+    const double current_bvs = state_->bvs();
+    for (const ProxyAxisMetric& candidate : candidates) {
+      actions.push_back(candidate.action);
+      proxy_rewards.push_back(candidate.reward);
+      coverage_after.push_back(candidate.coverage);
+      coverage_delta.push_back(candidate.coverage - current_coverage);
+      bvs_after.push_back(candidate.bvs);
+      bvs_delta.push_back(candidate.bvs - current_bvs);
+    }
+
+    std::vector<double> scores = policy.score_setaware_axis_candidates(
+        actions, proxy_rewards, coverage_after, coverage_delta, bvs_after,
+        bvs_delta, copied.first, category_, turn, num_action_scale_,
+        action_unit_, volume_sum_, current_coverage, current_bvs,
+        cached_centroid_extent(), cached_weighted_pca_extent(),
+        cached_volume_histogram(hist_bins));
+    if (scores.size() != candidates.size()) {
+      throw std::runtime_error("DeepSets scorer returned wrong score count");
+    }
+    for (std::size_t idx = 0; idx < candidates.size(); ++idx) {
+      candidates[idx].score = scores[idx];
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ProxyAxisMetric& lhs, const ProxyAxisMetric& rhs) {
+                if (lhs.score != rhs.score) {
+                  return lhs.score > rhs.score;
+                }
+                if (lhs.proxy_rank != rhs.proxy_rank) {
+                  return lhs.proxy_rank < rhs.proxy_rank;
+                }
+                return lhs.action < rhs.action;
+              });
+    return candidates;
+  }
+
+  double score_axis_action_reward(std::size_t action,
+                                  double cover_penalty,
+                                  double pen_rate) const {
+    return state_->score_axis_action_reward(
+        static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+  }
+
+  py::tuple apply_axis_action_delta(std::size_t action,
+                                    double cover_penalty,
+                                    double pen_rate) {
+    SmartCppManifoldState::NativeAxisApply applied =
+        state_->apply_axis_action_delta_native(
+            static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+    if (state_->last_bbox_score() >= best_score_) {
+      snapshot_best_from_state();
+    }
+    return py::make_tuple(applied.reward, applied.bbox_idx,
+                          applied.last_score);
+  }
+
+  py::dict run_fast_policy_refine(
+      const NativeFastGeometryMlpPolicy& policy,
+      std::size_t max_steps,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t multibox_min_boxes,
+      std::size_t multibox_budget,
+      std::size_t fallback_budget,
+      double tie_eps,
+      const std::string& tie_break) {
+    py::dict out;
+    py::list actions;
+    std::size_t exact_checks = 0;
+    std::size_t exact_errors = 0;
+    double total_reward = 0.0;
+    for (std::size_t turn = 0; turn < max_steps; ++turn) {
+      std::vector<py::tuple> ranked = rank_fast_policy_axis_metrics(
+          policy, cover_penalty, pen_rate, candidate_count, turn);
+      if (ranked.empty()) {
+        break;
+      }
+      const std::size_t budget =
+          state_->num_boxes() >= multibox_min_boxes ? multibox_budget
+                                                     : fallback_budget;
+      const std::size_t limit = std::max<std::size_t>(
+          1, std::min<std::size_t>(budget, ranked.size()));
+      std::size_t best_action = 0;
+      std::size_t best_proxy_rank = std::numeric_limits<std::size_t>::max();
+      bool has_best = false;
+      double best_reward = -std::numeric_limits<double>::infinity();
+      for (std::size_t idx = 0; idx < limit; ++idx) {
+        const py::tuple row = ranked[idx];
+        const std::size_t action = row[0].cast<std::size_t>();
+        const std::size_t proxy_rank = row[5].cast<std::size_t>();
+        double reward = -std::numeric_limits<double>::infinity();
+        try {
+          reward = state_->score_axis_action_reward(
+              static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+        } catch (const std::runtime_error&) {
+          ++exact_errors;
+          continue;
+        }
+        ++exact_checks;
+        if (!has_best || reward > best_reward + tie_eps) {
+          has_best = true;
+          best_reward = reward;
+          best_action = action;
+          best_proxy_rank = proxy_rank;
+        } else if (std::abs(reward - best_reward) <= tie_eps && has_best) {
+          const bool proxy_tie =
+              tie_break == "proxy_order" && proxy_rank < best_proxy_rank;
+          const bool action_tie =
+              tie_break == "action_id" && action < best_action;
+          if (proxy_tie || action_tie) {
+            best_reward = reward;
+            best_action = action;
+            best_proxy_rank = proxy_rank;
+          }
+        }
+      }
+      if (!has_best) {
+        break;
+      }
+      SmartCppManifoldState::NativeAxisApply applied =
+          state_->apply_axis_action_delta_native(
+              static_cast<std::intptr_t>(best_action), cover_penalty,
+              pen_rate);
+      if (state_->last_bbox_score() >= best_score_) {
+        snapshot_best_from_state();
+      }
+      total_reward += applied.reward;
+      py::dict rec;
+      rec["turn"] = py::int_(turn);
+      rec["action"] = py::int_(best_action);
+      rec["budget"] = py::int_(limit);
+      rec["exact_checked"] = py::int_(exact_checks);
+      rec["selected_exact_reward"] = py::float_(best_reward);
+      rec["applied_reward"] = py::float_(applied.reward);
+      rec["last_bbox_score"] = py::float_(applied.last_score);
+      actions.append(rec);
+      if (!std::isfinite(applied.reward) || applied.reward <= 0.0) {
+        break;
+      }
+    }
+    stats_["native_fast_policy_refine_runs"] += 1.0;
+    stats_["native_fast_policy_refine_steps"] +=
+        static_cast<double>(py::len(actions));
+    stats_["native_fast_policy_refine_exact_checks"] +=
+        static_cast<double>(exact_checks);
+    stats_["native_fast_policy_refine_exact_errors"] +=
+        static_cast<double>(exact_errors);
+    out["actions"] = actions;
+    out["exact_checks"] = py::int_(exact_checks);
+    out["exact_errors"] = py::int_(exact_errors);
+    out["total_reward"] = py::float_(total_reward);
+    out["last_bbox_score"] = py::float_(state_->last_bbox_score());
+    out["best_bbox_score"] = py::float_(best_score_);
+    return out;
+  }
+
+  py::dict run_deepset_policy_refine(
+      const NativeDeepSetCandidateScorer& policy,
+      std::size_t max_steps,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t multibox_min_boxes,
+      std::size_t multibox_budget,
+      std::size_t fallback_budget,
+      double tie_eps,
+      const std::string& tie_break,
+      std::size_t hist_bins = 3,
+      std::size_t adaptive_high_budget = 0,
+      double adaptive_margin_threshold =
+          -std::numeric_limits<double>::infinity(),
+      std::size_t adaptive_margin_rank = 8,
+      std::size_t small_pool_exact_threshold = 0,
+      std::size_t nonfinite_proxy_rescue_budget = 0,
+      std::size_t proxy_rescue_budget = 0) {
+    py::dict out;
+    py::list actions;
+    std::size_t exact_checks = 0;
+    std::size_t exact_errors = 0;
+    std::size_t adaptive_high_budget_uses = 0;
+    std::size_t small_pool_exact_uses = 0;
+    std::size_t nonfinite_proxy_rescue_checks = 0;
+    std::size_t proxy_rescue_checks = 0;
+    double total_reward = 0.0;
+    for (std::size_t turn = 0; turn < max_steps; ++turn) {
+      bool used_small_pool_exact = false;
+      bool used_precomputed_ranked = false;
+      std::vector<ProxyAxisMetric> ranked;
+      if (small_pool_exact_threshold > 0) {
+        auto copied = state_->copy_bounds_rotations();
+        std::vector<ProxyAxisMetric> candidates =
+            centroid_proxy_axis_metrics_raw(copied.first, copied.second,
+                                            cover_penalty, pen_rate);
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const ProxyAxisMetric& lhs,
+                     const ProxyAxisMetric& rhs) {
+                    if (lhs.reward != rhs.reward) {
+                      return lhs.reward > rhs.reward;
+                    }
+                    return lhs.action < rhs.action;
+                  });
+        if (candidate_count > 0 && candidates.size() > candidate_count) {
+          candidates.resize(candidate_count);
+        }
+        for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+          candidates[rank].proxy_rank = rank;
+        }
+        if (!candidates.empty() &&
+            candidates.size() <= small_pool_exact_threshold) {
+          for (ProxyAxisMetric& row : candidates) {
+            row.score = row.reward;
+          }
+          ranked = std::move(candidates);
+          used_small_pool_exact = true;
+          used_precomputed_ranked = true;
+          ++small_pool_exact_uses;
+        } else if (!candidates.empty()) {
+          const double current_coverage =
+              centroid_current_coverage(copied.first, copied.second);
+          const double current_bvs = state_->bvs();
+          std::vector<std::size_t> actions;
+          std::vector<double> proxy_rewards;
+          std::vector<double> coverage_after;
+          std::vector<double> coverage_delta;
+          std::vector<double> bvs_after;
+          std::vector<double> bvs_delta;
+          actions.reserve(candidates.size());
+          proxy_rewards.reserve(candidates.size());
+          coverage_after.reserve(candidates.size());
+          coverage_delta.reserve(candidates.size());
+          bvs_after.reserve(candidates.size());
+          bvs_delta.reserve(candidates.size());
+          for (const ProxyAxisMetric& candidate : candidates) {
+            actions.push_back(candidate.action);
+            proxy_rewards.push_back(candidate.reward);
+            coverage_after.push_back(candidate.coverage);
+            coverage_delta.push_back(candidate.coverage - current_coverage);
+            bvs_after.push_back(candidate.bvs);
+            bvs_delta.push_back(candidate.bvs - current_bvs);
+          }
+          std::vector<double> scores = policy.score_setaware_axis_candidates(
+              actions, proxy_rewards, coverage_after, coverage_delta,
+              bvs_after, bvs_delta, copied.first, category_, turn,
+              num_action_scale_, action_unit_, volume_sum_, current_coverage,
+              current_bvs, cached_centroid_extent(),
+              cached_weighted_pca_extent(),
+              cached_volume_histogram(hist_bins));
+          if (scores.size() != candidates.size()) {
+            throw std::runtime_error(
+                "DeepSets scorer returned wrong score count");
+          }
+          for (std::size_t idx = 0; idx < candidates.size(); ++idx) {
+            candidates[idx].score = scores[idx];
+          }
+          std::sort(candidates.begin(), candidates.end(),
+                    [](const ProxyAxisMetric& lhs,
+                       const ProxyAxisMetric& rhs) {
+                      if (lhs.score != rhs.score) {
+                        return lhs.score > rhs.score;
+                      }
+                      if (lhs.proxy_rank != rhs.proxy_rank) {
+                        return lhs.proxy_rank < rhs.proxy_rank;
+                      }
+                      return lhs.action < rhs.action;
+                    });
+          ranked = std::move(candidates);
+          used_precomputed_ranked = true;
+        }
+      }
+      if (!used_precomputed_ranked) {
+        ranked = rank_deepset_policy_axis_metrics_native(
+            policy, cover_penalty, pen_rate, candidate_count, turn, hist_bins);
+      }
+      if (ranked.empty()) {
+        break;
+      }
+      const std::size_t budget =
+          state_->num_boxes() >= multibox_min_boxes ? multibox_budget
+                                                     : fallback_budget;
+      std::size_t effective_budget = budget;
+      double model_margin = std::numeric_limits<double>::infinity();
+      if (!used_small_pool_exact && adaptive_high_budget > effective_budget &&
+          std::isfinite(adaptive_margin_threshold) && ranked.size() > 1) {
+        const std::size_t rank_idx = std::min<std::size_t>(
+            ranked.size() - 1, std::max<std::size_t>(1, adaptive_margin_rank) - 1);
+        const double top_score = ranked[0].score;
+        const double rank_score = ranked[rank_idx].score;
+        model_margin = top_score - rank_score;
+        if (model_margin <= adaptive_margin_threshold) {
+          effective_budget = adaptive_high_budget;
+          ++adaptive_high_budget_uses;
+        }
+      }
+      const std::size_t limit = std::max<std::size_t>(
+          1, std::min<std::size_t>(
+                 used_small_pool_exact ? ranked.size() : effective_budget,
+                 ranked.size()));
+      std::vector<std::size_t> selected_indices;
+      selected_indices.reserve(limit + nonfinite_proxy_rescue_budget);
+      std::vector<std::uint8_t> selected_mask(ranked.size(), 0);
+      for (std::size_t idx = 0; idx < limit; ++idx) {
+        selected_indices.push_back(idx);
+        selected_mask[idx] = 1;
+      }
+      if (!used_small_pool_exact && nonfinite_proxy_rescue_budget > 0 &&
+          limit < ranked.size()) {
+        std::vector<std::pair<std::size_t, std::size_t>> rescue;
+        for (std::size_t idx = limit; idx < ranked.size(); ++idx) {
+          const double proxy_reward = ranked[idx].reward;
+          if (!std::isfinite(proxy_reward)) {
+            rescue.emplace_back(ranked[idx].proxy_rank, idx);
+          }
+        }
+        std::sort(rescue.begin(), rescue.end());
+        const std::size_t n_rescue =
+            std::min<std::size_t>(nonfinite_proxy_rescue_budget,
+                                  rescue.size());
+        for (std::size_t idx = 0; idx < n_rescue; ++idx) {
+          const std::size_t selected_idx = rescue[idx].second;
+          if (selected_mask[selected_idx] == 0) {
+            selected_indices.push_back(selected_idx);
+            selected_mask[selected_idx] = 1;
+          }
+        }
+        nonfinite_proxy_rescue_checks += n_rescue;
+      }
+      if (!used_small_pool_exact && proxy_rescue_budget > 0 &&
+          selected_indices.size() < ranked.size()) {
+        std::vector<std::pair<std::size_t, std::size_t>> rescue;
+        rescue.reserve(ranked.size());
+        for (std::size_t idx = 0; idx < ranked.size(); ++idx) {
+          if (selected_mask[idx] != 0) {
+            continue;
+          }
+          rescue.emplace_back(ranked[idx].proxy_rank, idx);
+        }
+        std::sort(rescue.begin(), rescue.end());
+        const std::size_t n_rescue =
+            std::min<std::size_t>(proxy_rescue_budget, rescue.size());
+        for (std::size_t idx = 0; idx < n_rescue; ++idx) {
+          const std::size_t selected_idx = rescue[idx].second;
+          selected_indices.push_back(selected_idx);
+          selected_mask[selected_idx] = 1;
+        }
+        proxy_rescue_checks += n_rescue;
+      }
+      std::size_t best_action = 0;
+      std::size_t best_proxy_rank = std::numeric_limits<std::size_t>::max();
+      bool has_best = false;
+      double best_reward = -std::numeric_limits<double>::infinity();
+      for (std::size_t selected_idx : selected_indices) {
+        if (selected_idx >= ranked.size()) {
+          continue;
+        }
+        const ProxyAxisMetric& row = ranked[selected_idx];
+        const std::size_t action = row.action;
+        const std::size_t proxy_rank = row.proxy_rank;
+        double reward = -std::numeric_limits<double>::infinity();
+        try {
+          reward = state_->score_axis_action_reward(
+              static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+        } catch (const std::runtime_error&) {
+          ++exact_errors;
+          continue;
+        }
+        ++exact_checks;
+        if (!has_best || reward > best_reward + tie_eps) {
+          has_best = true;
+          best_reward = reward;
+          best_action = action;
+          best_proxy_rank = proxy_rank;
+        } else if (std::abs(reward - best_reward) <= tie_eps && has_best) {
+          const bool proxy_tie =
+              tie_break == "proxy_order" && proxy_rank < best_proxy_rank;
+          const bool action_tie =
+              tie_break == "action_id" && action < best_action;
+          if (proxy_tie || action_tie) {
+            best_reward = reward;
+            best_action = action;
+            best_proxy_rank = proxy_rank;
+          }
+        }
+      }
+      if (!has_best) {
+        break;
+      }
+      SmartCppManifoldState::NativeAxisApply applied =
+          state_->apply_axis_action_delta_native(
+              static_cast<std::intptr_t>(best_action), cover_penalty,
+              pen_rate);
+      if (state_->last_bbox_score() >= best_score_) {
+        snapshot_best_from_state();
+      }
+      total_reward += applied.reward;
+      py::dict rec;
+      rec["turn"] = py::int_(turn);
+      rec["action"] = py::int_(best_action);
+      rec["budget"] = py::int_(limit);
+      rec["effective_checked"] = py::int_(selected_indices.size());
+      rec["model_margin"] = py::float_(model_margin);
+      rec["used_small_pool_exact"] = py::bool_(used_small_pool_exact);
+      rec["exact_checked"] = py::int_(exact_checks);
+      rec["selected_exact_reward"] = py::float_(best_reward);
+      rec["applied_reward"] = py::float_(applied.reward);
+      rec["last_bbox_score"] = py::float_(applied.last_score);
+      actions.append(rec);
+      if (!std::isfinite(applied.reward) || applied.reward <= 0.0) {
+        break;
+      }
+    }
+    stats_["native_deepset_policy_refine_runs"] += 1.0;
+    stats_["native_deepset_policy_refine_steps"] +=
+        static_cast<double>(py::len(actions));
+    stats_["native_deepset_policy_refine_exact_checks"] +=
+        static_cast<double>(exact_checks);
+    stats_["native_deepset_policy_refine_exact_errors"] +=
+        static_cast<double>(exact_errors);
+    stats_["native_deepset_policy_refine_adaptive_high_budget_uses"] +=
+        static_cast<double>(adaptive_high_budget_uses);
+    stats_["native_deepset_policy_refine_small_pool_exact_uses"] +=
+        static_cast<double>(small_pool_exact_uses);
+    stats_["native_deepset_policy_refine_nonfinite_proxy_rescue_checks"] +=
+        static_cast<double>(nonfinite_proxy_rescue_checks);
+    stats_["native_deepset_policy_refine_proxy_rescue_checks"] +=
+        static_cast<double>(proxy_rescue_checks);
+    out["actions"] = actions;
+    out["exact_checks"] = py::int_(exact_checks);
+    out["exact_errors"] = py::int_(exact_errors);
+    out["adaptive_high_budget_uses"] = py::int_(adaptive_high_budget_uses);
+    out["small_pool_exact_uses"] = py::int_(small_pool_exact_uses);
+    out["nonfinite_proxy_rescue_checks"] =
+        py::int_(nonfinite_proxy_rescue_checks);
+    out["proxy_rescue_checks"] = py::int_(proxy_rescue_checks);
+    out["total_reward"] = py::float_(total_reward);
+    out["last_bbox_score"] = py::float_(state_->last_bbox_score());
+    out["best_bbox_score"] = py::float_(best_score_);
+    return out;
+  }
+
   py::dict run_refine(std::size_t max_steps,
                       double cover_penalty,
                       double pen_rate) {
@@ -5520,6 +7149,7 @@ class NativeSmartEngine {
     std::vector<std::size_t> actions;
     std::vector<double> rewards;
     double score = state_->last_bbox_score();
+    std::size_t exact_checks = 0;
     if (native_recenter_enabled_) {
       for (std::size_t step = 0; step < max_steps; ++step) {
         const std::size_t n_boxes = state_->num_boxes();
@@ -5529,6 +7159,7 @@ class NativeSmartEngine {
         SmartCppManifoldState::NativeBestAxisBatch axis_batch =
             state_->best_axis_actions_native(bbox_mask, cover_penalty,
                                              pen_rate, initial_best);
+        exact_checks += axis_batch.exact_checks;
         std::intptr_t best_action = -1;
         double best_reward = initial_best;
         for (std::size_t idx = 0; idx < axis_batch.actions.size(); ++idx) {
@@ -5546,6 +7177,7 @@ class NativeSmartEngine {
           const double candidate_score = state_->score_replacement(
               bbox_idx, candidate.bounds, candidate.rotation,
               cover_penalty, pen_rate);
+          ++exact_checks;
           const double reward = candidate_score - state_->last_bbox_score();
           if (reward > best_reward) {
             best_reward = reward;
@@ -5574,6 +7206,7 @@ class NativeSmartEngine {
       actions = result.actions;
       rewards = result.applied_rewards;
       score = result.last_score;
+      exact_checks = result.exact_checks;
       stats_["native_refine_recenter_enabled"] = 0.0;
     }
     if (score >= best_score_) {
@@ -5582,8 +7215,11 @@ class NativeSmartEngine {
     stats_["native_refine_runs"] += 1.0;
     stats_["native_refine_steps"] += static_cast<double>(actions.size());
     stats_["native_refine_axis_only"] = native_recenter_enabled_ ? 0.0 : 1.0;
+    stats_["native_refine_exact_checks"] +=
+        static_cast<double>(exact_checks);
     out["actions"] = py::cast(actions);
     out["rewards"] = py::cast(rewards);
+    out["exact_checks"] = py::int_(exact_checks);
     out["last_bbox_score"] = py::float_(state_->last_bbox_score());
     out["best_bbox_score"] = py::float_(best_score_);
     out["axis_only"] = py::bool_(!native_recenter_enabled_);
@@ -7300,6 +8936,269 @@ class NativeSmartEngine {
     return total;
   }
 
+  std::vector<ProxyAxisMetric> centroid_proxy_axis_metrics_raw(
+      const std::vector<std::vector<double>>& bounds,
+      const std::vector<std::vector<double>>& rotations,
+      double cover_penalty,
+      double pen_rate) const {
+    if (centroids_.size() != tet_volumes_.size()) {
+      throw std::runtime_error("centroids and volumes must have same length");
+    }
+    if (bounds.size() != rotations.size()) {
+      throw std::runtime_error("bounds and rotations must have same length");
+    }
+    if (bounds.empty()) {
+      return {};
+    }
+    std::vector<double> flat_bounds = flatten_double_rows(bounds, 6, "bounds");
+    std::vector<double> flat_rotations =
+        flatten_double_rows(rotations, 9, "rotations");
+    const std::size_t n_actions =
+        smart_native_action_count(bounds.size(), num_action_scale_);
+    std::vector<std::size_t> actions(n_actions, 0);
+    std::vector<double> rewards(n_actions, 0.0);
+    std::vector<double> coverage(n_actions, 0.0);
+    std::vector<double> bvs(n_actions, 0.0);
+    std::size_t n_rewards = 0;
+    require_status(
+        smart_native_centroid_proxy_axis_metrics(
+            flat_centroids_cache_.data(), tet_volumes_.data(), centroids_.size(),
+            flat_bounds.data(), flat_rotations.data(), bounds.size(),
+            num_action_scale_, action_unit_, volume_sum_,
+            state_->last_bbox_score(), cover_penalty, pen_rate,
+            actions.data(), rewards.data(), coverage.data(), bvs.data(),
+            &n_rewards),
+        "native centroid-proxy action metric calculation failed");
+    std::vector<ProxyAxisMetric> out;
+    out.reserve(n_rewards);
+    for (std::size_t idx = 0; idx < n_rewards; ++idx) {
+      out.push_back(ProxyAxisMetric{actions[idx], rewards[idx], coverage[idx],
+                                    bvs[idx],
+                                    -std::numeric_limits<double>::infinity(),
+                                    0});
+    }
+    return out;
+  }
+
+  std::vector<double> centroid_extent() const {
+    if (centroids_.empty()) {
+      return {0.0, 0.0, 0.0};
+    }
+    std::array<double, 3> minv = {
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity()};
+    std::array<double, 3> maxv = {
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()};
+    for (const auto& point : centroids_) {
+      if (!finite_point3(point)) continue;
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        minv[axis] = std::min(minv[axis], point[axis]);
+        maxv[axis] = std::max(maxv[axis], point[axis]);
+      }
+    }
+    std::vector<double> out(3, 0.0);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      out[axis] = std::isfinite(minv[axis]) && std::isfinite(maxv[axis])
+                      ? std::max(0.0, maxv[axis] - minv[axis])
+                      : 0.0;
+    }
+    return out;
+  }
+
+  static std::vector<double> symmetric_eigenvalues_desc3(
+      double c00,
+      double c01,
+      double c02,
+      double c11,
+      double c12,
+      double c22) {
+    constexpr double kPi = 3.141592653589793238462643383279502884;
+    const double p1 = c01 * c01 + c02 * c02 + c12 * c12;
+    if (p1 <= 1.0e-30) {
+      std::vector<double> vals = {c00, c11, c22};
+      std::sort(vals.begin(), vals.end(), std::greater<double>());
+      return vals;
+    }
+    const double q = (c00 + c11 + c22) / 3.0;
+    const double a00 = c00 - q;
+    const double a11 = c11 - q;
+    const double a22 = c22 - q;
+    const double p2 = a00 * a00 + a11 * a11 + a22 * a22 + 2.0 * p1;
+    const double p = std::sqrt(std::max(0.0, p2 / 6.0));
+    if (p <= 1.0e-30) {
+      return {q, q, q};
+    }
+    const double b00 = a00 / p;
+    const double b01 = c01 / p;
+    const double b02 = c02 / p;
+    const double b11 = a11 / p;
+    const double b12 = c12 / p;
+    const double b22 = a22 / p;
+    const double det =
+        b00 * (b11 * b22 - b12 * b12) -
+        b01 * (b01 * b22 - b12 * b02) +
+        b02 * (b01 * b12 - b11 * b02);
+    const double r = std::max(-1.0, std::min(1.0, det / 2.0));
+    const double phi = std::acos(r) / 3.0;
+    const double eig1 = q + 2.0 * p * std::cos(phi);
+    const double eig3 = q + 2.0 * p * std::cos(phi + 2.0 * kPi / 3.0);
+    const double eig2 = 3.0 * q - eig1 - eig3;
+    std::vector<double> vals = {eig1, eig2, eig3};
+    std::sort(vals.begin(), vals.end(), std::greater<double>());
+    return vals;
+  }
+
+  std::vector<double> weighted_pca_extent() const {
+    if (centroids_.size() < 3 || centroids_.size() != tet_volumes_.size()) {
+      return {0.0, 0.0, 0.0};
+    }
+    double total = 0.0;
+    std::array<double, 3> mean = {0.0, 0.0, 0.0};
+    for (std::size_t idx = 0; idx < centroids_.size(); ++idx) {
+      const double weight = std::isfinite(tet_volumes_[idx])
+                                ? std::max(0.0, tet_volumes_[idx])
+                                : 0.0;
+      if (weight <= 0.0 || !finite_point3(centroids_[idx])) continue;
+      total += weight;
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        mean[axis] += centroids_[idx][axis] * weight;
+      }
+    }
+    if (total <= 0.0) {
+      return {0.0, 0.0, 0.0};
+    }
+    for (double& value : mean) value /= total;
+
+    double c00 = 0.0;
+    double c01 = 0.0;
+    double c02 = 0.0;
+    double c11 = 0.0;
+    double c12 = 0.0;
+    double c22 = 0.0;
+    for (std::size_t idx = 0; idx < centroids_.size(); ++idx) {
+      const double weight = std::isfinite(tet_volumes_[idx])
+                                ? std::max(0.0, tet_volumes_[idx])
+                                : 0.0;
+      if (weight <= 0.0 || !finite_point3(centroids_[idx])) continue;
+      const double x = centroids_[idx][0] - mean[0];
+      const double y = centroids_[idx][1] - mean[1];
+      const double z = centroids_[idx][2] - mean[2];
+      c00 += weight * x * x;
+      c01 += weight * x * y;
+      c02 += weight * x * z;
+      c11 += weight * y * y;
+      c12 += weight * y * z;
+      c22 += weight * z * z;
+    }
+    c00 /= total;
+    c01 /= total;
+    c02 /= total;
+    c11 /= total;
+    c12 /= total;
+    c22 /= total;
+    std::vector<double> vals =
+        symmetric_eigenvalues_desc3(c00, c01, c02, c11, c12, c22);
+    for (double& value : vals) {
+      value = std::sqrt(std::max(0.0, value));
+    }
+    return vals;
+  }
+
+  std::vector<double> volume_histogram(std::size_t bins) const {
+    if (bins == 0 || centroids_.empty() || centroids_.size() != tet_volumes_.size()) {
+      return {};
+    }
+    const std::vector<double> extent = centroid_extent();
+    std::array<double, 3> minv = {
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity()};
+    for (const auto& point : centroids_) {
+      if (!finite_point3(point)) continue;
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        minv[axis] = std::min(minv[axis], point[axis]);
+      }
+    }
+    std::vector<double> hist(bins * bins * bins, 0.0);
+    double total = 0.0;
+    for (std::size_t idx = 0; idx < centroids_.size(); ++idx) {
+      if (!finite_point3(centroids_[idx])) continue;
+      const double weight = std::isfinite(tet_volumes_[idx])
+                                ? std::max(0.0, tet_volumes_[idx])
+                                : 0.0;
+      if (weight <= 0.0) continue;
+      std::size_t coords[3] = {0, 0, 0};
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        const double denom = std::max(extent[axis], 1.0e-12);
+        const double scaled =
+            (centroids_[idx][axis] - minv[axis]) / denom *
+            static_cast<double>(bins);
+        long coord = static_cast<long>(std::floor(scaled));
+        coord = std::max<long>(0, std::min<long>(coord, static_cast<long>(bins) - 1));
+        coords[axis] = static_cast<std::size_t>(coord);
+      }
+      const std::size_t flat = (coords[0] * bins + coords[1]) * bins + coords[2];
+      hist[flat] += weight;
+      total += weight;
+    }
+    if (total > 0.0) {
+      for (double& value : hist) value /= total;
+    }
+    return hist;
+  }
+
+  const std::vector<double>& cached_centroid_extent() const {
+    return centroid_extent_cache_;
+  }
+
+  const std::vector<double>& cached_weighted_pca_extent() const {
+    return weighted_pca_extent_cache_;
+  }
+
+  const std::vector<double>& cached_volume_histogram(std::size_t bins) const {
+    bins = std::max<std::size_t>(1, bins);
+    auto found = volume_histogram_cache_.find(bins);
+    if (found != volume_histogram_cache_.end()) {
+      return found->second;
+    }
+    auto inserted =
+        volume_histogram_cache_.emplace(bins, volume_histogram(bins));
+    return inserted.first->second;
+  }
+
+  double centroid_current_coverage(
+      const std::vector<std::vector<double>>& bounds,
+      const std::vector<std::vector<double>>& rotations) const {
+    if (centroids_.empty() || centroids_.size() != tet_volumes_.size() ||
+        bounds.empty()) {
+      return 0.0;
+    }
+    double covered_volume = 0.0;
+    for (std::size_t point_idx = 0; point_idx < centroids_.size(); ++point_idx) {
+      if (!finite_point3(centroids_[point_idx])) continue;
+      bool covered = false;
+      for (std::size_t bbox_idx = 0; bbox_idx < bounds.size(); ++bbox_idx) {
+        if (bbox_idx >= rotations.size() || bounds[bbox_idx].size() != 6 ||
+            rotations[bbox_idx].size() != 9) {
+          continue;
+        }
+        if (point_in_oriented_bounds_cpp(centroids_[point_idx],
+                                         bounds[bbox_idx],
+                                         rotations[bbox_idx])) {
+          covered = true;
+          break;
+        }
+      }
+      if (covered && std::isfinite(tet_volumes_[point_idx])) {
+        covered_volume += std::max(0.0, tet_volumes_[point_idx]);
+      }
+    }
+    return covered_volume / std::max(volume_sum_, 1.0e-12);
+  }
+
   std::size_t choose_mcts_root_action(
       const std::vector<std::size_t>& actions,
       const std::vector<std::size_t>& visits,
@@ -7373,6 +9272,11 @@ class NativeSmartEngine {
   std::vector<std::vector<double>> best_bounds_;
   std::vector<std::vector<double>> best_rotations_;
   double best_score_ = -std::numeric_limits<double>::infinity();
+  std::vector<double> centroid_extent_cache_;
+  std::vector<double> weighted_pca_extent_cache_;
+  std::vector<double> flat_centroids_cache_;
+  mutable std::unordered_map<std::size_t, std::vector<double>>
+      volume_histogram_cache_;
   std::unordered_map<std::string, double> stats_;
 };
 
@@ -7527,6 +9431,8 @@ PYBIND11_MODULE(_cpp, module) {
   module.def("native_save_gmsh", &native_save_gmsh_py);
   module.def("native_centroid_proxy_axis_rewards",
              &native_centroid_proxy_axis_rewards_py);
+  module.def("native_centroid_proxy_axis_metrics",
+             &native_centroid_proxy_axis_metrics_py);
   module.def("native_partition_summaries", &native_partition_summaries_py,
              py::arg("vertices"), py::arg("voxels"), py::arg("volumes"),
              py::arg("partitions"), py::arg("unique_points") = false);
@@ -7558,6 +9464,42 @@ PYBIND11_MODULE(_cpp, module) {
       .def("feature_dim", &SmartCppActionMlpPolicy::feature_dim)
       .def("hidden_size", &SmartCppActionMlpPolicy::hidden_size)
       .def("has_value_head", &SmartCppActionMlpPolicy::has_value_head);
+
+  py::class_<NativeFastGeometryMlpPolicy>(module, "NativeFastGeometryMlpPolicy")
+      .def(py::init<const std::vector<double>&, const std::vector<double>&,
+                    const std::vector<std::vector<std::vector<double>>>&,
+                    const std::vector<std::vector<double>>&>(),
+           py::arg("mean"), py::arg("std"), py::arg("weights"),
+           py::arg("biases"))
+      .def("rank_centroid_proxy_axis_metrics",
+           &NativeFastGeometryMlpPolicy::rank_centroid_proxy_axis_metrics,
+           py::arg("centroids"), py::arg("volumes"), py::arg("bounds"),
+           py::arg("rotations"), py::arg("category"), py::arg("turn"),
+           py::arg("num_action_scale"), py::arg("action_unit"),
+           py::arg("volume_sum"), py::arg("last_bbox_score"),
+           py::arg("cover_penalty"), py::arg("pen_rate"),
+           py::arg("covered_before"), py::arg("bvs_before"),
+           py::arg("candidate_count"));
+
+  py::class_<NativeDeepSetCandidateScorer>(module, "NativeDeepSetCandidateScorer")
+      .def(py::init<const std::string&>(), py::arg("weights_path"))
+      .def("score_rows", &NativeDeepSetCandidateScorer::score_rows,
+           py::arg("rows"), py::arg("already_normalized") = false)
+      .def("score_rows_list", &NativeDeepSetCandidateScorer::score_rows_list,
+           py::arg("rows"), py::arg("already_normalized") = false)
+      .def("score_setaware_axis_candidates",
+           &NativeDeepSetCandidateScorer::score_setaware_axis_candidates,
+           py::arg("actions"), py::arg("proxy_rewards"),
+           py::arg("coverage_after"), py::arg("coverage_delta"),
+           py::arg("bvs_after"), py::arg("bvs_delta"), py::arg("bounds"),
+           py::arg("category"), py::arg("turn"), py::arg("num_action_scale"),
+           py::arg("action_unit"), py::arg("volume_sum"),
+           py::arg("current_coverage"), py::arg("current_bvs"),
+           py::arg("centroid_extent"), py::arg("pca_extent"),
+           py::arg("volume_histogram"))
+      .def("feature_schema", &NativeDeepSetCandidateScorer::feature_schema)
+      .def("dim", &NativeDeepSetCandidateScorer::dim)
+      .def("hidden", &NativeDeepSetCandidateScorer::hidden);
 
   py::class_<SmartCppBBoxState>(module, "BBoxState")
       .def(py::init<const std::vector<std::vector<double>>&, std::size_t,
@@ -7681,6 +9623,56 @@ PYBIND11_MODULE(_cpp, module) {
       .def("stats", &NativeSmartEngine::stats)
       .def("recompute_score", &NativeSmartEngine::recompute_score,
            py::arg("cover_penalty"), py::arg("pen_rate") = 1.0)
+      .def("centroid_proxy_axis_metrics",
+           &NativeSmartEngine::centroid_proxy_axis_metrics,
+           py::arg("cover_penalty"), py::arg("pen_rate") = 1.0,
+           py::arg("candidate_count") = 0)
+      .def("rank_fast_policy_axis_metrics",
+           &NativeSmartEngine::rank_fast_policy_axis_metrics,
+           py::arg("policy"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0, py::arg("candidate_count") = 0,
+           py::arg("turn") = 0)
+      .def("rank_deepset_policy_axis_metrics",
+           &NativeSmartEngine::rank_deepset_policy_axis_metrics,
+           py::arg("policy"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0, py::arg("candidate_count") = 80,
+           py::arg("turn") = 0, py::arg("hist_bins") = 3)
+      .def("score_axis_action_reward",
+           &NativeSmartEngine::score_axis_action_reward,
+           py::arg("action"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0)
+      .def("apply_axis_action_delta",
+           &NativeSmartEngine::apply_axis_action_delta,
+           py::arg("action"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0)
+      .def("run_fast_policy_refine",
+           &NativeSmartEngine::run_fast_policy_refine,
+           py::arg("policy"), py::arg("max_steps"),
+           py::arg("cover_penalty"), py::arg("pen_rate") = 1.0,
+           py::arg("candidate_count") = 20,
+           py::arg("multibox_min_boxes") = 2,
+           py::arg("multibox_budget") = 5,
+           py::arg("fallback_budget") = 20,
+           py::arg("tie_eps") = 0.0,
+           py::arg("tie_break") = "proxy_order")
+      .def("run_deepset_policy_refine",
+           &NativeSmartEngine::run_deepset_policy_refine,
+           py::arg("policy"), py::arg("max_steps"),
+           py::arg("cover_penalty"), py::arg("pen_rate") = 1.0,
+           py::arg("candidate_count") = 80,
+           py::arg("multibox_min_boxes") = 2,
+           py::arg("multibox_budget") = 8,
+           py::arg("fallback_budget") = 20,
+           py::arg("tie_eps") = 0.0,
+           py::arg("tie_break") = "proxy_order",
+           py::arg("hist_bins") = 3,
+           py::arg("adaptive_high_budget") = 0,
+           py::arg("adaptive_margin_threshold") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("adaptive_margin_rank") = 8,
+           py::arg("small_pool_exact_threshold") = 0,
+           py::arg("nonfinite_proxy_rescue_budget") = 0,
+           py::arg("proxy_rescue_budget") = 0)
       .def("run_refine", &NativeSmartEngine::run_refine,
            py::arg("max_steps"), py::arg("cover_penalty"),
            py::arg("pen_rate") = 1.0)

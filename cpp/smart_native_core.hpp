@@ -161,6 +161,25 @@ extern "C" int smart_native_centroid_proxy_axis_rewards(
     double* out_rewards,
     std::size_t* out_n_rewards);
 
+extern "C" int smart_native_centroid_proxy_axis_metrics(
+    const double* centroids,
+    const double* volumes,
+    std::size_t n_points,
+    const double* bounds,
+    const double* rotations,
+    std::size_t n_boxes,
+    std::size_t num_action_scale,
+    double action_unit,
+    double volume_sum,
+    double last_bbox_score,
+    double cover_penalty,
+    double pen_rate,
+    std::size_t* out_actions,
+    double* out_rewards,
+    double* out_coverage,
+    double* out_bvs,
+    std::size_t* out_n_rewards);
+
 extern "C" int smart_native_partition_summaries(
     const double* vertices,
     std::size_t n_vertices,

@@ -61,7 +61,8 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
     void* handle, std::size_t num_action_scale, double action_unit,
     double cover_penalty, double pen_rate, std::size_t max_steps,
     const double* action_scales, std::intptr_t* out_actions,
-    double* out_rewards, std::size_t* out_steps, double* out_last_score);
+    double* out_rewards, std::size_t* out_steps, double* out_last_score,
+    std::size_t* out_exact_checks);
 extern "C" int smart_manifold_state_greedy_axis_rollout_segment(
     void* handle, const std::uint8_t* bbox_mask,
     std::size_t num_action_scale, double action_unit, double cover_penalty,
@@ -1060,7 +1061,8 @@ void write_stats_file(const std::string& path,
          << "  \"transposition_hits\": " << result.transposition_hits << ",\n"
          << "  \"transposition_stores\": " << result.transposition_stores << ",\n"
          << "  \"recenter_applies\": " << result.recenter_applies << ",\n"
-         << "  \"recenter_invalid\": " << result.recenter_invalid << "\n"
+         << "  \"recenter_invalid\": " << result.recenter_invalid << ",\n"
+         << "  \"exact_checks\": " << result.exact_checks << "\n"
          << "}\n";
 }
 
@@ -1107,6 +1109,7 @@ void write_refine_mcts_stats_file(const std::string& path,
          << "  \"refine_output_path\": \"" << result.refine.output_path << "\",\n"
          << "  \"mcts_output_path\": \"" << result.mcts.output_path << "\",\n"
          << "  \"refine_steps\": " << result.refine.steps << ",\n"
+         << "  \"refine_exact_checks\": " << result.refine.exact_checks << ",\n"
          << "  \"mcts_iterations_run\": " << result.mcts.iterations_run << ",\n"
          << "  \"mcts_node_count\": " << result.mcts.node_count << ",\n"
          << "  \"mcts_best_reward\": " << result.mcts.best_reward << ",\n"
@@ -1598,6 +1601,7 @@ NativeSearchResult run_refine_files(const std::string& msh_path,
   double last_score = initial_score;
   std::size_t recenter_applies = 0;
   std::size_t recenter_invalid = 0;
+  std::size_t exact_checks = 0;
   if (config.native_recenter) {
     const std::vector<std::size_t> search_actions =
         all_search_actions(initial.bounds.size() / 6, config);
@@ -1608,10 +1612,12 @@ NativeSearchResult run_refine_files(const std::string& msh_path,
       for (std::size_t action : search_actions) {
         double reward = -std::numeric_limits<double>::infinity();
         if (is_recenter_action(action, config)) {
+          ++exact_checks;
           reward = score_recenter_action(state.get(), mesh, centroids, action,
                                          config, current_score,
                                          &recenter_invalid);
         } else {
+          ++exact_checks;
           const double score = smart_manifold_state_score_axis_action(
               state.get(), static_cast<std::intptr_t>(action),
               config.num_action_scale, config.action_unit,
@@ -1634,13 +1640,15 @@ NativeSearchResult run_refine_files(const std::string& msh_path,
       last_score = smart_manifold_state_last_bbox_score(state.get());
     }
   } else {
+    std::size_t segment_exact_checks = 0;
     if (!smart_manifold_state_greedy_axis_refine_segment(
             state.get(), config.num_action_scale, config.action_unit,
             config.cover_penalty, config.pen_rate, config.max_step,
             scales.data(), actions.data(), rewards.data(), &steps,
-            &last_score)) {
+            &last_score, &segment_exact_checks)) {
       throw std::runtime_error("native refine segment failed");
     }
+    exact_checks += segment_exact_checks;
   }
 
   BBoxParams final_params = copy_state(state.get());
@@ -1658,6 +1666,7 @@ NativeSearchResult run_refine_files(const std::string& msh_path,
   result.axis_only = !config.native_recenter;
   result.recenter_applies = recenter_applies;
   result.recenter_invalid = recenter_invalid;
+  result.exact_checks = exact_checks;
   result.elapsed_sec = std::chrono::duration<double>(ended - started).count();
   write_stats_file(path_join(output_dir, "native_stats.json"), result);
   return result;
@@ -1922,6 +1931,7 @@ NativeRefineMctsResult run_refine_mcts_files(
   double refine_last_score = refine_initial_score;
   std::size_t refine_recenter_applies = 0;
   std::size_t refine_recenter_invalid = 0;
+  std::size_t refine_exact_checks = 0;
   if (refine_config.native_recenter) {
     const std::vector<std::size_t> search_actions =
         all_search_actions(initial.bounds.size() / 6, refine_config);
@@ -1933,10 +1943,12 @@ NativeRefineMctsResult run_refine_mcts_files(
       for (std::size_t action : search_actions) {
         double reward = -std::numeric_limits<double>::infinity();
         if (is_recenter_action(action, refine_config)) {
+          ++refine_exact_checks;
           reward = score_recenter_action(
               state.get(), mesh, centroids, action, refine_config,
               current_score, &refine_recenter_invalid);
         } else {
+          ++refine_exact_checks;
           const double score = smart_manifold_state_score_axis_action(
               state.get(), static_cast<std::intptr_t>(action),
               refine_config.num_action_scale, refine_config.action_unit,
@@ -1960,14 +1972,17 @@ NativeRefineMctsResult run_refine_mcts_files(
       refine_last_score = smart_manifold_state_last_bbox_score(state.get());
     }
   } else {
+    std::size_t segment_exact_checks = 0;
     if (!smart_manifold_state_greedy_axis_refine_segment(
             state.get(), refine_config.num_action_scale,
             refine_config.action_unit, refine_config.cover_penalty,
             refine_config.pen_rate, refine_config.max_step,
             refine_scales.data(), refine_actions.data(),
-            refine_rewards.data(), &refine_steps, &refine_last_score)) {
+            refine_rewards.data(), &refine_steps, &refine_last_score,
+            &segment_exact_checks)) {
       throw std::runtime_error("native combined refine segment failed");
     }
+    refine_exact_checks += segment_exact_checks;
   }
   BBoxParams refined_params = copy_state(state.get());
   write_bbox_dir(refine_output_dir, refined_params);
@@ -1984,6 +1999,7 @@ NativeRefineMctsResult run_refine_mcts_files(
   refine_result.axis_only = !refine_config.native_recenter;
   refine_result.recenter_applies = refine_recenter_applies;
   refine_result.recenter_invalid = refine_recenter_invalid;
+  refine_result.exact_checks = refine_exact_checks;
   refine_result.elapsed_sec =
       std::chrono::duration<double>(refine_ended - refine_started).count();
   write_stats_file(path_join(refine_output_dir, "native_stats.json"),
@@ -2215,6 +2231,7 @@ std::string result_json(const NativeSearchResult& result) {
          << "\"axis_only\":" << (result.axis_only ? "true" : "false") << ",";
   if (result.command == "refine") {
     output << "\"steps\":" << result.steps << ","
+           << "\"exact_checks\":" << result.exact_checks << ","
            << "\"recenter_applies\":" << result.recenter_applies << ","
            << "\"recenter_invalid\":" << result.recenter_invalid << ",";
   } else if (result.command == "merge") {

@@ -1204,6 +1204,46 @@ def test_tetra_input_candidates_wait_for_failure_class_before_fill_holes(tmp_pat
     assert [candidate["name"] for candidate in candidates] == ["primary"]
 
 
+def test_tetra_input_repair_skips_component_split_unless_needed(tmp_path, monkeypatch) -> None:
+    from smart.pipeline.stages import _prepare_tetra_input_mesh
+
+    mesh_path = tmp_path / "mesh.obj"
+    mesh_path.write_text(
+        "\n".join(
+            [
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "f 1 2 3",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stage_cfg = load_config(None)["tetra"]
+    stage_cfg = {
+        **stage_cfg,
+        "input_repair": {
+            **stage_cfg["input_repair"],
+            "keep_largest_component": False,
+            "basic_cleanup": False,
+            "fix_normals": False,
+        },
+    }
+
+    def fail_split(*_args, **_kwargs):
+        raise AssertionError("component split should not run")
+
+    monkeypatch.setattr("smart.pipeline.stages._split_mesh_components", fail_split)
+
+    output, metadata = _prepare_tetra_input_mesh(mesh_path, tmp_path / "repaired.obj", stage_cfg)
+
+    assert output == tmp_path / "repaired.obj"
+    assert metadata["used"] is True
+    assert metadata["before"]["components"] is None
+    assert metadata["after"]["components"] is None
+
+
 def test_bbox_dir_prefers_success_manifest_output(tmp_path) -> None:
     category = {"name": "chair", "mesh_root": str(tmp_path / "meshes")}
     cfg = {"workspace": str(tmp_path), "normalization": {"enabled": False}}

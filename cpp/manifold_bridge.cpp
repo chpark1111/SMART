@@ -1103,11 +1103,13 @@ extern "C" int smart_manifold_state_best_axis_actions_for_mask(
     void* handle, const std::uint8_t* bbox_mask,
     std::size_t num_action_scale, double action_unit, double cover_penalty,
     double pen_rate, double initial_best, const double* action_scales,
-    std::intptr_t* out_actions, double* out_rewards) {
+    std::intptr_t* out_actions, double* out_rewards,
+    std::size_t* out_exact_checks) {
   try {
     auto* state = static_cast<SmartManifoldState*>(handle);
     const std::size_t n_boxes = state->bounds.size() / 6;
     const std::size_t actions_per_bbox = 6 * num_action_scale + 1;
+    std::size_t exact_checks = 0;
     for (std::size_t idx = 0; idx < n_boxes; ++idx) {
       out_actions[idx] = -1;
       out_rewards[idx] = initial_best;
@@ -1136,6 +1138,7 @@ extern "C" int smart_manifold_state_best_axis_actions_for_mask(
           if (upper_reward <= best_reward) {
             continue;
           }
+          ++exact_checks;
           const double score = state_score_axis_action(
               state, action, num_action_scale, action_unit, cover_penalty,
               pen_rate, action_scales);
@@ -1151,6 +1154,9 @@ extern "C" int smart_manifold_state_best_axis_actions_for_mask(
       }
       out_actions[idx] = best_action;
       out_rewards[idx] = best_reward;
+    }
+    if (out_exact_checks != nullptr) {
+      *out_exact_checks = exact_checks;
     }
     return 1;
   } catch (...) {
@@ -1216,7 +1222,8 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
     void* handle, std::size_t num_action_scale, double action_unit,
     double cover_penalty, double pen_rate, std::size_t max_steps,
     const double* action_scales, std::intptr_t* out_actions,
-    double* out_rewards, std::size_t* out_steps, double* out_last_score) {
+    double* out_rewards, std::size_t* out_steps, double* out_last_score,
+    std::size_t* out_exact_checks) {
   try {
     auto* state = static_cast<SmartManifoldState*>(handle);
     if (out_steps == nullptr || out_last_score == nullptr ||
@@ -1226,6 +1233,7 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
     }
 
     std::size_t steps = 0;
+    std::size_t exact_checks = 0;
     for (; steps < max_steps; ++steps) {
       const std::size_t n_boxes = state->bounds.size() / 6;
       const std::size_t actions_per_bbox = 6 * num_action_scale + 1;
@@ -1260,6 +1268,7 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
               continue;
             }
 
+            ++exact_checks;
             const double score = state_score_axis_action(
                 state, action, num_action_scale, action_unit, cover_penalty,
                 pen_rate, action_scales);
@@ -1290,6 +1299,9 @@ extern "C" int smart_manifold_state_greedy_axis_refine_segment(
 
     *out_steps = steps;
     *out_last_score = state->last_bbox_score;
+    if (out_exact_checks != nullptr) {
+      *out_exact_checks = exact_checks;
+    }
     return 1;
   } catch (...) {
     return 0;

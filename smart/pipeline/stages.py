@@ -766,17 +766,18 @@ def _prepare_tetra_input_mesh(source: Path, output: Path, stage_cfg: dict[str, A
         if not isinstance(mesh, trimesh.Trimesh):
             metadata["skipped_reason"] = f"unsupported mesh object: {type(mesh).__name__}"
             return source, metadata
-        components = _split_mesh_components(trimesh, mesh)
+        keep_largest_component = bool(repair_cfg.get("keep_largest_component", False))
+        components = _split_mesh_components(trimesh, mesh) if keep_largest_component else []
         metadata["before"] = {
             "vertices": int(len(mesh.vertices)),
             "faces": int(len(mesh.faces)),
             "watertight": bool(mesh.is_watertight),
-            "components": int(len(components)) if len(mesh.faces) else 0,
+            "components": int(len(components)) if keep_largest_component and len(mesh.faces) else None,
         }
         if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
             metadata["skipped_reason"] = "empty mesh"
             return source, metadata
-        if repair_cfg.get("keep_largest_component", False):
+        if keep_largest_component:
             if components:
                 mesh = max(components, key=lambda component: len(component.faces))
         if repair_cfg.get("basic_cleanup", True):
@@ -801,12 +802,12 @@ def _prepare_tetra_input_mesh(source: Path, output: Path, stage_cfg: dict[str, A
             trimesh.repair.fill_holes(mesh)
         if repair_cfg.get("fix_normals", True):
             trimesh.repair.fix_normals(mesh)
-        components = _split_mesh_components(trimesh, mesh)
+        components = _split_mesh_components(trimesh, mesh) if keep_largest_component else []
         metadata["after"] = {
             "vertices": int(len(mesh.vertices)),
             "faces": int(len(mesh.faces)),
             "watertight": bool(mesh.is_watertight),
-            "components": int(len(components)) if len(mesh.faces) else 0,
+            "components": int(len(components)) if keep_largest_component and len(mesh.faces) else None,
         }
         if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
             metadata["skipped_reason"] = "repair produced empty mesh"

@@ -56,6 +56,7 @@ struct NativeSearchResult {
   std::size_t transposition_stores = 0;
   std::size_t recenter_applies = 0;
   std::size_t recenter_invalid = 0;
+  std::size_t exact_checks = 0;
   double best_reward = 0.0;
   double initial_bbox_score = 0.0;
   double last_bbox_score = 0.0;
