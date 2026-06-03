@@ -27,6 +27,8 @@ REQUIRED_PATTERNS = {
     "demo_config": ("smart/configs/demo.yaml",),
     "smoke_config": ("smart/configs/smoke_5.yaml",),
     "example_config": ("smart/configs/example_3x3.yaml",),
+    "learned_frontier_config": ("smart/configs/learned_frontier.yaml",),
+    "learned_auto_safe_config": ("smart/configs/learned_auto_safe.yaml",),
     "renderer_blend": ("smart/legacy/renderer/boxes.blend",),
     "renderer_colors": ("smart/legacy/renderer/semantic_colors.txt",),
     "entry_points": ("*.dist-info/entry_points.txt",),

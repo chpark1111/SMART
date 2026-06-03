@@ -174,9 +174,86 @@ node is created.  It is currently research-only: on the 114-state local check,
 dynamic top6/top15 was safe but slower than the tuned static-root prior, and
 dynamic top4/top15 introduced quality-loss cases.
 
-This is also opt-in research code.  In local probes, top6 was safe for hard
+## Opt-In Macro-Skill Polishing
+
+The package also includes an experimental variable-length macro-skill
+controller. This is different from the one-step learned router above: it tries
+reusable multi-step fitting programs such as "shrink, recenter, then shrink
+again" and accepts only an exact SMART/Manifold non-worse final state.
+
+Use it after you already have prepared SMART tetra data and bbox metadata from
+merge/refine/MCTS:
+
+```python
+import smart
+
+result = smart.run_macro_skill_controller_from_files(
+    msh_path="runs/example/tetra/airplane/0001/tetra.msh",
+    bbox_metadata_path="runs/example/mcts/airplane/0001/bbox_params.json",
+    category="airplane",
+    quality_preset="balanced",
+    top_k=5,
+    candidate_count=256,
+)
+
+if result["accepted"]:
+    result["engine"].export_bbox_dir("runs/example/macro_skill/airplane/0001/bboxs")
+```
+
+The same path is exposed by the CLI:
+
+```bash
+smart macro-skill \
+  --msh runs/example/tetra/airplane/0001/tetra.msh \
+  --bbox-metadata runs/example/mcts/airplane/0001/bbox_params.json \
+  --category airplane \
+  --quality-preset balanced \
+  --output runs/example/macro_skill/airplane/0001/result.json \
+  --output-bbox-dir runs/example/macro_skill/airplane/0001/bboxs
+```
+
+The default uses the compact C++ macro-skill executor. Add
+`--no-native-executor` only when comparing against the Python skill loop for
+debugging or research ablation.
+
+Check the packaged benchmark/profile metadata with:
+
+```bash
+smart macro-skill-summary --json
+```
+
+The result payload includes a stable safety contract:
+
+```text
+exact_validator=native_smart_manifold
+rollback_on_failure=true
+deployment_status=experimental_opt_in_post_refine
+default_smart_path_changed=false
+```
+
+`quality_preset="balanced"` is the current practical setting. Use
+`quality_preset="efficient"` to spend the higher exact budget only on the
+currently validated chair-like scheduler bucket, or
+`quality_preset="learned_fast"`, `"learned_efficient"`, or `"learned_quality"`
+to use the packaged state-conditioned ridge gate at different quality/compute
+operating points. The gate predicts where the quality budget is worth spending
+from native geometry features. Use
+`quality_preset="quality"` to spend all top-5 exact skill attempts and allow
+longer internal programs when quality polishing matters more than exact-call
+count. In the current 133-case artifact-matched replay, balanced produced
+89 wins / 44 ties / 0 losses against the reference. The quality preset produced
+112 wins / 21 ties / 0 losses, while the efficient preset opened the high budget
+for 31 chair cases and produced 20 wins / 113 ties / 0 losses against balanced.
+The learned-efficient ridge gate keeps the same 31/133 high-budget rate but
+improves the held-out mean gain over balanced from `+0.0301` to `+0.0437` and
+the gain per extra second from `0.093` to `0.150`. The learned-fast and
+learned-quality variants use the same gate with stricter or looser thresholds.
+This is still opt-in research code, but it is packaged so benchmarks can be
+reproduced without depending on ignored experiment files.
+
+This is also opt-in research code. In local probes, top6 was safe for hard
 airplane multibox states, while one-box states needed top15/top20 to avoid
-quality loss.  On a combined 114-state local check, the tuned box-count top-k
+quality loss. On a combined 114-state local check, the tuned box-count top-k
 rule cut MCTS wall time by 70.3% with zero quality-loss cases at fixed MCTS
 budget.  With budget reinvestment, the current strongest validation preset is
 `mode="guarded"`: multibox top1, one-box top15, depth4, 25 iterations, and

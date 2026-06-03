@@ -78,7 +78,7 @@ Maintainer and research docs:
 - [Release Notes 0.1.0](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE_NOTES_0.1.0.md): current release scope and
   verification notes.
 - [Learned Geometry Router](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md): opt-in DeepSets router,
-  exact-call reduction, and quality reinvestment experiments.
+  macro-skill controller, exact-call reduction, and quality reinvestment experiments.
 - [Research Plan](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
   memory/table-based search, and promotion rules.
 
@@ -292,17 +292,21 @@ The current research portfolio helper,
 native exact C++ refine and multibox states to the learned router.
 `smart.cpp.run_builtin_deepset_prior_mcts(...)` exposes the same policy as an
 opt-in native MCTS action prior.  Current research presets include
-`mode="speed"`, `mode="balanced"`, `mode="quality"`, `mode="frontier"`, and
-`mode="guarded"`.  `frontier` is the aggressive top-1 multibox search preset;
-`guarded` is the recommended research default because it automatically falls
-back to exact shallow MCTS on low-confidence multibox states.
+`mode="speed"`, `mode="balanced"`, `mode="quality"`, `mode="frontier"`,
+`mode="guarded"`, and `mode="auto_safe"`.  `frontier` is the aggressive top-1
+multibox search preset; `guarded`/`auto_safe` is the current production
+candidate because it automatically falls back to baseline-budget exact MCTS on
+low-confidence multibox states.  The current local claim table covers 9,670
+all-turn state checks across five seeds with zero observed quality losses and
+about 47% fewer exact MCTS nodes, but it is still opt-in in the released
+pipeline until the 500-case fresh matched benchmark is complete.
 For full pipeline experiments, enable it with `mcts.learned_prior.enabled=true`
-and `mcts.learned_prior.mode=guarded`.
-The same setting is packaged as `configs/learned_frontier.yaml` for quick
+and `mcts.learned_prior.mode=auto_safe`.
+The same setting is packaged as `configs/learned_auto_safe.yaml` for quick
 local validation:
 
 ```bash
-smart --config configs/learned_frontier.yaml run
+smart --config configs/learned_auto_safe.yaml run
 ```
 
 The same router can be enabled in the normal pipeline:
@@ -315,6 +319,31 @@ smart --config configs/smoke_5.yaml refine \
 
 See [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md)
 for profile details.
+
+The variable-length macro-skill controller is a newer experimental
+post-refinement path. It proposes reusable multi-step fitting skills and accepts
+only exact SMART/Manifold non-worse updates:
+
+```bash
+smart macro-skill \
+  --msh runs/example/tetra/airplane/0001/tetra.msh \
+  --bbox-metadata runs/example/mcts/airplane/0001/bbox_params.json \
+  --category airplane \
+  --quality-preset balanced \
+  --output runs/example/macro_skill/airplane/0001/result.json \
+  --output-bbox-dir runs/example/macro_skill/airplane/0001/bboxs
+```
+
+The default macro-skill executor is the compact C++ path. Use
+`--no-native-executor` only for ablations against the Python skill loop.
+Use `--quality-preset efficient` to spend the higher exact budget only on the
+currently validated chair-like scheduler bucket. Use the learned Pareto family
+`--quality-preset learned_fast`, `learned_efficient`, or `learned_quality` to
+let a packaged state-conditioned ridge gate decide where to spend higher exact
+budget from native geometry features. Use `--quality-preset quality` to spend
+all top-k exact skill attempts for stronger quality polishing. See
+[`docs/LEARNED_ROUTER.md`](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md)
+for the current benchmark evidence and safety contract.
 
 ## Repository Layout
 

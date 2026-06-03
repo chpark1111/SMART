@@ -1,0 +1,91 @@
+{
+  "fallback_score": 0.798780252372997,
+  "live_logs": [
+    "experiments/macro_search/runs/parameterized_skills_4k/live_skill_controller_conservative_rulefile_all173_hard_program_gate_top3_best_positive_c256.jsonl"
+  ],
+  "min_support": 2,
+  "model_type": "smart_macro_memory_policy_v1",
+  "summary": {
+    "attempts": 519,
+    "fallback_score": 0.798780252372997,
+    "rows": 173,
+    "table_sizes": {
+      "family": 2,
+      "macro_id": 3,
+      "skill": 2
+    }
+  },
+  "tables": {
+    "family": {
+      "__fallback__": {
+        "mean": 0.798780252372997,
+        "score": 0.798780252372997,
+        "support": 0,
+        "win_rate": 0.0
+      },
+      "recenter_then_shrink": {
+        "mean": 0.9700154653836631,
+        "score": 1.0290533662582988,
+        "support": 343,
+        "win_rate": 0.23615160349854228
+      },
+      "shrink_slack_face": {
+        "mean": 0.46506617247152826,
+        "score": 0.5957479906533465,
+        "support": 176,
+        "win_rate": 0.5227272727272727
+      }
+    },
+    "macro_id": {
+      "__fallback__": {
+        "mean": 0.798780252372997,
+        "score": 0.798780252372997,
+        "support": 0,
+        "win_rate": 0.0
+      },
+      "skill_000": {
+        "mean": 0.42797391835849674,
+        "score": 0.4713265195145661,
+        "support": 173,
+        "win_rate": 0.17341040462427745
+      },
+      "skill_002": {
+        "mean": 1.5499329755658795,
+        "score": 1.682880952444492,
+        "support": 173,
+        "win_rate": 0.5317919075144508
+      },
+      "skill_004": {
+        "mean": 0.4184338631946145,
+        "score": 0.49213328515993243,
+        "support": 173,
+        "win_rate": 0.2947976878612717
+      }
+    },
+    "skill": {
+      "__fallback__": {
+        "mean": 0.798780252372997,
+        "score": 0.798780252372997,
+        "support": 0,
+        "win_rate": 0.0
+      },
+      "recenter_then_shrink": {
+        "mean": 0.4232038907765555,
+        "score": 0.48172990233724916,
+        "support": 346,
+        "win_rate": 0.23410404624277456
+      },
+      "shrink_slack_face": {
+        "mean": 1.5499329755658795,
+        "score": 1.682880952444492,
+        "support": 173,
+        "win_rate": 0.5317919075144508
+      }
+    }
+  },
+  "weights": {
+    "family": 0.1,
+    "macro_id": 0.7,
+    "skill": 0.05
+  }
+}

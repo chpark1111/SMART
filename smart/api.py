@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .pipeline.config import REPO_ROOT, load_config, workspace_path
+from .pipeline.config import REPO_ROOT, load_config as _load_config, workspace_path
 from .pipeline.stages import data_status, run_pipeline as _run_pipeline
 from .pipeline.tools import diagnose_environment
 
@@ -36,15 +36,32 @@ ASSET_ALIASES: dict[str, dict[str, str]] = {
         "chair": "chair_offline_rl_mlp_prior.json",
         "table": "table_offline_rl_mlp_prior.json",
     },
+    "skills": {
+        "macro_v1": "macro_skill_knowledge_base_v1.json",
+        "macro_skill_v1": "macro_skill_knowledge_base_v1.json",
+        "macro_memory_v1": "macro_memory_policy_v1.json",
+        "macro_budget_quality_v1": "macro_budget_quality_rule_v1.json",
+        "macro_quality_gate_ridge_v1": "macro_quality_gate_ridge_v1.json",
+    },
 }
 
 
-def load(config: str | Path | None = "configs/demo.yaml", *, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_config(
+    config: str | Path | None = "configs/demo.yaml",
+    *,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Load a SMART config and apply optional nested dictionary overrides."""
-    cfg = load_config(config)
+    cfg = _load_config(config)
     if overrides:
         _deep_update_in_place(cfg, overrides)
     return cfg
+
+
+def load(config: str | Path | None = "configs/demo.yaml", *, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Alias for :func:`load_config`."""
+
+    return load_config(config, overrides=overrides)
 
 
 def run_pipeline(
@@ -74,6 +91,29 @@ def run_pipeline(
     return [asdict(record) for record in records]
 
 
+def run(
+    config: str | Path | dict[str, Any] | None = "configs/demo.yaml",
+    *,
+    stage: str | None = None,
+    category: str | None = None,
+    meshes: Iterable[str] | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+    overrides: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Alias for :func:`run_pipeline`, kept for short README examples."""
+
+    return run_pipeline(
+        config,
+        stage=stage,
+        category=category,
+        meshes=meshes,
+        dry_run=dry_run,
+        force=force,
+        overrides=overrides,
+    )
+
+
 def run_native_pipeline(
     *,
     input_mesh: str | Path,
@@ -97,6 +137,36 @@ def run_native_pipeline(
         manifoldplus_bin=manifoldplus_bin,
         ftetwild_bin=ftetwild_bin,
         coacd_bin=coacd_bin,
+        **kwargs,
+    )
+
+
+def run_macro_skill_controller(engine: Any, *, category: str, **kwargs: Any) -> dict[str, Any]:
+    """Run the packaged exact-validated macro-skill controller on an engine.
+
+    This is an opt-in research/production bridge.  The learned/knowledge-based
+    controller proposes variable-length skills, but every accepted state update
+    is still validated by the native exact SMART reward backend.
+    """
+    from .macro_skills import run_builtin_macro_skill_controller
+
+    return run_builtin_macro_skill_controller(engine, category=category, **kwargs)
+
+
+def run_macro_skill_controller_from_files(
+    *,
+    msh_path: str | Path,
+    bbox_metadata_path: str | Path,
+    category: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Load prepared SMART tetra/bbox files and run the macro-skill controller."""
+    from .macro_skills import run_builtin_macro_skill_controller_from_files
+
+    return run_builtin_macro_skill_controller_from_files(
+        msh_path=msh_path,
+        bbox_metadata_path=bbox_metadata_path,
+        category=category,
         **kwargs,
     )
 
@@ -186,7 +256,7 @@ def config_profiles() -> list[dict[str, str]]:
 def asset_profiles(kind: str | None = None) -> list[dict[str, Any]]:
     """List optional SMART JSON model assets when present in an installation."""
     assets_dir = Path(__file__).resolve().parent / "assets"
-    kinds = [kind] if kind else ["gates", "priors"]
+    kinds = [kind] if kind else ["gates", "priors", "skills"]
     profiles: list[dict[str, Any]] = []
     for asset_kind in kinds:
         kind_name = _normalize_asset_kind(asset_kind)
@@ -238,6 +308,8 @@ def _normalize_asset_kind(kind: str) -> str:
         return "gates"
     if normalized in {"prior", "priors"}:
         return "priors"
+    if normalized in {"skill", "skills", "macro", "macros"}:
+        return "skills"
     raise ValueError(f"unknown SMART asset kind: {kind!r}")
 
 

@@ -78,6 +78,26 @@ def load_builtin_deepset_policy(name: str = "default", *, cache: bool = True) ->
     return policy
 
 
+def run_builtin_macro_skill_controller(engine: Any, *, category: str, **kwargs: Any) -> dict[str, Any]:
+    """Run the packaged experimental macro-skill controller on a native engine.
+
+    This is a convenience wrapper around :func:`smart.run_builtin_macro_skill_controller`.
+    The exact SMART/Manifold backend still validates the final accepted update.
+    """
+
+    from .macro_skills import run_builtin_macro_skill_controller as _run
+
+    return _run(engine, category=category, **kwargs)
+
+
+def run_builtin_macro_skill_controller_from_files(**kwargs: Any) -> dict[str, Any]:
+    """Load a native engine from files and run the macro-skill controller."""
+
+    from .macro_skills import run_builtin_macro_skill_controller_from_files as _run
+
+    return _run(**kwargs)
+
+
 ManifoldState = _backend.ManifoldState if _backend is not None and hasattr(_backend, "ManifoldState") else None  # type: ignore
 BBoxState = _backend.BBoxState if _backend is not None and hasattr(_backend, "BBoxState") else None  # type: ignore
 ManifoldBridgeMesh = _backend.ManifoldBridgeMesh if _backend is not None and hasattr(_backend, "ManifoldBridgeMesh") else None  # type: ignore
@@ -86,6 +106,7 @@ TetClippingState = _backend.TetClippingState if _backend is not None and hasattr
 ActionMlpPolicy = _backend.ActionMlpPolicy if _backend is not None and hasattr(_backend, "ActionMlpPolicy") else None  # type: ignore
 NativeFastGeometryMlpPolicy = _backend.NativeFastGeometryMlpPolicy if _backend is not None and hasattr(_backend, "NativeFastGeometryMlpPolicy") else None  # type: ignore
 NativeDeepSetCandidateScorer = _backend.NativeDeepSetCandidateScorer if _backend is not None and hasattr(_backend, "NativeDeepSetCandidateScorer") else None  # type: ignore
+NativeScalarMlpScorer = _backend.NativeScalarMlpScorer if _backend is not None and hasattr(_backend, "NativeScalarMlpScorer") else None  # type: ignore
 NativeSmartEngine = _backend.NativeSmartEngine if _backend is not None and hasattr(_backend, "NativeSmartEngine") else None  # type: ignore
 
 
@@ -1341,14 +1362,19 @@ _DEEPSET_MCTS_PRIOR_PRESETS: dict[str, dict[str, Any]] = {
         "single_box_max_step": 4,
         "floor_margin": 1.0,
         "guard_multibox_score_gt": -0.5,
-        "guard_num_iter": 35,
+        # Guarded fallback disables learned priors/top-k pruning.  Keep the
+        # baseline MCTS budget so the safety path cannot lose quality merely
+        # because it ran fewer exact MCTS iterations.
+        "guard_num_iter": 50,
         "guard_max_step": 2,
         "guard_top_k": 0,
         "guard_prior_weight": 0.0,
         "guard_fast_score_gt": -0.05,
-        "guard_fast_num_iter": 30,
+        "guard_fast_num_iter": 50,
     },
 }
+_DEEPSET_MCTS_PRIOR_PRESETS["auto_safe"] = dict(_DEEPSET_MCTS_PRIOR_PRESETS["guarded"])
+_DEEPSET_MCTS_PRIOR_PRESETS["production_candidate"] = dict(_DEEPSET_MCTS_PRIOR_PRESETS["guarded"])
 
 
 def native_deepset_mcts_prior_defaults(mode: str = "balanced") -> dict[str, Any]:

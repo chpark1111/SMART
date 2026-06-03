@@ -25,10 +25,16 @@ __all__ = [
     "load_local_refine_gate",
     "load_pruning_gate",
     "load",
+    "macro_skill_profile_summary",
     "native_executable_path",
     "quality_gain_score",
     "predict_box_proposals",
+    "rank_builtin_macro_skills",
+    "run_macro_skill_controller",
+    "run_macro_skill_controller_from_files",
     "run_native_pipeline",
+    "run_builtin_macro_skill_controller",
+    "run_builtin_macro_skill_controller_from_files",
     "run",
     "run_pipeline",
     "score_local_refine_gate",
@@ -40,7 +46,7 @@ __all__ = [
     "workspace",
 ]
 
-__version__ = "0.1.15"
+__version__ = "0.1.16"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
     "build_linear_action_prior_from_traces",
@@ -62,9 +68,15 @@ _API_EXPORTS = {
     "load_local_refine_gate",
     "load_pruning_gate",
     "load",
+    "macro_skill_profile_summary",
     "native_executable_path",
     "quality_gain_score",
     "predict_box_proposals",
+    "rank_builtin_macro_skills",
+    "run_macro_skill_controller",
+    "run_macro_skill_controller_from_files",
+    "run_builtin_macro_skill_controller",
+    "run_builtin_macro_skill_controller_from_files",
     "run_native_pipeline",
     "run",
     "run_pipeline",
@@ -180,6 +192,36 @@ def __getattr__(name: str):
 
         globals()[name] = score_pruning_gate
         return score_pruning_gate
+    if name == "rank_builtin_macro_skills":
+        from .macro_skills import rank_builtin_macro_skills
+
+        globals()[name] = rank_builtin_macro_skills
+        return rank_builtin_macro_skills
+    if name == "run_builtin_macro_skill_controller":
+        from .macro_skills import run_builtin_macro_skill_controller
+
+        globals()[name] = run_builtin_macro_skill_controller
+        return run_builtin_macro_skill_controller
+    if name == "run_macro_skill_controller":
+        from .api import run_macro_skill_controller
+
+        globals()[name] = run_macro_skill_controller
+        return run_macro_skill_controller
+    if name == "run_builtin_macro_skill_controller_from_files":
+        from .macro_skills import run_builtin_macro_skill_controller_from_files
+
+        globals()[name] = run_builtin_macro_skill_controller_from_files
+        return run_builtin_macro_skill_controller_from_files
+    if name == "run_macro_skill_controller_from_files":
+        from .api import run_macro_skill_controller_from_files
+
+        globals()[name] = run_macro_skill_controller_from_files
+        return run_macro_skill_controller_from_files
+    if name == "macro_skill_profile_summary":
+        from .macro_skills import macro_skill_profile_summary
+
+        globals()[name] = macro_skill_profile_summary
+        return macro_skill_profile_summary
     if name == "compare_quality":
         from .quality import compare_quality
 

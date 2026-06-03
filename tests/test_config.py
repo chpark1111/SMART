@@ -75,6 +75,7 @@ def test_smart_cli_lists_config_profiles(capsys) -> None:
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
     assert "learned_frontier.yaml" in names
+    assert "learned_auto_safe.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -174,12 +175,37 @@ def test_learned_frontier_config_enables_deepset_mcts_prior() -> None:
     }
 
 
+def test_learned_auto_safe_config_is_default_candidate_profile() -> None:
+    cfg = load_config("configs/learned_auto_safe.yaml")
+
+    assert cfg["run_name"] == "learned_auto_safe"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["mcts"]["learned_prior"]["enabled"] is True
+    assert cfg["mcts"]["learned_prior"]["mode"] == "auto_safe"
+
+
+def test_learned_prior_schema_defaults_to_guarded_when_enabled() -> None:
+    cfg = smart.load_config(None, overrides={"mcts": {"learned_prior": {"enabled": True}}})
+
+    assert cfg["mcts"]["learned_prior"]["enabled"] is True
+    assert cfg["mcts"]["learned_prior"]["mode"] == "guarded"
+
+
 def test_public_api_lists_and_resolves_packaged_assets() -> None:
     gates = smart.asset_profiles("gates")
     priors = smart.asset_profiles("priors")
+    skills = smart.asset_profiles("skills")
 
     assert gates == []
     assert priors == []
+    assert {item["name"] for item in skills} >= {
+        "macro_skill_knowledge_base_v1.json",
+        "macro_memory_policy_v1.json",
+        "macro_budget_quality_rule_v1.json",
+    }
+    assert smart.asset_path("skills", "macro_v1").name == "macro_skill_knowledge_base_v1.json"
+    assert smart.asset_path("skills", "macro_memory_v1").name == "macro_memory_policy_v1.json"
+    assert smart.asset_path("skills", "macro_budget_quality_v1").name == "macro_budget_quality_rule_v1.json"
     with pytest.raises(FileNotFoundError):
         smart.asset_path("gates", "rich")
 
@@ -189,6 +215,218 @@ def test_smart_cli_lists_packaged_assets(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
 
     assert payload == []
+
+    assert smart_main(["assets", "--kind", "skills", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {item["name"] for item in payload} >= {
+        "macro_skill_knowledge_base_v1.json",
+        "macro_memory_policy_v1.json",
+        "macro_budget_quality_rule_v1.json",
+    }
+
+
+def test_smart_cli_macro_skill_smoke(tmp_path, capsys) -> None:
+    import smart.cpp as sc
+
+    if not sc.using_cpp():
+        pytest.skip("smart._cpp is not built")
+
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    msh = tmp_path / "one_tet.msh"
+    sc.native_save_gmsh(str(msh), vertices, sc.native_tetra_surface_faces(voxels), voxels)
+    metadata = tmp_path / "bbox_params.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [-0.3, -0.3, -0.3, 0.7, 0.7, 0.7],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result_path = tmp_path / "macro_result.json"
+    bbox_dir = tmp_path / "bbox_out"
+
+    assert (
+        smart_main(
+            [
+                "macro-skill",
+                "--msh",
+                str(msh),
+                "--bbox-metadata",
+                str(metadata),
+                "--category",
+                "table",
+                "--top-k",
+                "2",
+                "--candidate-count",
+                "32",
+                "--max-steps",
+                "4",
+                "--output",
+                str(result_path),
+                "--output-bbox-dir",
+                str(bbox_dir),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    stdout_payload = json.loads(capsys.readouterr().out)
+    file_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert stdout_payload["attempt_count"] == 2
+    assert file_payload["attempt_count"] == 2
+    assert stdout_payload["exact_validator"] == "native_smart_manifold"
+    assert stdout_payload["rollback_on_failure"] is True
+    assert stdout_payload["accepted_non_worse"] is True
+    assert stdout_payload["deployment_status"] == "experimental_opt_in_post_refine"
+    assert stdout_payload["exported_bbox_count"] == 1
+    assert (bbox_dir / "bbox_params.json").exists()
+
+
+def test_smart_cli_macro_skill_summary(capsys) -> None:
+    assert smart_main(["macro-skill-summary", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "experimental_opt_in"
+    assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
+    assert payload["best_practical"]["losses_vs_conditional_budget_v1"] == 0
+    assert payload["quality_preset"]["losses_vs_conditional_budget_v1"] == 0
+
+
+def test_macro_skill_assets_load_and_rank() -> None:
+    from smart import macro_skills
+
+    assets = macro_skills.builtin_macro_skill_assets()
+    skills = macro_skills.load_skill_knowledge_base(assets.skill_kb)
+    memory = macro_skills.load_macro_memory_policy(assets.memory_policy)
+    budget_rules = macro_skills.load_budget_rules(assets.budget_rule)
+    quality_gate = macro_skills.load_macro_quality_gate(assets.quality_gate)
+
+    assert skills
+    assert budget_rules
+    thresholds = quality_gate["preset_thresholds"]
+    assert set(thresholds) == {"learned_fast", "learned_efficient", "learned_quality"}
+    assert thresholds["learned_fast"]["threshold"] > thresholds["learned_efficient"]["threshold"]
+    assert thresholds["learned_efficient"]["threshold"] > thresholds["learned_quality"]["threshold"]
+    assert quality_gate["threshold"] == thresholds["learned_efficient"]["threshold"]
+
+    high_named = {}
+    low_named = {}
+    for name, mean, std, weight in zip(
+        quality_gate["feature_names"],
+        quality_gate["feature_mean"],
+        quality_gate["feature_std"],
+        quality_gate["weights"],
+    ):
+        if name.startswith("cat_"):
+            continue
+        direction = 1.0 if weight >= 0.0 else -1.0
+        scale = max(abs(float(std)), 1.0)
+        high_named[name] = float(mean) + direction * scale * 20.0
+        low_named[name] = float(mean) - direction * scale * 20.0
+    high_budget, high_decision = macro_skills.learned_macro_quality_budget(
+        "chair",
+        {"named": high_named},
+        quality_gate,
+        default_budget=1,
+        max_budget=5,
+        preset="learned_efficient",
+    )
+    low_budget, low_decision = macro_skills.learned_macro_quality_budget(
+        "chair",
+        {"named": low_named},
+        quality_gate,
+        default_budget=1,
+        max_budget=5,
+        preset="learned_efficient",
+    )
+    assert high_budget == 5
+    assert high_decision["open_high_budget"] is True
+    assert low_budget == 1
+    assert low_decision["open_high_budget"] is False
+    assert macro_skills.macro_skill_budget(
+        "table",
+        {"named": {"num_actions": 100}},
+        budget_rules,
+        max_budget=5,
+    ) == 4
+    assert macro_skills.macro_skill_budget(
+        "table",
+        {"named": {"num_actions": 200}},
+        budget_rules,
+        max_budget=5,
+    ) == 1
+    assert macro_skills.macro_skill_budget(
+        "airplane",
+        {"named": {"num_actions": 100}},
+        budget_rules,
+        max_budget=5,
+    ) == 1
+
+    ranked = macro_skills.rank_builtin_macro_skills(
+        "table",
+        skills_by_id=skills,
+        memory_policy=memory,
+        macro_memory_pool_size=5,
+    )
+    assert ranked
+    assert ranked[0][0] in skills
+
+    profile = smart.macro_skill_profile_summary()
+    assert profile["packaged_profile"] == "geometry_top5_exact_guarded_variable_repeat_v2_balanced"
+    assert profile["best_practical"]["wins_vs_conditional_budget_v1"] > 0
+    assert profile["quality_preset"]["mean_delta"] >= profile["best_practical"]["mean_delta"]
+
+
+def test_macro_skill_variable_repeat_and_guard_policy() -> None:
+    from smart import macro_skills
+
+    assert (
+        macro_skills.macro_step_repeat_budget(
+            {
+                "observed_repeat": "2",
+                "repeat_max": 16,
+                "until": "coverage_margin_low_or_score_stalls",
+            },
+            max_steps=20,
+        )
+        == 16
+    )
+    assert (
+        macro_skills.macro_step_repeat_budget(
+            {
+                "observed_repeat": "2",
+                "repeat_max": 16,
+                "until": "fixed_count",
+            },
+            max_steps=20,
+        )
+        == 2
+    )
+    assert (
+        macro_skills.macro_step_repeat_budget(
+            {
+                "op": "recenter_box",
+                "observed_repeat": "2",
+                "repeat_max": 2,
+                "until": "center_shift_stalls",
+            },
+            max_steps=20,
+        )
+        == 1
+    )
+    assert not macro_skills.allow_nonpositive_macro_step("shrink_face", -0.1)
+    assert macro_skills.allow_nonpositive_macro_step("expand_face", -0.1)
+    assert macro_skills.allow_nonpositive_macro_step("recenter", -1.0e-10)
+    assert macro_skills.allow_nonpositive_macro_step("recenter_box", -1.0e-10)
+    assert not macro_skills.allow_nonpositive_macro_step("recenter", -1.0e-3)
+    assert not macro_skills.allow_nonpositive_macro_step("recenter_box", -1.0e-3)
 
 
 def test_cpp_native_engine_sets_native_stage_defaults(tmp_path) -> None:

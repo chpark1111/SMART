@@ -232,7 +232,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "learned_prior": {
             "enabled": False,
             "policy": "default",
-            "mode": "frontier",
+            "mode": "guarded",
             "num_iter": None,
             "max_step": None,
             "transposition_table": True,

@@ -1,0 +1,6143 @@
+{
+  "baseline_budget1": {
+    "budget_counts": {
+      "1": 173
+    },
+    "cases": 173,
+    "max_regret_vs_topk": 0.9341459757935195,
+    "mean_attempts": 1.0,
+    "mean_delta": 1.5499329755658795,
+    "mean_regret_vs_topk": 0.06338167321256882,
+    "per_category": {
+      "airplane": {
+        "cases": 86,
+        "mean_attempts": 1.0,
+        "mean_delta": 2.131840635629608
+      },
+      "chair": {
+        "cases": 44,
+        "mean_attempts": 1.0,
+        "mean_delta": 1.002581777153682
+      },
+      "table": {
+        "cases": 43,
+        "mean_attempts": 1.0,
+        "mean_delta": 0.9461979514881138
+      }
+    }
+  },
+  "best_policies": [
+    {
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6059663809719913,
+      "mean_regret_vs_topk": 0.007348267806457113,
+      "objective": 1.5741744734575405,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1716346755638656
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_actions < 137.8",
+          "feature": "num_actions",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 137.8
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6059663809719913,
+      "mean_regret_vs_topk": 0.007348267806457113,
+      "objective": 1.5741744734575405,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1716346755638656
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_boxes < 10.6",
+          "feature": "num_boxes",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 10.600000000000001
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6048852847323773,
+      "mean_regret_vs_topk": 0.008429364046071067,
+      "objective": 1.5730933772179265,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1672851488323954
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and union_volume_ratio < 57.565595",
+          "feature": "union_volume_ratio",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 57.565594683858684
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.60329959713738,
+      "mean_regret_vs_topk": 0.01001505164106844,
+      "objective": 1.5728949728599233,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1609055219967084
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_actions < 109.2",
+          "feature": "num_actions",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 109.19999999999999
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.60329959713738,
+      "mean_regret_vs_topk": 0.01001505164106844,
+      "objective": 1.5728949728599233,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1609055219967084
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_boxes < 8.4",
+          "feature": "num_boxes",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 8.399999999999999
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.007322652863811558,
+      "objective": 1.5728128051631918,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_actions < 189.8",
+          "feature": "num_actions",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 189.80000000000013
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.007322652863811558,
+      "objective": 1.5728128051631918,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and num_boxes < 14.6",
+          "feature": "num_boxes",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 14.600000000000009
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6059624183266488,
+      "mean_regret_vs_topk": 0.007352230451799722,
+      "objective": 1.5727832275752036,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1716187328279524
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and max_bbox_aspect < 54.105521",
+          "feature": "max_bbox_aspect",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 54.10552078194826
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6059580153470832,
+      "mean_regret_vs_topk": 0.007356633431365308,
+      "objective": 1.572778824595638,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1716010185148165
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and union_extent_y < 0.80151637",
+          "feature": "union_extent_y",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 0.8015163664479156
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6044776012115212,
+      "mean_regret_vs_topk": 0.008837047566927424,
+      "objective": 1.5726856936970703,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.165644933736857
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and total_to_union_volume_ratio >= 0.034818458",
+          "feature": "total_to_union_volume_ratio",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.03481845778280456
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605403499271351,
+      "mean_regret_vs_topk": 0.007911149507097481,
+      "objective": 1.572224308519906,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1693700584891962
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_23 < 0.032936804",
+          "feature": "volume_hist_3_23",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 0.03293680400843289
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605403499271351,
+      "mean_regret_vs_topk": 0.007911149507097481,
+      "objective": 1.572224308519906,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1693700584891962
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_5 < 0.045066157",
+          "feature": "volume_hist_3_5",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 0.04506615727874957
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.6025367661868606,
+      "mean_regret_vs_topk": 0.010777882591587993,
+      "objective": 1.5721321419094039,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.157836457939967
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and union_volume_ratio < 32.503323",
+          "feature": "union_volume_ratio",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 32.503322613706885
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.6024434415863715,
+      "mean_regret_vs_topk": 0.010871207192077079,
+      "objective": 1.5720388173089148,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1574609891984644
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and total_to_union_volume_ratio >= 0.050457391",
+          "feature": "total_to_union_volume_ratio",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.050457391192670585
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 147,
+        "4": 26
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.4508670520231215,
+      "mean_delta": 1.600753351494029,
+      "mean_regret_vs_topk": 0.012561297284419197,
+      "objective": 1.5717360104535667,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 2.813953488372093,
+          "mean_delta": 1.150661324408344
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and mean_bbox_volume_ratio >= 0.25733678",
+          "feature": "mean_bbox_volume_ratio",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.25733677894514334
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 147,
+        "4": 26
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2948422382883047,
+      "mean_attempts": 1.4508670520231215,
+      "mean_delta": 1.6007259964153653,
+      "mean_regret_vs_topk": 0.012588652363083356,
+      "objective": 1.571708655374903,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 2.813953488372093,
+          "mean_delta": 1.150551267929067
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and total_to_union_volume_ratio >= 0.092844192",
+          "feature": "total_to_union_volume_ratio",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.09284419179122046
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6048852847323773,
+      "mean_regret_vs_topk": 0.008429364046071067,
+      "objective": 1.5717060939809322,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1672851488323954
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and union_volume_ratio < 104.42548",
+          "feature": "union_volume_ratio",
+          "kind": "threshold",
+          "op": "<",
+          "threshold": 104.42547803869752
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6048769191074694,
+      "mean_regret_vs_topk": 0.008437729670979265,
+      "objective": 1.5716977283560243,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.167251491783346
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and total_to_union_volume_ratio >= 0.028519384",
+          "feature": "total_to_union_volume_ratio",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.028519384146964366
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table",
+          "kind": "category"
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_0 >= 0",
+          "feature": "volume_hist_3_0",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_1 >= 0",
+          "feature": "volume_hist_3_1",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_1 >= 0",
+          "feature": "volume_hist_3_1",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_1 >= 0",
+          "feature": "volume_hist_3_1",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_10 >= 0",
+          "feature": "volume_hist_3_10",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_11 >= 0",
+          "feature": "volume_hist_3_11",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_12 >= 0",
+          "feature": "volume_hist_3_12",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_13 >= 0",
+          "feature": "volume_hist_3_13",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_14 >= 0",
+          "feature": "volume_hist_3_14",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_18 >= 0",
+          "feature": "volume_hist_3_18",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_19 >= 0",
+          "feature": "volume_hist_3_19",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_19 >= 0",
+          "feature": "volume_hist_3_19",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_19 >= 0",
+          "feature": "volume_hist_3_19",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_2 >= 0",
+          "feature": "volume_hist_3_2",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_21 >= 0",
+          "feature": "volume_hist_3_21",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_21 >= 0",
+          "feature": "volume_hist_3_21",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_22 >= 0",
+          "feature": "volume_hist_3_22",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_22 >= 0",
+          "feature": "volume_hist_3_22",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_22 >= 0",
+          "feature": "volume_hist_3_22",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_22 >= 0",
+          "feature": "volume_hist_3_22",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_22 >= 0",
+          "feature": "volume_hist_3_22",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_23 >= 0",
+          "feature": "volume_hist_3_23",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_3 >= 0",
+          "feature": "volume_hist_3_3",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_3 >= 0",
+          "feature": "volume_hist_3_3",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_4 >= 0",
+          "feature": "volume_hist_3_4",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_4 >= 0",
+          "feature": "volume_hist_3_4",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_4 >= 0",
+          "feature": "volume_hist_3_4",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_4 >= 0",
+          "feature": "volume_hist_3_4",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_4 >= 0",
+          "feature": "volume_hist_3_4",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_5 >= 0",
+          "feature": "volume_hist_3_5",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_9 >= 0",
+          "feature": "volume_hist_3_9",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_9 >= 0",
+          "feature": "volume_hist_3_9",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "rules": [
+        {
+          "budget": 4,
+          "category": "table",
+          "condition": "category=table and volume_hist_3_9 >= 0",
+          "feature": "volume_hist_3_9",
+          "kind": "threshold",
+          "op": ">=",
+          "threshold": 0.0
+        }
+      ]
+    }
+  ],
+  "best_rules": [
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_actions < 137.8",
+      "feature": "num_actions",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6059663809719913,
+      "mean_regret_vs_topk": 0.007348267806457113,
+      "objective": 1.5741744734575405,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1716346755638656
+        }
+      },
+      "threshold": 137.8
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_boxes < 10.6",
+      "feature": "num_boxes",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6059663809719913,
+      "mean_regret_vs_topk": 0.007348267806457113,
+      "objective": 1.5741744734575405,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1716346755638656
+        }
+      },
+      "threshold": 10.600000000000001
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and union_volume_ratio < 57.565595",
+      "feature": "union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6048852847323773,
+      "mean_regret_vs_topk": 0.008429364046071067,
+      "objective": 1.5730933772179265,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.1672851488323954
+        }
+      },
+      "threshold": 57.565594683858684
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_actions < 109.2",
+      "feature": "num_actions",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.60329959713738,
+      "mean_regret_vs_topk": 0.01001505164106844,
+      "objective": 1.5728949728599233,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1609055219967084
+        }
+      },
+      "threshold": 109.19999999999999
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_boxes < 8.4",
+      "feature": "num_boxes",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.60329959713738,
+      "mean_regret_vs_topk": 0.01001505164106844,
+      "objective": 1.5728949728599233,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1609055219967084
+        }
+      },
+      "threshold": 8.399999999999999
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_actions < 189.8",
+      "feature": "num_actions",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.007322652863811558,
+      "objective": 1.5728128051631918,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 189.80000000000013
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and num_boxes < 14.6",
+      "feature": "num_boxes",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.007322652863811558,
+      "objective": 1.5728128051631918,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 14.600000000000009
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and max_bbox_aspect < 54.105521",
+      "feature": "max_bbox_aspect",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6059624183266488,
+      "mean_regret_vs_topk": 0.007352230451799722,
+      "objective": 1.5727832275752036,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1716187328279524
+        }
+      },
+      "threshold": 54.10552078194826
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and union_extent_y < 0.80151637",
+      "feature": "union_extent_y",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6059580153470832,
+      "mean_regret_vs_topk": 0.007356633431365308,
+      "objective": 1.572778824595638,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1716010185148165
+        }
+      },
+      "threshold": 0.8015163664479156
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 139,
+        "4": 34
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and total_to_union_volume_ratio >= 0.034818458",
+      "feature": "total_to_union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5895953757225434,
+      "mean_delta": 1.6044776012115212,
+      "mean_regret_vs_topk": 0.008837047566927424,
+      "objective": 1.5726856936970703,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.372093023255814,
+          "mean_delta": 1.165644933736857
+        }
+      },
+      "threshold": 0.03481845778280456
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_23 < 0.032936804",
+      "feature": "volume_hist_3_23",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605403499271351,
+      "mean_regret_vs_topk": 0.007911149507097481,
+      "objective": 1.572224308519906,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1693700584891962
+        }
+      },
+      "threshold": 0.03293680400843289
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_5 < 0.045066157",
+      "feature": "volume_hist_3_5",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.605403499271351,
+      "mean_regret_vs_topk": 0.007911149507097481,
+      "objective": 1.572224308519906,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1693700584891962
+        }
+      },
+      "threshold": 0.04506615727874957
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and union_volume_ratio < 32.503323",
+      "feature": "union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.6025367661868606,
+      "mean_regret_vs_topk": 0.010777882591587993,
+      "objective": 1.5721321419094039,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.157836457939967
+        }
+      },
+      "threshold": 32.503322613706885
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 143,
+        "4": 30
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and total_to_union_volume_ratio >= 0.050457391",
+      "feature": "total_to_union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.5202312138728324,
+      "mean_delta": 1.6024434415863715,
+      "mean_regret_vs_topk": 0.010871207192077079,
+      "objective": 1.5720388173089148,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.0930232558139537,
+          "mean_delta": 1.1574609891984644
+        }
+      },
+      "threshold": 0.050457391192670585
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 147,
+        "4": 26
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and mean_bbox_volume_ratio >= 0.25733678",
+      "feature": "mean_bbox_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.38220680836478227,
+      "mean_attempts": 1.4508670520231215,
+      "mean_delta": 1.600753351494029,
+      "mean_regret_vs_topk": 0.012561297284419197,
+      "objective": 1.5717360104535667,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 2.813953488372093,
+          "mean_delta": 1.150661324408344
+        }
+      },
+      "threshold": 0.25733677894514334
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 147,
+        "4": 26
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and total_to_union_volume_ratio >= 0.092844192",
+      "feature": "total_to_union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2948422382883047,
+      "mean_attempts": 1.4508670520231215,
+      "mean_delta": 1.6007259964153653,
+      "mean_regret_vs_topk": 0.012588652363083356,
+      "objective": 1.571708655374903,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 2.813953488372093,
+          "mean_delta": 1.150551267929067
+        }
+      },
+      "threshold": 0.09284419179122046
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and union_volume_ratio < 104.42548",
+      "feature": "union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6048852847323773,
+      "mean_regret_vs_topk": 0.008429364046071067,
+      "objective": 1.5717060939809322,
+      "op": "<",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.1672851488323954
+        }
+      },
+      "threshold": 104.42547803869752
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 135,
+        "4": 38
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and total_to_union_volume_ratio >= 0.028519384",
+      "feature": "total_to_union_volume_ratio",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.6589595375722543,
+      "mean_delta": 1.6048769191074694,
+      "mean_regret_vs_topk": 0.008437729670979265,
+      "objective": 1.5716977283560243,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 3.6511627906976742,
+          "mean_delta": 1.167251491783346
+        }
+      },
+      "threshold": 0.028519384146964366
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table",
+      "kind": "category",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      }
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_0 >= 0",
+      "feature": "volume_hist_3_0",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_1 >= 0",
+      "feature": "volume_hist_3_1",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_1 >= 0",
+      "feature": "volume_hist_3_1",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_1 >= 0",
+      "feature": "volume_hist_3_1",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_10 >= 0",
+      "feature": "volume_hist_3_10",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_11 >= 0",
+      "feature": "volume_hist_3_11",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_12 >= 0",
+      "feature": "volume_hist_3_12",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_13 >= 0",
+      "feature": "volume_hist_3_13",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_14 >= 0",
+      "feature": "volume_hist_3_14",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_18 >= 0",
+      "feature": "volume_hist_3_18",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_19 >= 0",
+      "feature": "volume_hist_3_19",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_19 >= 0",
+      "feature": "volume_hist_3_19",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_19 >= 0",
+      "feature": "volume_hist_3_19",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_2 >= 0",
+      "feature": "volume_hist_3_2",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_21 >= 0",
+      "feature": "volume_hist_3_21",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_21 >= 0",
+      "feature": "volume_hist_3_21",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_22 >= 0",
+      "feature": "volume_hist_3_22",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_22 >= 0",
+      "feature": "volume_hist_3_22",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_22 >= 0",
+      "feature": "volume_hist_3_22",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_22 >= 0",
+      "feature": "volume_hist_3_22",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_22 >= 0",
+      "feature": "volume_hist_3_22",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_23 >= 0",
+      "feature": "volume_hist_3_23",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_3 >= 0",
+      "feature": "volume_hist_3_3",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_3 >= 0",
+      "feature": "volume_hist_3_3",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_4 >= 0",
+      "feature": "volume_hist_3_4",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_4 >= 0",
+      "feature": "volume_hist_3_4",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_4 >= 0",
+      "feature": "volume_hist_3_4",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_4 >= 0",
+      "feature": "volume_hist_3_4",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_4 >= 0",
+      "feature": "volume_hist_3_4",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_5 >= 0",
+      "feature": "volume_hist_3_5",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_9 >= 0",
+      "feature": "volume_hist_3_9",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_9 >= 0",
+      "feature": "volume_hist_3_9",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    },
+    {
+      "budget": 4,
+      "budget_counts": {
+        "1": 130,
+        "4": 43
+      },
+      "cases": 173,
+      "category": "table",
+      "condition": "category=table and volume_hist_3_9 >= 0",
+      "feature": "volume_hist_3_9",
+      "kind": "threshold",
+      "max_regret_vs_topk": 0.2797538048270152,
+      "mean_attempts": 1.745664739884393,
+      "mean_delta": 1.605991995914637,
+      "mean_regret_vs_topk": 0.0073226528638115525,
+      "objective": 1.5710787011169491,
+      "op": ">=",
+      "per_category": {
+        "airplane": {
+          "cases": 86,
+          "mean_attempts": 1.0,
+          "mean_delta": 2.131840635629608
+        },
+        "chair": {
+          "cases": 44,
+          "mean_attempts": 1.0,
+          "mean_delta": 1.002581777153682
+        },
+        "table": {
+          "cases": 43,
+          "mean_attempts": 4.0,
+          "mean_delta": 1.1717377310307884
+        }
+      },
+      "threshold": 0.0
+    }
+  ],
+  "call_penalty": 0.02,
+  "max_budget": 5,
+  "notes": [
+    "Rules choose how many exact skill attempts to open.",
+    "The live executor still validates accepted updates with exact SMART/Manifold.",
+    "Rule order matters; the first matching rule determines the budget."
+  ],
+  "oracle_topk": {
+    "budget_counts": {
+      "5": 173
+    },
+    "cases": 173,
+    "max_regret_vs_topk": 0.0,
+    "mean_attempts": 5.0,
+    "mean_delta": 1.6133146487784482,
+    "mean_regret_vs_topk": 0.0,
+    "per_category": {
+      "airplane": {
+        "cases": 86,
+        "mean_attempts": 5.0,
+        "mean_delta": 2.1412141408372047
+      },
+      "chair": {
+        "cases": 44,
+        "mean_attempts": 5.0,
+        "mean_delta": 1.0120550056213977
+      },
+      "table": {
+        "cases": 43,
+        "mean_attempts": 5.0,
+        "mean_delta": 1.1727580902169878
+      }
+    }
+  },
+  "regret_penalty": 0.0,
+  "source": "experiments/macro_search/runs/parameterized_skills_4k/live_skill_controller_program_gate_macro_memory_rulefile_all173_hard_pool5_top5_best_positive_c256.jsonl"
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -92,6 +93,51 @@ def test_cpp_native_core_matches_existing_native_helpers() -> None:
     assert puct == [1.5, 1.25]
     assert callable(sc.run_mcts_callbacks)
     assert callable(sc.run_greedy_refine_callbacks)
+
+
+def test_cpp_native_scalar_mlp_scorer_matches_numpy() -> None:
+    assert sc.NativeScalarMlpScorer is not None
+    mean = [1.0, -2.0]
+    std = [2.0, 4.0]
+    weights = [
+        [[0.3, -0.1], [0.0, 0.2], [-0.4, 0.5]],
+        [[0.1, 0.2, -0.1], [-0.2, 0.4, 0.3], [0.5, -0.3, 0.2]],
+        [[0.7, -0.2, 0.4]],
+    ]
+    biases = [[0.1, -0.2, 0.3], [0.05, -0.1, 0.2], [0.33]]
+    ln_weights = [[1.0, 0.9, 1.1], [1.2, 0.8, 1.0]]
+    ln_biases = [[0.01, -0.02, 0.03], [0.04, -0.05, 0.06]]
+    scorer = sc.NativeScalarMlpScorer(mean, std, weights, biases, ln_weights, ln_biases)
+
+    def gelu(x: np.ndarray) -> np.ndarray:
+        return 0.5 * x * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
+
+    def layer_norm(x: np.ndarray, weight: list[float], bias: list[float]) -> np.ndarray:
+        row_mean = x.mean(axis=-1, keepdims=True)
+        row_var = ((x - row_mean) ** 2).mean(axis=-1, keepdims=True)
+        return (x - row_mean) / np.sqrt(row_var + 1e-5) * np.asarray(weight) + np.asarray(bias)
+
+    def expected(rows: np.ndarray) -> np.ndarray:
+        if rows.shape[1] < len(mean):
+            rows = np.concatenate(
+                [rows, np.zeros((rows.shape[0], len(mean) - rows.shape[1]))],
+                axis=1,
+            )
+        x = (rows[:, : len(mean)] - np.asarray(mean)) / np.asarray(std)
+        x = gelu(x @ np.asarray(weights[0]).T + np.asarray(biases[0]))
+        x = layer_norm(x, ln_weights[0], ln_biases[0])
+        x = gelu(x @ np.asarray(weights[1]).T + np.asarray(biases[1]))
+        x = layer_norm(x, ln_weights[1], ln_biases[1])
+        x = x @ np.asarray(weights[2]).T + np.asarray(biases[2])
+        return x[:, 0]
+
+    rows = np.asarray([[3.0, -1.0], [0.0, 2.0], [1.5, -2.5]], dtype=float)
+    assert scorer.dim() == 2
+    assert scorer.hidden() == 3
+    assert np.allclose(scorer.score_rows(rows, False), expected(rows), atol=1e-12)
+
+    short_rows = np.asarray([[3.0], [0.0]], dtype=float)
+    assert np.allclose(scorer.score_rows(short_rows, False), expected(short_rows), atol=1e-12)
 
 
 def test_cpp_native_normalize_obj_file_keeps_obj_payload(tmp_path) -> None:
@@ -1550,6 +1596,326 @@ def test_cpp_native_file_runner_mcts_can_apply_native_recenter_action(tmp_path) 
     output = tmp_path / "mcts" / "native" / "result" / "updated0" / "mesh-a" / "bboxs_steps0"
     assert (output / "bbox0.obj").exists()
     assert (output / "native_stats.json").exists()
+
+
+def test_cpp_native_engine_exposes_exact_recenter_action_delta() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    tet_volumes = [1.0 / 6.0]
+    centroids = [[0.25, 0.25, 0.25]]
+    bounds = [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]]
+    rotations = [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]]
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        tet_volumes,
+        centroids,
+        bounds,
+        rotations,
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+
+    recenter_action = 12
+    local = engine.local_action_features(recenter_action, 1, 5)
+    assert local["feature_dim"] == len(local["features"])
+    assert local["named"]["is_recenter"] == 1.0
+    assert local["named"]["is_axis"] == 0.0
+    assert local["named"]["bbox_idx"] == 0.0
+    axis_local = engine.local_action_features(0, 0, 5)
+    assert axis_local["named"]["is_axis"] == 1.0
+    assert axis_local["named"]["is_recenter"] == 0.0
+    assert axis_local["named"]["candidate_valid"] in {0.0, 1.0}
+    score_reward = engine.score_native_action_reward(recenter_action, 100.0, 1.0)
+    assert math.isfinite(score_reward)
+    applied = engine.apply_native_action_delta(recenter_action, 100.0, 1.0)
+    assert applied["kind"] == "recenter"
+    assert applied["action"] == recenter_action
+    assert applied["bbox_idx"] == 0
+    assert len(applied["bounds"]) == 6
+    assert len(applied["rotation"]) == 9
+    assert math.isfinite(applied["reward"])
+    assert applied["last_score"] == engine.stats()["last_bbox_score"]
+    assert engine.stats()["native_recenter_applies"] == 1.0
+
+
+def test_cpp_native_engine_selects_exact_macro_action_in_cpp() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        [1.0 / 6.0],
+        [[0.25, 0.25, 0.25]],
+        [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]],
+        [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]],
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+
+    selected = engine.select_exact_native_action("shrink_face", 100.0, 1.0, 32)
+    assert selected["found"] is True
+    assert selected["exact_checked"] > 0
+    assert selected["exact_errors"] == 0
+    assert selected["candidate_actions"] > 0
+    assert selected["cache_hit"] is False
+    assert selected["reward"] == pytest.approx(
+        engine.score_native_action_reward(selected["action"], 100.0, 1.0)
+    )
+    cached = engine.select_exact_native_action("shrink_face", 100.0, 1.0, 32)
+    assert cached["found"] == selected["found"]
+    assert cached["action"] == selected["action"]
+    assert cached["reward"] == pytest.approx(selected["reward"])
+    assert cached["cache_hit"] is True
+
+    recenter = engine.select_exact_native_action("recenter_box", 100.0, 1.0, 32)
+    assert recenter["candidate_actions"] > 0
+    assert recenter["exact_checked"] >= 1
+    if recenter["found"]:
+        assert recenter["reward"] == pytest.approx(
+            engine.score_native_action_reward(recenter["action"], 100.0, 1.0)
+        )
+
+    stats = engine.stats()
+    assert stats["native_macro_select_exact_action_calls"] == 3.0
+    assert stats["native_macro_select_exact_action_cache_hits"] == 1.0
+    assert stats["native_macro_select_exact_action_cached_checks_saved"] >= selected["exact_checked"]
+    assert stats["native_macro_select_exact_action_checks"] >= 2.0
+
+
+def test_cpp_native_engine_executes_macro_skill_in_cpp() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        [1.0 / 6.0],
+        [[0.25, 0.25, 0.25]],
+        [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]],
+        [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]],
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    skill = {
+        "macro_id": "unit_test_skill",
+        "skill": "shrink_slack_face",
+        "policy": [
+            {
+                "op": "shrink_face",
+                "target": "max_slack_face",
+                "until": "coverage_margin_low_or_score_stalls",
+                "observed_repeat": "1",
+                "repeat_max": 2,
+            }
+        ],
+    }
+
+    result = engine.execute_native_macro_skill(skill, 100.0, 1.0, 32, 4, "guarded_variable")
+    assert result["macro_id"] == "unit_test_skill"
+    assert result["skill"] == "shrink_slack_face"
+    assert result["native_executor"] is True
+    assert result["executed_steps"] == len(result["actions"])
+    assert result["accepted"] == (result["score_delta"] >= -1.0e-12 and bool(result["actions"]))
+    if result["actions"]:
+        assert result["actions"][0]["native_executor"] is True
+        assert result["actions"][0]["op"] == "shrink_face"
+
+    stats = engine.stats()
+    assert stats["native_macro_skill_execute_calls"] == 1.0
+    assert stats["native_macro_select_exact_action_calls"] >= 1.0
+
+
+def test_cpp_native_engine_can_reset_after_native_action() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    bounds = [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]]
+    rotations = [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]]
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        [1.0 / 6.0],
+        [[0.25, 0.25, 0.25]],
+        bounds,
+        rotations,
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    saved_bounds, saved_rotations, saved_score = engine.boxes()
+    engine.apply_native_action_delta(12, 100.0, 1.0)
+    assert engine.boxes()[0] != saved_bounds
+    engine.reset_to_state(saved_bounds, saved_rotations, saved_score)
+    restored_bounds, restored_rotations, restored_score = engine.boxes()
+    assert restored_bounds == saved_bounds
+    assert restored_rotations == saved_rotations
+    assert restored_score == saved_score
+    assert engine.stats()["native_explicit_resets"] == 1.0
+
+
+def test_builtin_macro_skill_controller_smoke_on_native_engine() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        [1.0 / 6.0],
+        [[0.25, 0.25, 0.25]],
+        [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]],
+        [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]],
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+    result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="table",
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+    )
+
+    assert result["attempt_count"] == 2
+    assert result["exact_budget"] == 2
+    assert result["exact_validator"] == "native_smart_manifold"
+    assert result["rollback_on_failure"] is True
+    assert result["accepted_non_worse"] is True
+    assert result["deployment_status"] == "experimental_opt_in_post_refine"
+    assert result["profile"]["profile"] == "geometry_top5_exact_guarded_variable_repeat_v2_balanced"
+    assert result["native_selector_cache_stats"]["calls"] > 0.0
+    assert "cached_checks_saved" in result["native_selector_cache_stats"]
+    assert engine.stats()["num_boxes"] == 1.0
+    assert engine.stats()["native_macro_skill_execute_calls"] > 0.0
+    assert engine.stats()["native_macro_select_exact_action_calls"] > 0.0
+
+    quality_result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="table",
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+        quality_preset="quality",
+    )
+    assert quality_result["exact_budget"] == 2
+    assert quality_result["quality_preset"] == "quality"
+    assert quality_result["max_steps"] == 32
+    assert quality_result["profile"]["profile"].endswith("_quality_budget5_steps32")
+
+    efficient_result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="chair",
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+        quality_preset="efficient",
+    )
+    assert efficient_result["exact_budget"] == 2
+    assert efficient_result["quality_preset"] == "efficient"
+    assert efficient_result["max_steps"] == 32
+    assert "efficient_chair_budget5_steps32" in efficient_result["profile"]["profile"]
+
+    learned_result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="chair",
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+        quality_preset="learned_efficient",
+    )
+    assert learned_result["quality_preset"] == "learned_efficient"
+    assert learned_result["learned_quality_gate_decision"]["available"] is True
+    assert learned_result["exact_budget"] in {1, 2}
+    assert "state_conditioned_ridge_gate" in learned_result["profile"]["profile"]
+
+    for preset in ("learned_fast", "learned_quality"):
+        preset_result = sc.run_builtin_macro_skill_controller(
+            engine,
+            category="chair",
+            top_k=2,
+            candidate_count=32,
+            max_steps=4,
+            quality_preset=preset,
+        )
+        assert preset_result["quality_preset"] == preset
+        assert preset_result["learned_quality_gate_decision"]["preset"] == preset
+        assert preset_result["exact_budget"] in {1, 2}
+
+
+def test_builtin_macro_skill_controller_from_files_smoke(tmp_path) -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    msh = tmp_path / "one_tet.msh"
+    sc.native_save_gmsh(str(msh), vertices, sc.native_tetra_surface_faces(voxels), voxels)
+    metadata = tmp_path / "bbox_params.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [-0.3, -0.3, -0.3, 0.7, 0.7, 0.7],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = sc.run_builtin_macro_skill_controller_from_files(
+        msh_path=msh,
+        bbox_metadata_path=metadata,
+        category="table",
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+    )
+
+    assert result["attempt_count"] == 2
+    assert result["exact_validator"] == "native_smart_manifold"
+    assert result["rollback_on_failure"] is True
+    assert result["msh_path"] == str(msh)
+    assert result["bbox_metadata_path"] == str(metadata)
+    assert result["native_selector_cache_stats"]["calls"] > 0.0
+    assert result["engine"].stats()["num_boxes"] == 1.0
+    assert result["engine"].stats()["native_macro_select_exact_action_calls"] > 0.0
 
 
 def test_smart_cpp_native_executable_refine_mcts_runs_in_one_process(tmp_path) -> None:
@@ -3039,7 +3405,10 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert guarded_mcts_prior_defaults["guard_top_k"] == 0
     assert guarded_mcts_prior_defaults["guard_prior_weight"] == 0.0
     assert guarded_mcts_prior_defaults["guard_fast_score_gt"] == -0.05
-    assert guarded_mcts_prior_defaults["guard_fast_num_iter"] == 30
+    assert guarded_mcts_prior_defaults["guard_num_iter"] == 50
+    assert guarded_mcts_prior_defaults["guard_fast_num_iter"] == 50
+    assert sc.native_deepset_mcts_prior_defaults("auto_safe") == guarded_mcts_prior_defaults
+    assert sc.native_deepset_mcts_prior_defaults("production_candidate") == guarded_mcts_prior_defaults
 
     auto_engine = sc.NativeSmartEngine(
         vertices,
@@ -3240,7 +3609,7 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert guarded_result["mcts_prior_top_k"] == 0
     assert guarded_result["mcts_prior_weight"] == 0.0
     assert guarded_result["mcts_prior_max_step"] == 2
-    assert guarded_result["mcts_prior_num_iter"] == 35
+    assert guarded_result["mcts_prior_num_iter"] == 50
 
     guarded_fast_result = sc.run_builtin_deepset_prior_mcts(
         guarded_mcts_prior_engine,
@@ -3251,7 +3620,7 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     )
     assert guarded_fast_result["mcts_prior_guarded"] is True
     assert guarded_fast_result["mcts_prior_guard_fast"] is True
-    assert guarded_fast_result["mcts_prior_num_iter"] == 30
+    assert guarded_fast_result["mcts_prior_num_iter"] == 50
 
     dynamic_mcts_prior_engine = sc.NativeSmartEngine(
         vertices,

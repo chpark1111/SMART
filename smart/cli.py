@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     public_commands = (
         "{run,native-run,normalize,tetra,preseg,merge,refine,mcts,local_refine,"
         "render,build-tools,build-cpp,audit-wheel,check-data,configs,assets,"
-        "summary,doctor,evaluate}"
+        "summary,doctor,evaluate,macro-skill,macro-skill-summary}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     configs.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     assets = sub.add_parser("assets", help="List optional SMART model assets")
-    assets.add_argument("--kind", choices=["gates", "priors"], help="Limit to one asset kind")
+    assets.add_argument("--kind", choices=["gates", "priors", "skills"], help="Limit to one asset kind")
     assets.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     summary = sub.add_parser("summary", help="Summarize the latest manifest record for each stage/mesh")
@@ -129,6 +129,65 @@ def main(argv: list[str] | None = None) -> int:
         help="Evaluate only successful records listed in the stage manifest",
     )
     evaluate.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+
+    macro_skill = sub.add_parser(
+        "macro-skill",
+        help="Run the opt-in exact-validated variable-length macro-skill controller",
+    )
+    macro_skill.add_argument("--msh", required=True, help="Prepared tetra mesh .msh path")
+    macro_skill.add_argument("--bbox-metadata", required=True, help="BBox params JSON from SMART merge/refine/MCTS")
+    macro_skill.add_argument("--category", required=True, help="Shape category, e.g. airplane, chair, table")
+    macro_skill.add_argument("--cover-penalty", type=float, default=100.0)
+    macro_skill.add_argument("--pen-rate", type=float, default=1.0)
+    macro_skill.add_argument("--num-action-scale", type=int, default=2)
+    macro_skill.add_argument("--action-unit", type=float, default=0.01)
+    macro_skill.add_argument("--candidate-count", type=int, default=256)
+    macro_skill.add_argument("--top-k", type=int, default=5)
+    macro_skill.add_argument("--exact-budget", type=int)
+    macro_skill.add_argument("--max-steps", type=int, default=16)
+    macro_skill.add_argument(
+        "--quality-preset",
+        choices=[
+            "balanced",
+            "efficient",
+            "learned_fast",
+            "learned_efficient",
+            "learned_quality",
+            "quality",
+            "custom",
+        ],
+        default="balanced",
+    )
+    macro_skill.add_argument(
+        "--repeat-mode",
+        choices=["guarded_variable", "median", "best_of_median_and_guarded"],
+        default="guarded_variable",
+    )
+    macro_skill.add_argument("--target-aware-execution", action="store_true")
+    macro_skill.add_argument(
+        "--native-executor",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the compact C++ macro-skill executor when available",
+    )
+    macro_skill.add_argument("--volume-method", choices=["mesh", "tet"], default="mesh")
+    macro_skill.add_argument("--cache-capacity", type=int, default=65536)
+    macro_skill.add_argument(
+        "--stateful-union-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the native stateful Manifold union cache",
+    )
+    macro_skill.add_argument("--output", help="Optional JSON result path")
+    macro_skill.add_argument("--output-bbox-dir", help="Optional directory for accepted bbox OBJ/metadata export")
+    macro_skill.add_argument("--output-obj", help="Optional combined accepted bbox OBJ path")
+    macro_skill.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+
+    macro_skill_summary = sub.add_parser(
+        "macro-skill-summary",
+        help="Print the packaged macro-skill research profile and safety contract",
+    )
+    macro_skill_summary.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     prior = sub.add_parser("build-prior", help=argparse.SUPPRESS)
     prior.add_argument("traces", nargs="*", help="Trace JSONL file(s) from mcts.trace_actions_path")
@@ -548,6 +607,86 @@ def main(argv: list[str] | None = None) -> int:
                     viou=summary["Avg_vIoU"],
                     cd=summary["Avg_cub_CD"],
                     output=status["output_path"],
+                )
+            )
+        return 0
+
+    if args.command == "macro-skill":
+        from .api import run_macro_skill_controller_from_files
+
+        result = run_macro_skill_controller_from_files(
+            msh_path=args.msh,
+            bbox_metadata_path=args.bbox_metadata,
+            category=args.category,
+            cover_penalty=args.cover_penalty,
+            pen_rate=args.pen_rate,
+            num_action_scale=args.num_action_scale,
+            action_unit=args.action_unit,
+            candidate_count=args.candidate_count,
+            top_k=args.top_k,
+            exact_budget=args.exact_budget,
+            max_steps=args.max_steps,
+            quality_preset=args.quality_preset,
+            repeat_mode=args.repeat_mode,
+            target_aware_execution=args.target_aware_execution,
+            native_executor=args.native_executor,
+            volume_method=args.volume_method,
+            stateful_union_cache=args.stateful_union_cache,
+            cache_capacity=args.cache_capacity,
+        )
+        engine = result.pop("engine", None)
+        if args.output_bbox_dir:
+            if engine is None:
+                raise SystemExit("macro-skill accepted no engine; cannot export bbox directory")
+            result["exported_bbox_count"] = int(engine.export_bbox_dir(str(args.output_bbox_dir)))
+            result["output_bbox_dir"] = str(args.output_bbox_dir)
+        if args.output_obj:
+            if engine is None:
+                raise SystemExit("macro-skill accepted no engine; cannot export OBJ")
+            engine.export_obj(str(args.output_obj))
+            result["output_obj"] = str(args.output_obj)
+        if args.output:
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(
+                "accepted={accepted} macro={macro_id} delta={score_delta:.8g} "
+                "attempts={attempt_count} budget={exact_budget} preset={quality_preset} "
+                "max_steps={max_steps}".format(**result)
+            )
+        return 0
+
+    if args.command == "macro-skill-summary":
+        from .macro_skills import macro_skill_profile_summary
+
+        summary_payload = macro_skill_profile_summary()
+        if args.json:
+            print(json.dumps(summary_payload, indent=2, sort_keys=True))
+        else:
+            practical = summary_payload["best_practical"]
+            efficient = summary_payload["efficient_quality_preset"]
+            learned = summary_payload["learned_quality_gate_preset"]
+            quality = summary_payload["quality_preset"]
+            print(
+                "status={status} default={default} cases={cases} "
+                "balanced_delta={balanced_delta:.4f} balanced_attempts={balanced_attempts:.3f} "
+                "efficient_delta={efficient_delta:.4f} efficient_open={efficient_open} "
+                "learned_delta={learned_delta:.4f} learned_eff={learned_eff:.3f} "
+                "quality_delta={quality_delta:.4f} quality_attempts={quality_attempts:.3f}".format(
+                    status=summary_payload["status"],
+                    default=summary_payload["default_smart_path"],
+                    cases=summary_payload["heldout_cases"],
+                    balanced_delta=practical["mean_delta"],
+                    balanced_attempts=practical["mean_exact_attempts"],
+                    efficient_delta=efficient["mean_delta"],
+                    efficient_open=efficient["quality_open"],
+                    learned_delta=learned["mean_delta"],
+                    learned_eff=learned["gain_per_extra_second"],
+                    quality_delta=quality["mean_delta"],
+                    quality_attempts=quality["mean_exact_attempts"],
                 )
             )
         return 0

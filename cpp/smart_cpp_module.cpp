@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -2402,6 +2403,192 @@ class NativeFastGeometryMlpPolicy {
   std::vector<double> mean_;
   std::vector<double> inv_std_;
   std::vector<NativeFastMlpLinearLayer> layers_;
+};
+
+class NativeScalarMlpScorer {
+  struct LayerNorm {
+    std::vector<double> weight;
+    std::vector<double> bias;
+  };
+
+ public:
+  NativeScalarMlpScorer(
+      const std::vector<double>& mean,
+      const std::vector<double>& std,
+      const std::vector<std::vector<std::vector<double>>>& weights,
+      const std::vector<std::vector<double>>& biases,
+      const std::vector<std::vector<double>>& layernorm_weights,
+      const std::vector<std::vector<double>>& layernorm_biases)
+      : mean_(mean), inv_std_(std.size(), 1.0) {
+    if (mean_.empty() || mean_.size() != std.size()) {
+      throw std::runtime_error("scalar MLP mean/std shape mismatch");
+    }
+    if (weights.empty() || weights.size() != biases.size()) {
+      throw std::runtime_error("scalar MLP weight/bias shape mismatch");
+    }
+    if (layernorm_weights.size() != layernorm_biases.size() ||
+        layernorm_weights.size() + 1 != weights.size()) {
+      throw std::runtime_error("scalar MLP layernorm shape mismatch");
+    }
+    for (std::size_t idx = 0; idx < std.size(); ++idx) {
+      inv_std_[idx] = std[idx] < 1.0e-6 ? 1.0 : 1.0 / std[idx];
+    }
+
+    std::size_t expected_in = mean_.size();
+    for (std::size_t layer_idx = 0; layer_idx < weights.size(); ++layer_idx) {
+      const auto& layer_weights = weights[layer_idx];
+      const auto& layer_bias = biases[layer_idx];
+      if (layer_weights.empty() || layer_weights.size() != layer_bias.size()) {
+        throw std::runtime_error("scalar MLP linear shape mismatch");
+      }
+      const std::size_t in_dim = layer_weights.front().size();
+      if (in_dim != expected_in) {
+        throw std::runtime_error("scalar MLP input dimension mismatch");
+      }
+      NativeFastMlpLinearLayer layer;
+      layer.out_dim = layer_weights.size();
+      layer.in_dim = in_dim;
+      layer.bias = layer_bias;
+      layer.weight.reserve(layer.out_dim * layer.in_dim);
+      for (const auto& row : layer_weights) {
+        if (row.size() != layer.in_dim) {
+          throw std::runtime_error("ragged scalar MLP weight matrix");
+        }
+        layer.weight.insert(layer.weight.end(), row.begin(), row.end());
+      }
+      expected_in = layer.out_dim;
+      layers_.push_back(std::move(layer));
+      if (layer_idx + 1 < weights.size()) {
+        const auto& ln_weight = layernorm_weights[layer_idx];
+        const auto& ln_bias = layernorm_biases[layer_idx];
+        if (ln_weight.size() != expected_in || ln_bias.size() != expected_in) {
+          throw std::runtime_error("scalar MLP layernorm dimension mismatch");
+        }
+        layernorms_.push_back(LayerNorm{ln_weight, ln_bias});
+      }
+    }
+  }
+
+  std::size_t dim() const { return mean_.size(); }
+  std::size_t hidden() const {
+    return layers_.empty() ? 0 : layers_.front().out_dim;
+  }
+
+  std::vector<double> score_rows(
+      py::array_t<double, py::array::c_style | py::array::forcecast> rows,
+      bool already_normalized = false) const {
+    const py::buffer_info info = rows.request();
+    if (info.ndim != 2) {
+      throw std::runtime_error("scalar MLP rows must be a 2D array");
+    }
+    const std::size_t n_rows = static_cast<std::size_t>(info.shape[0]);
+    const std::size_t n_cols = static_cast<std::size_t>(info.shape[1]);
+    const double* data = static_cast<const double*>(info.ptr);
+    std::vector<double> scores;
+    scores.reserve(n_rows);
+    std::vector<double> features(mean_.size(), 0.0);
+    std::vector<double> buffer_a;
+    std::vector<double> buffer_b;
+    for (std::size_t row = 0; row < n_rows; ++row) {
+      if (already_normalized) {
+        std::fill(features.begin(), features.end(), 0.0);
+      } else {
+        for (std::size_t col = 0; col < mean_.size(); ++col) {
+          features[col] = finite_or_zero((0.0 - mean_[col]) * inv_std_[col]);
+        }
+      }
+      const std::size_t copied = std::min(n_cols, mean_.size());
+      for (std::size_t col = 0; col < copied; ++col) {
+        const double value = finite_or_zero(data[row * n_cols + col]);
+        features[col] = already_normalized
+                            ? value
+                            : finite_or_zero((value - mean_[col]) * inv_std_[col]);
+      }
+      scores.push_back(forward_normalized_buffered(features, buffer_a, buffer_b));
+    }
+    return scores;
+  }
+
+ private:
+  static double finite_or_zero(double value) {
+    return std::isfinite(value) ? value : 0.0;
+  }
+
+  static double gelu(double x) {
+    return 0.5 * x * (1.0 + std::erf(x * 0.70710678118654752440));
+  }
+
+  static void apply_layernorm(std::vector<double>& values,
+                              const LayerNorm& layernorm) {
+    double mean = 0.0;
+    for (double value : values) mean += value;
+    mean /= std::max<std::size_t>(1, values.size());
+    double var = 0.0;
+    for (double value : values) {
+      const double diff = value - mean;
+      var += diff * diff;
+    }
+    var /= std::max<std::size_t>(1, values.size());
+    const double inv_std = 1.0 / std::sqrt(var + 1.0e-5);
+    for (std::size_t idx = 0; idx < values.size(); ++idx) {
+      values[idx] = (values[idx] - mean) * inv_std * layernorm.weight[idx] +
+                    layernorm.bias[idx];
+    }
+  }
+
+  double forward_normalized(std::vector<double> x) const {
+    for (std::size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
+      const NativeFastMlpLinearLayer& layer = layers_[layer_idx];
+      std::vector<double> next(layer.out_dim, 0.0);
+      for (std::size_t out_idx = 0; out_idx < layer.out_dim; ++out_idx) {
+        double value = layer.bias[out_idx];
+        const double* weight = layer.weight.data() + out_idx * layer.in_dim;
+        for (std::size_t in_idx = 0; in_idx < layer.in_dim; ++in_idx) {
+          value += weight[in_idx] * x[in_idx];
+        }
+        next[out_idx] = finite_or_zero(value);
+      }
+      if (layer_idx + 1 < layers_.size()) {
+        for (double& value : next) value = gelu(value);
+        apply_layernorm(next, layernorms_[layer_idx]);
+      }
+      x = std::move(next);
+    }
+    return x.empty() ? -1.0e300 : finite_or_zero(x.front());
+  }
+
+  double forward_normalized_buffered(const std::vector<double>& input,
+                                     std::vector<double>& buffer_a,
+                                     std::vector<double>& buffer_b) const {
+    const std::vector<double>* current = &input;
+    std::vector<double>* next = &buffer_a;
+    for (std::size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
+      const NativeFastMlpLinearLayer& layer = layers_[layer_idx];
+      next->assign(layer.out_dim, 0.0);
+      const double* current_data = current->data();
+      for (std::size_t out_idx = 0; out_idx < layer.out_dim; ++out_idx) {
+        double value = layer.bias[out_idx];
+        const double* weight = layer.weight.data() + out_idx * layer.in_dim;
+        for (std::size_t in_idx = 0; in_idx < layer.in_dim; ++in_idx) {
+          value += weight[in_idx] * current_data[in_idx];
+        }
+        (*next)[out_idx] = finite_or_zero(value);
+      }
+      if (layer_idx + 1 == layers_.size()) {
+        return next->empty() ? -1.0e300 : finite_or_zero(next->front());
+      }
+      for (double& value : *next) value = gelu(value);
+      apply_layernorm(*next, layernorms_[layer_idx]);
+      current = next;
+      next = (next == &buffer_a) ? &buffer_b : &buffer_a;
+    }
+    return -1.0e300;
+  }
+
+  std::vector<double> mean_;
+  std::vector<double> inv_std_;
+  std::vector<NativeFastMlpLinearLayer> layers_;
+  std::vector<LayerNorm> layernorms_;
 };
 
 class NativeDeepSetCandidateScorer {
@@ -6503,6 +6690,16 @@ class NativeSmartEngine {
     std::size_t proxy_rank = 0;
   };
 
+  struct NativeSelectedAction {
+    bool found = false;
+    std::size_t action = 0;
+    double reward = -std::numeric_limits<double>::infinity();
+    std::size_t exact_checked = 0;
+    std::size_t exact_errors = 0;
+    std::size_t candidate_actions = 0;
+    bool cache_hit = false;
+  };
+
   NativeSmartEngine(const std::vector<std::vector<double>>& vertices,
                     const std::vector<std::vector<std::size_t>>& faces,
                     const std::vector<std::vector<std::size_t>>& voxels,
@@ -6529,6 +6726,11 @@ class NativeSmartEngine {
         volume_sum_(resolve_volume_sum(volume_sum, tet_volumes)),
         stateful_union_cache_(stateful_union_cache),
         cache_capacity_(std::max<std::size_t>(1, cache_capacity)),
+        native_selector_cache_capacity_(
+            std::max<std::size_t>(
+                128,
+                std::min<std::size_t>(std::max<std::size_t>(1, cache_capacity),
+                                      65536))),
         volume_method_(volume_method) {
     check_row_width(vertices_, 3, "vertices");
     check_row_width(faces_, 3, "faces");
@@ -6568,6 +6770,16 @@ class NativeSmartEngine {
                           state_->last_bbox_score());
   }
 
+  void reset_to_state(const std::vector<std::vector<double>>& bounds,
+                      const std::vector<std::vector<double>>& rotations,
+                      double last_bbox_score) {
+    state_->reset_to_state(bounds, rotations, last_bbox_score);
+    actions_per_bbox_ = 6 * num_action_scale_ + 1;
+    num_actions_ = bounds.size() * actions_per_bbox_;
+    opposite_actions_ = native_opposite_actions_py(bounds.size(), num_action_scale_);
+    stats_["native_explicit_resets"] += 1.0;
+  }
+
   py::tuple best_boxes() const {
     return py::make_tuple(best_bounds_, best_rotations_, best_score_);
   }
@@ -6596,6 +6808,344 @@ class NativeSmartEngine {
     for (const auto& item : state_->cache_stats()) {
       out["manifold_" + item.first] = static_cast<double>(item.second);
     }
+    return out;
+  }
+
+  py::dict geometry_state_features(std::size_t hist_bins = 3) const {
+    auto copied = state_->copy_bounds_rotations();
+    const std::vector<std::vector<double>>& bounds = copied.first;
+    const std::vector<std::vector<double>>& rotations = copied.second;
+    py::list names;
+    py::list values;
+    py::dict named;
+    auto push = [&](const std::string& name, double value) {
+      if (!std::isfinite(value)) {
+        value = 0.0;
+      }
+      names.append(py::str(name));
+      values.append(py::float_(value));
+      named[py::str(name)] = py::float_(value);
+    };
+
+    const std::size_t n_boxes = bounds.size();
+    const double inv_volume_sum = 1.0 / std::max(volume_sum_, 1.0e-12);
+    double exact_covered = 0.0;
+    double exact_bvs = 0.0;
+    double total_bbox_volume = 0.0;
+    try {
+      exact_covered = state_->covered();
+      exact_bvs = state_->bvs();
+      total_bbox_volume = state_->total_volume();
+    } catch (const std::exception&) {
+      exact_covered = 0.0;
+      exact_bvs = 0.0;
+      for (const auto& row : bounds) {
+        total_bbox_volume += bbox_volume_row(row);
+      }
+    }
+
+    push("num_boxes", static_cast<double>(n_boxes));
+    push("num_actions", static_cast<double>(num_actions_));
+    push("actions_per_bbox", static_cast<double>(actions_per_bbox_));
+    push("action_unit", action_unit_);
+    push("last_bbox_score", state_->last_bbox_score());
+    push("best_bbox_score", best_score_);
+    push("exact_covered", exact_covered);
+    push("exact_coverage_gap", std::max(0.0, 1.0 - exact_covered));
+    push("exact_bvs", exact_bvs);
+    push("exact_total_bbox_volume_ratio", total_bbox_volume * inv_volume_sum);
+    push("valid_box_ratio",
+         n_boxes == 0 ? 0.0
+                      : static_cast<double>(state_->valid_count()) /
+                            static_cast<double>(n_boxes));
+    push("native_recenter_enabled", native_recenter_enabled_ ? 1.0 : 0.0);
+
+    std::vector<double> bbox_volumes;
+    bbox_volumes.reserve(n_boxes);
+    double local_volume_total = 0.0;
+    double min_volume = std::numeric_limits<double>::infinity();
+    double max_volume = 0.0;
+    double sum_aspect = 0.0;
+    double max_aspect = 0.0;
+    double sum_min_dim = 0.0;
+    double sum_max_dim = 0.0;
+    double min_dim_all = std::numeric_limits<double>::infinity();
+    double max_dim_all = 0.0;
+    double diag_alignment = 0.0;
+    double offdiag_alignment = 0.0;
+    for (std::size_t idx = 0; idx < bounds.size(); ++idx) {
+      const auto& row = bounds[idx];
+      const double volume = bbox_volume_row(row);
+      bbox_volumes.push_back(volume);
+      local_volume_total += volume;
+      min_volume = std::min(min_volume, volume);
+      max_volume = std::max(max_volume, volume);
+      if (row.size() == 6) {
+        const double dx = std::max(0.0, row[3] - row[0]);
+        const double dy = std::max(0.0, row[4] - row[1]);
+        const double dz = std::max(0.0, row[5] - row[2]);
+        const double local_min_dim = std::min({dx, dy, dz});
+        const double local_max_dim = std::max({dx, dy, dz});
+        const double aspect =
+            local_max_dim / std::max(local_min_dim, 1.0e-12);
+        sum_aspect += aspect;
+        max_aspect = std::max(max_aspect, aspect);
+        sum_min_dim += local_min_dim;
+        sum_max_dim += local_max_dim;
+        min_dim_all = std::min(min_dim_all, local_min_dim);
+        max_dim_all = std::max(max_dim_all, local_max_dim);
+      }
+      if (idx < rotations.size() && rotations[idx].size() == 9) {
+        const auto& rot = rotations[idx];
+        diag_alignment +=
+            (std::abs(rot[0]) + std::abs(rot[4]) + std::abs(rot[8])) / 3.0;
+        offdiag_alignment +=
+            (std::abs(rot[1]) + std::abs(rot[2]) + std::abs(rot[3]) +
+             std::abs(rot[5]) + std::abs(rot[6]) + std::abs(rot[7])) /
+            6.0;
+      }
+    }
+    const double inv_boxes = n_boxes > 0 ? 1.0 / static_cast<double>(n_boxes) : 0.0;
+    double mean_volume = n_boxes > 0 ? local_volume_total * inv_boxes : 0.0;
+    double volume_var = 0.0;
+    for (double volume : bbox_volumes) {
+      const double diff = volume - mean_volume;
+      volume_var += diff * diff;
+    }
+    volume_var = n_boxes > 0 ? volume_var * inv_boxes : 0.0;
+    push("local_total_bbox_volume_ratio", local_volume_total * inv_volume_sum);
+    push("mean_bbox_volume_ratio", mean_volume * inv_volume_sum);
+    push("min_bbox_volume_ratio",
+         std::isfinite(min_volume) ? min_volume * inv_volume_sum : 0.0);
+    push("max_bbox_volume_ratio", max_volume * inv_volume_sum);
+    push("bbox_volume_cv",
+         std::sqrt(std::max(0.0, volume_var)) / std::max(mean_volume, 1.0e-12));
+    push("mean_bbox_aspect", sum_aspect * inv_boxes);
+    push("max_bbox_aspect", max_aspect);
+    push("mean_bbox_min_dim", sum_min_dim * inv_boxes);
+    push("mean_bbox_max_dim", sum_max_dim * inv_boxes);
+    push("global_min_bbox_dim",
+         std::isfinite(min_dim_all) ? min_dim_all : 0.0);
+    push("global_max_bbox_dim", max_dim_all);
+    push("mean_rotation_diag_abs", diag_alignment * inv_boxes);
+    push("mean_rotation_offdiag_abs", offdiag_alignment * inv_boxes);
+
+    if (!bounds.empty()) {
+      const std::vector<double> union_bounds = native_bbox_union_bounds_py(bounds);
+      const double union_volume = bbox_volume_row(union_bounds);
+      push("union_volume_ratio", union_volume * inv_volume_sum);
+      push("total_to_union_volume_ratio",
+           local_volume_total / std::max(union_volume, 1.0e-12));
+      if (union_bounds.size() == 6) {
+        push("union_extent_x", std::max(0.0, union_bounds[3] - union_bounds[0]));
+        push("union_extent_y", std::max(0.0, union_bounds[4] - union_bounds[1]));
+        push("union_extent_z", std::max(0.0, union_bounds[5] - union_bounds[2]));
+      }
+    } else {
+      push("union_volume_ratio", 0.0);
+      push("total_to_union_volume_ratio", 0.0);
+      push("union_extent_x", 0.0);
+      push("union_extent_y", 0.0);
+      push("union_extent_z", 0.0);
+    }
+
+    const double proxy_coverage = centroid_current_coverage(bounds, rotations);
+    push("centroid_proxy_coverage", proxy_coverage);
+    push("centroid_proxy_coverage_gap", std::max(0.0, 1.0 - proxy_coverage));
+    const std::vector<double>& extent = cached_centroid_extent();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      push("centroid_extent_" + std::to_string(axis),
+           axis < extent.size() ? extent[axis] : 0.0);
+    }
+    const std::vector<double>& pca = cached_weighted_pca_extent();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      push("weighted_pca_extent_" + std::to_string(axis),
+           axis < pca.size() ? pca[axis] : 0.0);
+    }
+    if (pca.size() >= 3) {
+      push("weighted_pca_anisotropy_01", pca[0] / std::max(pca[1], 1.0e-12));
+      push("weighted_pca_anisotropy_02", pca[0] / std::max(pca[2], 1.0e-12));
+    } else {
+      push("weighted_pca_anisotropy_01", 0.0);
+      push("weighted_pca_anisotropy_02", 0.0);
+    }
+    const std::vector<double>& hist = cached_volume_histogram(hist_bins);
+    for (std::size_t idx = 0; idx < hist.size(); ++idx) {
+      push("volume_hist_" + std::to_string(hist_bins) + "_" +
+               std::to_string(idx),
+           hist[idx]);
+    }
+
+    py::dict out;
+    out["names"] = names;
+    out["features"] = values;
+    out["named"] = named;
+    out["hist_bins"] = py::int_(hist_bins);
+    out["feature_dim"] = py::int_(py::len(values));
+    return out;
+  }
+
+  py::dict local_action_features(std::size_t action,
+                                 std::size_t step_index = 0,
+                                 std::size_t total_steps = 0) const {
+    auto copied = state_->copy_bounds_rotations();
+    const std::vector<std::vector<double>>& bounds = copied.first;
+    py::list names;
+    py::list values;
+    py::dict named;
+    auto push = [&](const std::string& name, double value) {
+      if (!std::isfinite(value)) {
+        value = 0.0;
+      }
+      names.append(py::str(name));
+      values.append(py::float_(value));
+      named[py::str(name)] = py::float_(value);
+    };
+
+    const std::size_t n_boxes = bounds.size();
+    const double inv_volume_sum = 1.0 / std::max(volume_sum_, 1.0e-12);
+    const std::size_t bbox_idx =
+        actions_per_bbox_ == 0 ? 0 : action / actions_per_bbox_;
+    const std::size_t local =
+        actions_per_bbox_ == 0 ? 0 : action % actions_per_bbox_;
+    const bool valid_bbox = bbox_idx < n_boxes;
+    const bool is_recenter =
+        actions_per_bbox_ > 0 && local == actions_per_bbox_ - 1;
+    const bool is_axis =
+        actions_per_bbox_ > 0 && valid_bbox && local < actions_per_bbox_ - 1;
+    std::size_t coord_idx = 0;
+    std::size_t scale_idx = 0;
+    double scale = 0.0;
+    if (is_axis && num_action_scale_ > 0) {
+      coord_idx = local / num_action_scale_;
+      scale_idx = local % num_action_scale_;
+      const std::vector<double> scales = native_action_scales_py(num_action_scale_);
+      if (scale_idx < scales.size()) {
+        scale = scales[scale_idx];
+      }
+    }
+    const double delta = scale * action_unit_;
+    const bool touches_min_face = is_axis && coord_idx < 3;
+    const bool shrink_like =
+        is_axis && ((touches_min_face && delta > 0.0) ||
+                    (!touches_min_face && delta < 0.0));
+    const bool expand_like =
+        is_axis && ((touches_min_face && delta < 0.0) ||
+                    (!touches_min_face && delta > 0.0));
+
+    push("step_index", static_cast<double>(step_index));
+    push("total_steps", static_cast<double>(total_steps));
+    push("step_position",
+         total_steps > 1 ? static_cast<double>(step_index) /
+                               static_cast<double>(total_steps - 1)
+                         : 0.0);
+    push("action", static_cast<double>(action));
+    push("action_norm",
+         num_actions_ > 1 ? static_cast<double>(action) /
+                                static_cast<double>(num_actions_ - 1)
+                          : 0.0);
+    push("bbox_idx", static_cast<double>(bbox_idx));
+    push("bbox_norm",
+         n_boxes > 1 ? static_cast<double>(bbox_idx) /
+                           static_cast<double>(n_boxes - 1)
+                     : 0.0);
+    push("local_action", static_cast<double>(local));
+    push("coord_idx", static_cast<double>(coord_idx));
+    push("axis_idx", is_axis ? static_cast<double>(coord_idx % 3) : -1.0);
+    push("scale_idx", static_cast<double>(scale_idx));
+    push("scale", scale);
+    push("delta", delta);
+    push("is_axis", is_axis ? 1.0 : 0.0);
+    push("is_recenter", is_recenter ? 1.0 : 0.0);
+    push("touches_min_face", touches_min_face ? 1.0 : 0.0);
+    push("shrink_like", shrink_like ? 1.0 : 0.0);
+    push("expand_like", expand_like ? 1.0 : 0.0);
+    push("current_score", state_->last_bbox_score());
+    try {
+      push("current_coverage", state_->covered());
+      push("current_bvs", state_->bvs());
+    } catch (const std::exception&) {
+      push("current_coverage", 0.0);
+      push("current_bvs", 0.0);
+    }
+
+    std::vector<double> union_bounds;
+    if (!bounds.empty()) {
+      union_bounds = native_bbox_union_bounds_py(bounds);
+    }
+    const double union_volume =
+        union_bounds.size() == 6 ? bbox_volume_row(union_bounds) : 0.0;
+    push("union_volume_ratio", union_volume * inv_volume_sum);
+
+    if (valid_bbox && bounds[bbox_idx].size() == 6) {
+      const auto& row = bounds[bbox_idx];
+      const double dx = std::max(0.0, row[3] - row[0]);
+      const double dy = std::max(0.0, row[4] - row[1]);
+      const double dz = std::max(0.0, row[5] - row[2]);
+      const double min_dim = std::min({dx, dy, dz});
+      const double max_dim = std::max({dx, dy, dz});
+      const double volume = bbox_volume_row(row);
+      push("box_center_x", 0.5 * (row[0] + row[3]));
+      push("box_center_y", 0.5 * (row[1] + row[4]));
+      push("box_center_z", 0.5 * (row[2] + row[5]));
+      push("box_extent_x", dx);
+      push("box_extent_y", dy);
+      push("box_extent_z", dz);
+      push("box_min_dim", min_dim);
+      push("box_max_dim", max_dim);
+      push("box_aspect", max_dim / std::max(min_dim, 1.0e-12));
+      push("box_volume_ratio", volume * inv_volume_sum);
+      push("box_to_union_volume",
+           volume / std::max(union_volume, 1.0e-12));
+      if (union_bounds.size() == 6) {
+        push("slack_min_x", row[0] - union_bounds[0]);
+        push("slack_min_y", row[1] - union_bounds[1]);
+        push("slack_min_z", row[2] - union_bounds[2]);
+        push("slack_max_x", union_bounds[3] - row[3]);
+        push("slack_max_y", union_bounds[4] - row[4]);
+        push("slack_max_z", union_bounds[5] - row[5]);
+      } else {
+        for (int idx = 0; idx < 6; ++idx) {
+          push("slack_" + std::to_string(idx), 0.0);
+        }
+      }
+
+      std::vector<double> candidate = row;
+      if (is_axis && coord_idx < 6) {
+        candidate[coord_idx] += delta;
+      }
+      const double cdx = std::max(0.0, candidate[3] - candidate[0]);
+      const double cdy = std::max(0.0, candidate[4] - candidate[1]);
+      const double cdz = std::max(0.0, candidate[5] - candidate[2]);
+      const double cmin_dim = std::min({cdx, cdy, cdz});
+      const double cmax_dim = std::max({cdx, cdy, cdz});
+      const double candidate_volume = bbox_volume_row(candidate);
+      push("candidate_valid", (cdx > 0.0 && cdy > 0.0 && cdz > 0.0) ? 1.0 : 0.0);
+      push("candidate_volume_ratio", candidate_volume * inv_volume_sum);
+      push("candidate_volume_delta_ratio",
+           (candidate_volume - volume) * inv_volume_sum);
+      push("candidate_min_dim", cmin_dim);
+      push("candidate_max_dim", cmax_dim);
+      push("candidate_aspect", cmax_dim / std::max(cmin_dim, 1.0e-12));
+    } else {
+      const std::vector<std::string> zeros = {
+          "box_center_x", "box_center_y", "box_center_z", "box_extent_x",
+          "box_extent_y", "box_extent_z", "box_min_dim", "box_max_dim",
+          "box_aspect", "box_volume_ratio", "box_to_union_volume",
+          "slack_min_x", "slack_min_y", "slack_min_z", "slack_max_x",
+          "slack_max_y", "slack_max_z", "candidate_valid",
+          "candidate_volume_ratio", "candidate_volume_delta_ratio",
+          "candidate_min_dim", "candidate_max_dim", "candidate_aspect"};
+      for (const auto& name : zeros) {
+        push(name, 0.0);
+      }
+    }
+
+    py::dict out;
+    out["names"] = names;
+    out["features"] = values;
+    out["named"] = named;
+    out["feature_dim"] = py::int_(py::len(values));
     return out;
   }
 
@@ -6738,11 +7288,169 @@ class NativeSmartEngine {
     return candidates;
   }
 
+  std::vector<double> deepset_axis_prior_logits_native(
+      const NativeDeepSetCandidateScorer& policy,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count,
+      std::size_t turn,
+      std::size_t hist_bins,
+      double floor_margin) const {
+    std::vector<double> logits(num_actions_, 0.0);
+    if (num_actions_ == 0) {
+      return logits;
+    }
+    std::vector<ProxyAxisMetric> ranked = rank_deepset_policy_axis_metrics_native(
+        policy, cover_penalty, pen_rate, candidate_count, turn, hist_bins);
+    if (ranked.empty()) {
+      return logits;
+    }
+    double min_score = std::numeric_limits<double>::infinity();
+    double max_score = -std::numeric_limits<double>::infinity();
+    for (const ProxyAxisMetric& row : ranked) {
+      min_score = std::min(min_score, row.score);
+      max_score = std::max(max_score, row.score);
+    }
+    const double span = max_score - min_score;
+    const double floor = min_score - std::max(floor_margin, span);
+    std::fill(logits.begin(), logits.end(), floor);
+    for (const ProxyAxisMetric& row : ranked) {
+      if (row.action < logits.size()) {
+        logits[row.action] = row.score;
+      }
+    }
+    return logits;
+  }
+
   double score_axis_action_reward(std::size_t action,
                                   double cover_penalty,
                                   double pen_rate) const {
     return state_->score_axis_action_reward(
         static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+  }
+
+  double score_native_action_reward(std::size_t action,
+                                    double cover_penalty,
+                                    double pen_rate) const {
+    if (is_recenter_action(action)) {
+      if (!native_recenter_enabled_) {
+        return -std::numeric_limits<double>::infinity();
+      }
+      const std::size_t bbox_idx = action / actions_per_bbox_;
+      RecenterCandidate candidate = recenter_candidate_for_bbox(bbox_idx);
+      if (!candidate.valid) {
+        return -std::numeric_limits<double>::infinity();
+      }
+      return state_->score_replacement(
+                 bbox_idx, candidate.bounds, candidate.rotation,
+                 cover_penalty, pen_rate) -
+             state_->last_bbox_score();
+    }
+    return score_axis_action_reward(action, cover_penalty, pen_rate);
+  }
+
+  NativeSelectedAction select_exact_native_action_raw(
+      const std::string& op,
+      double cover_penalty,
+      double pen_rate,
+      std::size_t candidate_count) {
+    stats_["native_macro_select_exact_action_calls"] += 1.0;
+    const std::string cache_key =
+        native_selector_cache_key(op, cover_penalty, pen_rate, candidate_count);
+    auto cached = native_selector_cache_.find(cache_key);
+    if (cached != native_selector_cache_.end()) {
+      NativeSelectedAction result = cached->second;
+      result.cache_hit = true;
+      stats_["native_macro_select_exact_action_cache_hits"] += 1.0;
+      stats_["native_macro_select_exact_action_cached_checks_saved"] +=
+          static_cast<double>(result.exact_checked);
+      return result;
+    }
+    stats_["native_macro_select_exact_action_cache_misses"] += 1.0;
+
+    auto copied = state_->copy_bounds_rotations();
+    std::vector<ProxyAxisMetric> candidates =
+        centroid_proxy_axis_metrics_raw(copied.first, copied.second,
+                                        cover_penalty, pen_rate);
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ProxyAxisMetric& lhs, const ProxyAxisMetric& rhs) {
+                if (lhs.reward != rhs.reward) {
+                  return lhs.reward > rhs.reward;
+                }
+                return lhs.action < rhs.action;
+              });
+    if (candidate_count > 0 && candidates.size() > candidate_count) {
+      candidates.resize(candidate_count);
+    }
+
+    std::vector<std::size_t> actions;
+    std::unordered_set<std::size_t> seen_actions;
+    actions.reserve(candidates.size() + state_->num_boxes());
+    for (const ProxyAxisMetric& row : candidates) {
+      if (seen_actions.insert(row.action).second) {
+        actions.push_back(row.action);
+      }
+    }
+    if (actions_per_bbox_ > 0) {
+      for (std::size_t bbox_idx = 0; bbox_idx < state_->num_boxes(); ++bbox_idx) {
+        const std::size_t action =
+            bbox_idx * actions_per_bbox_ + actions_per_bbox_ - 1;
+        if (seen_actions.insert(action).second) {
+          actions.push_back(action);
+        }
+      }
+    }
+
+    NativeSelectedAction result;
+    result.candidate_actions = actions.size();
+    for (std::size_t action : actions) {
+      if (!native_action_matches_op(action, op)) {
+        continue;
+      }
+      double reward = -std::numeric_limits<double>::infinity();
+      try {
+        reward = score_native_action_reward(action, cover_penalty, pen_rate);
+      } catch (const std::exception&) {
+        ++result.exact_errors;
+        continue;
+      }
+      ++result.exact_checked;
+      if (!std::isfinite(reward)) {
+        continue;
+      }
+      if (!result.found || reward > result.reward) {
+        result.found = true;
+        result.reward = reward;
+        result.action = action;
+      }
+    }
+
+    stats_["native_macro_select_exact_action_checks"] +=
+        static_cast<double>(result.exact_checked);
+    stats_["native_macro_select_exact_action_errors"] +=
+        static_cast<double>(result.exact_errors);
+    native_selector_cache_store(cache_key, result);
+    return result;
+  }
+
+  py::dict select_exact_native_action(const std::string& op,
+                                      double cover_penalty,
+                                      double pen_rate,
+                                      std::size_t candidate_count) {
+    const NativeSelectedAction selected =
+        select_exact_native_action_raw(op, cover_penalty, pen_rate,
+                                       candidate_count);
+    py::dict out;
+    out["found"] = py::bool_(selected.found);
+    out["action"] =
+        selected.found ? py::object(py::int_(selected.action)) : py::none();
+    out["reward"] = py::float_(selected.reward);
+    out["exact_checked"] = py::int_(selected.exact_checked);
+    out["exact_errors"] = py::int_(selected.exact_errors);
+    out["candidate_actions"] = py::int_(selected.candidate_actions);
+    out["cache_hit"] = py::bool_(selected.cache_hit);
+    out["op"] = py::str(op);
+    return out;
   }
 
   py::tuple apply_axis_action_delta(std::size_t action,
@@ -6756,6 +7464,206 @@ class NativeSmartEngine {
     }
     return py::make_tuple(applied.reward, applied.bbox_idx,
                           applied.last_score);
+  }
+
+  py::dict apply_native_action_delta(std::size_t action,
+                                     double cover_penalty,
+                                     double pen_rate) {
+    if (is_recenter_action(action)) {
+      if (!native_recenter_enabled_) {
+        throw std::runtime_error("native recenter actions are not enabled");
+      }
+      const std::size_t bbox_idx = action / actions_per_bbox_;
+      RecenterCandidate candidate = recenter_candidate_for_bbox(bbox_idx);
+      if (!candidate.valid) {
+        ++native_recenter_invalid_;
+        throw std::runtime_error("native recenter candidate is invalid");
+      }
+      SmartCppManifoldState::NativeReplacementApply applied =
+          state_->apply_replacement_delta_native(
+              bbox_idx, candidate.bounds, candidate.rotation,
+              cover_penalty, pen_rate);
+      ++native_recenter_applies_;
+      if (state_->last_bbox_score() >= best_score_) {
+        snapshot_best_from_state();
+      }
+      auto params = state_->bbox_params(applied.bbox_idx);
+      py::dict out;
+      out["kind"] = py::str("recenter");
+      out["action"] = py::int_(action);
+      out["reward"] = py::float_(applied.reward);
+      out["bbox_idx"] = py::int_(applied.bbox_idx);
+      out["bounds"] = params.first;
+      out["rotation"] = params.second;
+      out["last_score"] = py::float_(applied.last_score);
+      return out;
+    }
+
+    SmartCppManifoldState::NativeAxisApply applied =
+        state_->apply_axis_action_delta_native(
+            static_cast<std::intptr_t>(action), cover_penalty, pen_rate);
+    if (state_->last_bbox_score() >= best_score_) {
+      snapshot_best_from_state();
+    }
+    auto params = state_->bbox_params(applied.bbox_idx);
+    py::dict out;
+    out["kind"] = py::str("axis");
+    out["action"] = py::int_(action);
+    out["reward"] = py::float_(applied.reward);
+    out["bbox_idx"] = py::int_(applied.bbox_idx);
+    out["bounds"] = params.first;
+    out["rotation"] = params.second;
+    out["last_score"] = py::float_(applied.last_score);
+    return out;
+  }
+
+  py::dict execute_native_macro_skill(const py::dict& skill,
+                                      double cover_penalty,
+                                      double pen_rate,
+                                      std::size_t candidate_count,
+                                      std::size_t max_steps,
+                                      const std::string& repeat_mode,
+                                      bool record_actions,
+                                      bool return_final_state) {
+    const auto initial = state_->copy_bounds_rotations();
+    const double initial_score = state_->last_bbox_score();
+    py::list actions;
+    std::size_t executed_steps = 0;
+
+    py::object policy_obj = dict_get_object(skill, "policy");
+    if (!policy_obj.is_none()) {
+      for (py::handle item_handle : policy_obj) {
+        if (executed_steps >= max_steps) {
+          break;
+        }
+        py::dict item = py::reinterpret_borrow<py::dict>(item_handle);
+        const std::string op =
+            native_macro_dict_string(item, "op", "apply_axis_edit");
+        const std::string target =
+            native_macro_dict_string(item, "target", "unknown");
+        const std::size_t remaining = max_steps - executed_steps;
+        const std::size_t repeats =
+            native_macro_step_repeat_budget(item, remaining, repeat_mode);
+        for (std::size_t repeat = 0; repeat < repeats; ++repeat) {
+          if (executed_steps >= max_steps) {
+            break;
+          }
+          const NativeSelectedAction selected =
+              select_exact_native_action_raw(op, cover_penalty, pen_rate,
+                                             candidate_count);
+          if (!selected.found) {
+            break;
+          }
+          const std::size_t action = selected.action;
+          const double predicted_reward = selected.reward;
+          if (!native_macro_allow_nonpositive_step(op, predicted_reward)) {
+            break;
+          }
+          try {
+            double reward = -std::numeric_limits<double>::infinity();
+            std::size_t bbox_idx = 0;
+            double last_score = state_->last_bbox_score();
+            const char* kind = "axis";
+            if (is_recenter_action(action)) {
+              if (!native_recenter_enabled_) {
+                throw std::runtime_error("native recenter actions are not enabled");
+              }
+              bbox_idx = action / actions_per_bbox_;
+              RecenterCandidate candidate = recenter_candidate_for_bbox(bbox_idx);
+              if (!candidate.valid) {
+                ++native_recenter_invalid_;
+                throw std::runtime_error("native recenter candidate is invalid");
+              }
+              SmartCppManifoldState::NativeReplacementApply applied =
+                  state_->apply_replacement_delta_native(
+                      bbox_idx, candidate.bounds, candidate.rotation,
+                      cover_penalty, pen_rate);
+              ++native_recenter_applies_;
+              reward = applied.reward;
+              bbox_idx = applied.bbox_idx;
+              last_score = applied.last_score;
+              kind = "recenter";
+            } else {
+              SmartCppManifoldState::NativeAxisApply applied =
+                  state_->apply_axis_action_delta_native(
+                      static_cast<std::intptr_t>(action), cover_penalty,
+                      pen_rate);
+              reward = applied.reward;
+              bbox_idx = applied.bbox_idx;
+              last_score = applied.last_score;
+            }
+            if (state_->last_bbox_score() >= best_score_) {
+              snapshot_best_from_state();
+            }
+            ++executed_steps;
+            if (record_actions) {
+              py::dict record;
+              record["op"] = py::str(op);
+              record["target"] = py::str(target);
+              record["action"] = py::int_(action);
+              record["kind"] = py::str(kind);
+              record["bbox"] = py::int_(bbox_idx);
+              record["reward"] = py::float_(reward);
+              record["predicted_reward"] = py::float_(predicted_reward);
+              record["score"] = py::float_(last_score);
+              record["target_filter_used"] = py::bool_(false);
+              record["native_executor"] = py::bool_(true);
+              actions.append(record);
+            }
+            if (!native_macro_allow_nonpositive_step(op, reward)) {
+              break;
+            }
+          } catch (const std::exception& exc) {
+            if (record_actions) {
+              py::dict record;
+              record["op"] = py::str(op);
+              record["target"] = py::str(target);
+              record["action"] = py::int_(action);
+              record["status"] = py::str("apply_failed");
+              record["error"] = py::str(exc.what());
+              record["native_executor"] = py::bool_(true);
+              actions.append(record);
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    const double final_score = recompute_score(cover_penalty, pen_rate);
+    const double delta = final_score - initial_score;
+    py::dict rollback_state;
+    rollback_state["bounds"] = initial.first;
+    rollback_state["rotations"] = initial.second;
+    rollback_state["score"] = py::float_(initial_score);
+
+    py::dict out;
+    out["macro_id"] = dict_get_object(skill, "macro_id");
+    out["skill"] = dict_get_object(skill, "skill");
+    out["accepted"] = py::bool_(delta >= -1.0e-12 && executed_steps > 0);
+    out["score_delta"] = py::float_(delta);
+    out["repeat_mode"] = py::str(repeat_mode);
+    out["initial_score"] = py::float_(initial_score);
+    out["final_score"] = py::float_(final_score);
+    out["actions"] = actions;
+    out["executed_steps"] = py::int_(executed_steps);
+    out["rollback_state"] = rollback_state;
+    if (return_final_state) {
+      const auto final = state_->copy_bounds_rotations();
+      py::dict final_state;
+      final_state["bounds"] = final.first;
+      final_state["rotations"] = final.second;
+      final_state["score"] = py::float_(final_score);
+      out["final_state"] = final_state;
+    }
+    out["native_executor"] = py::bool_(true);
+    out["record_actions"] = py::bool_(record_actions);
+    out["return_final_state"] = py::bool_(return_final_state);
+
+    stats_["native_macro_skill_execute_calls"] += 1.0;
+    stats_["native_macro_skill_execute_steps"] +=
+        static_cast<double>(executed_steps);
+    return out;
   }
 
   py::dict run_fast_policy_refine(
@@ -7447,6 +8355,324 @@ class NativeSmartEngine {
     out["axis_only"] = py::bool_(!native_recenter_enabled_);
     out["recenter_enabled"] = py::bool_(native_recenter_enabled_);
     out["tree"] = py::bool_(true);
+    out["transposition_hits"] = py::int_(transposition_hits);
+    out["transposition_table_size"] = py::int_(transpositions.size());
+    return out;
+  }
+
+  py::dict run_deepset_prior_mcts(
+      const NativeDeepSetCandidateScorer& policy,
+      std::size_t num_iter,
+      std::size_t max_step,
+      double cover_penalty,
+      double pen_rate,
+      double exp_weight,
+      double gamma,
+      std::uint64_t seed,
+      double prior_weight,
+      std::size_t candidate_count,
+      std::size_t hist_bins,
+      std::size_t action_prior_top_k,
+      double floor_margin = 1.0,
+      bool transposition_table = false,
+      std::size_t transposition_table_size = 8192) {
+    std::mt19937_64 rng(seed);
+    std::vector<MctsCppNode> nodes;
+    std::vector<std::vector<double>> node_priors;
+    std::unordered_map<std::string, MctsCppTranspositionEntry> transpositions;
+    std::deque<std::string> transposition_order;
+    std::size_t transposition_hits = 0;
+    std::size_t prior_pruned_nodes = 0;
+    std::size_t prior_pruned_actions = 0;
+    std::size_t prior_kept_actions = 0;
+    std::size_t prior_refreshes = 0;
+
+    auto ensure_node_prior = [&](std::size_t node_id,
+                                 std::size_t turn) -> const std::vector<double>& {
+      if (node_id >= node_priors.size()) {
+        throw std::runtime_error(
+            "native dynamic MCTS prior node index out of range");
+      }
+      if (node_priors[node_id].empty()) {
+        node_priors[node_id] = deepset_axis_prior_logits_native(
+            policy, cover_penalty, pen_rate, candidate_count, turn, hist_bins,
+            floor_margin);
+        ++prior_refreshes;
+      }
+      return node_priors[node_id];
+    };
+    auto node_prior_score = [&](std::size_t node_id,
+                                std::size_t action) -> double {
+      if (node_id >= node_priors.size()) {
+        return 0.0;
+      }
+      const std::vector<double>& prior = node_priors[node_id];
+      if (action >= prior.size()) {
+        return 0.0;
+      }
+      return prior_weight * prior[action];
+    };
+    auto prune_node = [&](std::size_t node_id, std::size_t turn) {
+      if (node_id >= nodes.size()) {
+        return;
+      }
+      MctsCppNode& node = nodes[node_id];
+      if (action_prior_top_k == 0 || prior_weight == 0.0 ||
+          node.untried_actions.size() <= action_prior_top_k) {
+        return;
+      }
+      ensure_node_prior(node_id, turn);
+      std::vector<std::size_t> actions = node.untried_actions;
+      std::sort(actions.begin(), actions.end(),
+                [&](std::size_t left, std::size_t right) {
+                  const double left_score = node_prior_score(node_id, left);
+                  const double right_score = node_prior_score(node_id, right);
+                  if (left_score != right_score) {
+                    return left_score > right_score;
+                  }
+                  return left < right;
+                });
+      if (actions.size() > action_prior_top_k) {
+        actions.resize(action_prior_top_k);
+      }
+      const std::size_t pruned =
+          node.untried_actions.size() > actions.size()
+              ? node.untried_actions.size() - actions.size()
+              : 0;
+      node.untried_actions = std::move(actions);
+      node.action_mask.assign(num_actions_, true);
+      for (std::size_t action : node.untried_actions) {
+        if (action < node.action_mask.size()) {
+          node.action_mask[action] = false;
+        }
+      }
+      ++prior_pruned_nodes;
+      prior_pruned_actions += pruned;
+      prior_kept_actions += node.untried_actions.size();
+    };
+    auto choose_untried = [&](std::size_t node_id,
+                              const std::vector<std::size_t>& actions)
+        -> std::size_t {
+      if (actions.empty()) {
+        throw std::runtime_error(
+            "native dynamic MCTS untried action list is empty");
+      }
+      if (prior_weight == 0.0) {
+        std::uniform_int_distribution<std::size_t> dist(0, actions.size() - 1);
+        return actions[dist(rng)];
+      }
+      double best_score = -std::numeric_limits<double>::infinity();
+      std::vector<std::size_t> best_actions;
+      for (std::size_t action : actions) {
+        const double score = node_prior_score(node_id, action);
+        if (score > best_score) {
+          best_score = score;
+          best_actions.clear();
+          best_actions.push_back(action);
+        } else if (score == best_score) {
+          best_actions.push_back(action);
+        }
+      }
+      std::uniform_int_distribution<std::size_t> dist(0,
+                                                      best_actions.size() - 1);
+      return best_actions[dist(rng)];
+    };
+    auto ucb_select_position = [&](std::size_t node_id,
+                                   const MctsCppNode& node) -> std::size_t {
+      if (node.child_ids.empty()) {
+        throw std::runtime_error("native dynamic MCTS child list is empty");
+      }
+      std::vector<std::size_t> best_positions;
+      double best_score = -std::numeric_limits<double>::infinity();
+      const double log_parent =
+          node.num_vis == 0 ? 0.0 : std::log(static_cast<double>(node.num_vis));
+      for (std::size_t idx = 0; idx < node.child_ids.size(); ++idx) {
+        const MctsCppNode& child = nodes[node.child_ids[idx]];
+        double score = std::numeric_limits<double>::infinity();
+        if (node.num_vis > 0 && child.num_vis > 0) {
+          score = child.q +
+                  exp_weight *
+                      std::sqrt(2.0 * log_parent /
+                                static_cast<double>(child.num_vis));
+        }
+        score += node_prior_score(node_id, node.child_actions[idx]);
+        if (score > best_score) {
+          best_score = score;
+          best_positions.clear();
+          best_positions.push_back(idx);
+        } else if (score == best_score) {
+          best_positions.push_back(idx);
+        }
+      }
+      std::uniform_int_distribution<std::size_t> dist(0,
+                                                      best_positions.size() - 1);
+      return best_positions[dist(rng)];
+    };
+    auto seed_from_transposition = [&](MctsCppNode& node) {
+      if (!transposition_table || node.state_key.empty()) {
+        return;
+      }
+      auto found = transpositions.find(node.state_key);
+      if (found == transpositions.end()) {
+        return;
+      }
+      node.q = found->second.q;
+      node.reward = found->second.reward;
+      node.num_vis = found->second.num_vis;
+      ++transposition_hits;
+    };
+    auto store_transposition = [&](std::size_t node_id) {
+      if (!transposition_table || transposition_table_size == 0 ||
+          node_id >= nodes.size()) {
+        return;
+      }
+      const MctsCppNode& node = nodes[node_id];
+      if (node.state_key.empty() || node.num_vis == 0) {
+        return;
+      }
+      transpositions[node.state_key] =
+          MctsCppTranspositionEntry{node.q, node.reward, node.num_vis};
+      transposition_order.push_back(node.state_key);
+      while (transpositions.size() > transposition_table_size &&
+             !transposition_order.empty()) {
+        const std::string old_key = transposition_order.front();
+        transposition_order.pop_front();
+        if (std::find(transposition_order.begin(), transposition_order.end(),
+                      old_key) == transposition_order.end()) {
+          transpositions.erase(old_key);
+        }
+      }
+    };
+
+    nodes.emplace_back(root_action_mask(), state_->state_key());
+    node_priors.emplace_back();
+    prune_node(0, 0);
+    double best_return = -std::numeric_limits<double>::infinity();
+    std::vector<double> best_rewards;
+    std::vector<std::size_t> best_actions;
+    std::size_t iterations_run = 0;
+    for (std::size_t iter = 0; iter < num_iter; ++iter) {
+      state_->reset_to_initial();
+      std::vector<double> rewards;
+      std::vector<std::size_t> path;
+      std::vector<std::size_t> rollout_actions;
+      std::size_t node_id = 0;
+      std::size_t steps = 0;
+      bool expanded = false;
+      while (steps < max_step) {
+        path.push_back(node_id);
+        MctsCppNode& node = nodes[node_id];
+        ensure_node_prior(node_id, steps);
+        if (!node.untried_actions.empty()) {
+          const std::size_t action =
+              choose_untried(node_id, node.untried_actions);
+          const double reward =
+              apply_native_action(action, cover_penalty, pen_rate);
+          rewards.push_back(reward);
+          rollout_actions.push_back(action);
+          ++steps;
+          const std::size_t child_id = nodes.size();
+          nodes.emplace_back(child_action_mask(action, &node.action_mask),
+                             state_->state_key());
+          node_priors.emplace_back();
+          seed_from_transposition(nodes.back());
+          prune_node(child_id, steps);
+          nodes[node_id].add_child(action, child_id);
+          path.push_back(child_id);
+          expanded = true;
+          if (!std::isfinite(reward) || reward <= 0.0 || steps >= max_step) {
+            break;
+          }
+          const std::size_t remaining = max_step - steps;
+          if (remaining > 0) {
+            std::vector<bool> mask(state_->num_boxes(), true);
+            SmartCppManifoldState::NativeGreedySegment segment =
+                state_->greedy_axis_rollout_segment_native(
+                    mask, cover_penalty, pen_rate, remaining);
+            const std::vector<std::size_t>& seg_actions = segment.actions;
+            const std::vector<double>& seg_rewards = segment.applied_rewards;
+            for (std::size_t idx = 0;
+                 idx < seg_actions.size() && idx < seg_rewards.size(); ++idx) {
+              if (!std::isfinite(seg_rewards[idx]) || seg_rewards[idx] <= 0.0) {
+                break;
+              }
+              rollout_actions.push_back(seg_actions[idx]);
+              rewards.push_back(seg_rewards[idx]);
+              ++steps;
+              if (steps >= max_step) {
+                break;
+              }
+            }
+          }
+          break;
+        }
+        if (node.child_ids.empty()) {
+          break;
+        }
+        const std::size_t pos = ucb_select_position(node_id, node);
+        const std::size_t action = node.child_actions[pos];
+        const double reward =
+            apply_native_action(action, cover_penalty, pen_rate);
+        rewards.push_back(reward);
+        rollout_actions.push_back(action);
+        ++steps;
+        node_id = node.child_ids[pos];
+        if (!std::isfinite(reward) || reward <= 0.0) {
+          break;
+        }
+      }
+      const double total_return = discounted_rewards(rewards, gamma);
+      backprop_native(nodes, path, total_return);
+      for (std::size_t node_in_path : path) {
+        store_transposition(node_in_path);
+      }
+      if (total_return > best_return) {
+        best_return = total_return;
+        best_rewards = rewards;
+        best_actions = rollout_actions;
+        snapshot_best_from_state();
+      }
+      if (!expanded && rewards.empty()) {
+        break;
+      }
+      iterations_run = iter + 1;
+    }
+    state_->reset_to_state(best_bounds_, best_rotations_, best_score_);
+    stats_["native_mcts_runs"] += 1.0;
+    stats_["native_mcts_iterations"] += static_cast<double>(iterations_run);
+    stats_["native_mcts_axis_only"] = native_recenter_enabled_ ? 0.0 : 1.0;
+    stats_["native_mcts_tree"] = 1.0;
+    stats_["native_mcts_nodes"] = static_cast<double>(nodes.size());
+    stats_["native_mcts_dynamic_deepset_prior"] = 1.0;
+    stats_["native_mcts_dynamic_prior_refreshes"] =
+        static_cast<double>(prior_refreshes);
+    stats_["native_mcts_transposition_table"] =
+        transposition_table ? 1.0 : 0.0;
+    stats_["native_mcts_transposition_hits"] =
+        static_cast<double>(transposition_hits);
+    stats_["native_mcts_transposition_table_size"] =
+        static_cast<double>(transpositions.size());
+    stats_["native_mcts_action_prior_top_k"] =
+        static_cast<double>(action_prior_top_k);
+    stats_["native_mcts_prior_pruned_nodes"] =
+        static_cast<double>(prior_pruned_nodes);
+    stats_["native_mcts_prior_pruned_actions"] =
+        static_cast<double>(prior_pruned_actions);
+    stats_["native_mcts_prior_kept_actions"] =
+        static_cast<double>(prior_kept_actions);
+    py::dict out;
+    out["best_reward"] = py::float_(best_return);
+    out["iterations_run"] = py::int_(iterations_run);
+    out["node_count"] = py::int_(nodes.size());
+    out["actions"] = py::cast(best_actions);
+    out["rewards"] = py::cast(best_rewards);
+    out["last_bbox_score"] = py::float_(state_->last_bbox_score());
+    out["best_bbox_score"] = py::float_(best_score_);
+    out["axis_only"] = py::bool_(!native_recenter_enabled_);
+    out["recenter_enabled"] = py::bool_(native_recenter_enabled_);
+    out["tree"] = py::bool_(true);
+    out["dynamic_deepset_prior"] = py::bool_(true);
+    out["dynamic_prior_refreshes"] = py::int_(prior_refreshes);
     out["transposition_hits"] = py::int_(transposition_hits);
     out["transposition_table_size"] = py::int_(transpositions.size());
     return out;
@@ -8734,6 +9960,120 @@ class NativeSmartEngine {
            action % actions_per_bbox_ == actions_per_bbox_ - 1;
   }
 
+  std::string native_action_direction(std::size_t action) const {
+    if (is_recenter_action(action)) {
+      return "recenter";
+    }
+    if (actions_per_bbox_ == 0 || num_action_scale_ == 0 ||
+        action >= num_actions_) {
+      return "invalid";
+    }
+    const std::size_t local = action % actions_per_bbox_;
+    if (local >= actions_per_bbox_ - 1) {
+      return "invalid";
+    }
+    const std::size_t coord = local / num_action_scale_;
+    const std::size_t scale_idx = local % num_action_scale_;
+    const double scale = action_scale_value_cpp(scale_idx, num_action_scale_);
+    if (coord < 3) {
+      return scale > 0.0 ? "shrink" : "expand";
+    }
+    return scale < 0.0 ? "shrink" : "expand";
+  }
+
+  bool native_action_matches_op(std::size_t action,
+                                const std::string& op) const {
+    const std::string direction = native_action_direction(action);
+    if (op == "expand_face") {
+      return direction == "expand";
+    }
+    if (op == "shrink_face") {
+      return direction == "shrink";
+    }
+    if (op == "recenter_box" || op == "recenter") {
+      return direction == "recenter";
+    }
+    return direction == "expand" || direction == "shrink";
+  }
+
+  static std::string native_macro_dict_string(const py::dict& item,
+                                              const char* key,
+                                              const std::string& fallback) {
+    py::object value = dict_get_object(item, key);
+    if (value.is_none()) {
+      return fallback;
+    }
+    return py::str(value).cast<std::string>();
+  }
+
+  static double native_macro_dict_number(const py::dict& item,
+                                         const char* key,
+                                         double fallback) {
+    py::object value = dict_get_object(item, key);
+    if (value.is_none()) {
+      return fallback;
+    }
+    try {
+      return value.cast<double>();
+    } catch (const std::exception&) {
+      try {
+        return std::stod(py::str(value).cast<std::string>());
+      } catch (const std::exception&) {
+        return fallback;
+      }
+    }
+  }
+
+  static bool native_macro_allow_nonpositive_step(const std::string& op,
+                                                  double reward) {
+    constexpr double eps = 1.0e-12;
+    if (reward > eps) {
+      return true;
+    }
+    if (op == "expand_face") {
+      return true;
+    }
+    if (op == "recenter" || op == "recenter_box") {
+      return std::abs(reward) <= 1.0e-9;
+    }
+    return false;
+  }
+
+  static std::size_t native_macro_step_repeat_budget(
+      const py::dict& item,
+      std::size_t max_steps,
+      const std::string& repeat_mode) {
+    if (max_steps == 0) {
+      return 0;
+    }
+    if (repeat_mode != "guarded_variable" && repeat_mode != "median") {
+      throw std::runtime_error(
+          "repeat_mode must be 'guarded_variable' or 'median'");
+    }
+    const std::string op = native_macro_dict_string(item, "op", "");
+    if (op == "recenter" || op == "recenter_box") {
+      return 1;
+    }
+    const std::size_t observed = std::max<std::size_t>(
+        1, static_cast<std::size_t>(
+               std::llround(native_macro_dict_number(item, "observed_repeat", 1.0))));
+    const std::size_t repeat_max = std::max<std::size_t>(
+        observed, static_cast<std::size_t>(
+                      std::llround(native_macro_dict_number(
+                          item, "repeat_max", static_cast<double>(observed)))));
+    if (repeat_mode == "median") {
+      return std::max<std::size_t>(1, std::min(max_steps, observed));
+    }
+    const std::string until = native_macro_dict_string(item, "until", "");
+    const bool variable_length =
+        until.find("score_stalls") != std::string::npos ||
+        until.find("coverage_margin_low") != std::string::npos ||
+        until.find("coverage_recovered") != std::string::npos ||
+        until.find("exact_reward_delta_positive") != std::string::npos;
+    const std::size_t budget = variable_length ? repeat_max : observed;
+    return std::max<std::size_t>(1, std::min(max_steps, budget));
+  }
+
   std::vector<bool> root_action_mask() const {
     std::vector<bool> mask(num_actions_, false);
     if (!native_recenter_enabled_) {
@@ -9250,6 +10590,36 @@ class NativeSmartEngine {
     best_score_ = state_->last_bbox_score();
   }
 
+  std::string native_selector_cache_key(const std::string& op,
+                                        double cover_penalty,
+                                        double pen_rate,
+                                        std::size_t candidate_count) const {
+    std::ostringstream stream;
+    stream << std::hex << std::setw(16) << std::setfill('0')
+           << state_->state_hash() << std::dec << "|" << op << "|"
+           << std::setprecision(17) << cover_penalty << "|" << pen_rate
+           << "|" << candidate_count;
+    return stream.str();
+  }
+
+  void native_selector_cache_store(const std::string& key,
+                                   const NativeSelectedAction& value) {
+    if (native_selector_cache_capacity_ == 0) {
+      return;
+    }
+    auto inserted = native_selector_cache_.emplace(key, value);
+    if (!inserted.second) {
+      inserted.first->second = value;
+      return;
+    }
+    native_selector_cache_order_.push_back(key);
+    while (native_selector_cache_.size() > native_selector_cache_capacity_ &&
+           !native_selector_cache_order_.empty()) {
+      native_selector_cache_.erase(native_selector_cache_order_.front());
+      native_selector_cache_order_.pop_front();
+    }
+  }
+
   std::vector<std::vector<double>> vertices_;
   std::vector<std::vector<std::size_t>> faces_;
   std::vector<std::vector<std::size_t>> voxels_;
@@ -9266,6 +10636,7 @@ class NativeSmartEngine {
   std::size_t native_recenter_applies_ = 0;
   std::size_t native_recenter_invalid_ = 0;
   std::size_t cache_capacity_ = 65536;
+  std::size_t native_selector_cache_capacity_ = 4096;
   std::string volume_method_ = "mesh";
   std::unique_ptr<SmartCppManifoldState> state_;
   std::vector<std::size_t> opposite_actions_;
@@ -9277,6 +10648,8 @@ class NativeSmartEngine {
   std::vector<double> flat_centroids_cache_;
   mutable std::unordered_map<std::size_t, std::vector<double>>
       volume_histogram_cache_;
+  std::unordered_map<std::string, NativeSelectedAction> native_selector_cache_;
+  std::deque<std::string> native_selector_cache_order_;
   std::unordered_map<std::string, double> stats_;
 };
 
@@ -9481,6 +10854,20 @@ PYBIND11_MODULE(_cpp, module) {
            py::arg("covered_before"), py::arg("bvs_before"),
            py::arg("candidate_count"));
 
+  py::class_<NativeScalarMlpScorer>(module, "NativeScalarMlpScorer")
+      .def(py::init<const std::vector<double>&, const std::vector<double>&,
+                    const std::vector<std::vector<std::vector<double>>>&,
+                    const std::vector<std::vector<double>>&,
+                    const std::vector<std::vector<double>>&,
+                    const std::vector<std::vector<double>>&>(),
+           py::arg("mean"), py::arg("std"), py::arg("weights"),
+           py::arg("biases"), py::arg("layernorm_weights"),
+           py::arg("layernorm_biases"))
+      .def("score_rows", &NativeScalarMlpScorer::score_rows,
+           py::arg("rows"), py::arg("already_normalized") = false)
+      .def("dim", &NativeScalarMlpScorer::dim)
+      .def("hidden", &NativeScalarMlpScorer::hidden);
+
   py::class_<NativeDeepSetCandidateScorer>(module, "NativeDeepSetCandidateScorer")
       .def(py::init<const std::string&>(), py::arg("weights_path"))
       .def("score_rows", &NativeDeepSetCandidateScorer::score_rows,
@@ -9619,8 +11006,18 @@ PYBIND11_MODULE(_cpp, module) {
            py::arg("cache_capacity") = 65536,
            py::arg("volume_method") = "mesh")
       .def("boxes", &NativeSmartEngine::boxes)
+      .def("reset_to_state", &NativeSmartEngine::reset_to_state,
+           py::arg("bounds"), py::arg("rotations"),
+           py::arg("last_bbox_score"))
       .def("best_boxes", &NativeSmartEngine::best_boxes)
       .def("stats", &NativeSmartEngine::stats)
+      .def("geometry_state_features",
+           &NativeSmartEngine::geometry_state_features,
+           py::arg("hist_bins") = 3)
+      .def("local_action_features",
+           &NativeSmartEngine::local_action_features,
+           py::arg("action"), py::arg("step_index") = 0,
+           py::arg("total_steps") = 0)
       .def("recompute_score", &NativeSmartEngine::recompute_score,
            py::arg("cover_penalty"), py::arg("pen_rate") = 1.0)
       .def("centroid_proxy_axis_metrics",
@@ -9641,10 +11038,32 @@ PYBIND11_MODULE(_cpp, module) {
            &NativeSmartEngine::score_axis_action_reward,
            py::arg("action"), py::arg("cover_penalty"),
            py::arg("pen_rate") = 1.0)
+      .def("score_native_action_reward",
+           &NativeSmartEngine::score_native_action_reward,
+           py::arg("action"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0)
+      .def("select_exact_native_action",
+           &NativeSmartEngine::select_exact_native_action,
+           py::arg("op"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0,
+           py::arg("candidate_count") = 0)
       .def("apply_axis_action_delta",
            &NativeSmartEngine::apply_axis_action_delta,
            py::arg("action"), py::arg("cover_penalty"),
            py::arg("pen_rate") = 1.0)
+      .def("apply_native_action_delta",
+           &NativeSmartEngine::apply_native_action_delta,
+           py::arg("action"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0)
+      .def("execute_native_macro_skill",
+           &NativeSmartEngine::execute_native_macro_skill,
+           py::arg("skill"), py::arg("cover_penalty"),
+           py::arg("pen_rate") = 1.0,
+           py::arg("candidate_count") = 0,
+           py::arg("max_steps") = 16,
+           py::arg("repeat_mode") = "guarded_variable",
+           py::arg("record_actions") = true,
+           py::arg("return_final_state") = false)
       .def("run_fast_policy_refine",
            &NativeSmartEngine::run_fast_policy_refine,
            py::arg("policy"), py::arg("max_steps"),
@@ -9688,6 +11107,16 @@ PYBIND11_MODULE(_cpp, module) {
            py::arg("transposition_table") = false,
            py::arg("transposition_table_size") = 8192,
            py::arg("action_prior_top_k") = 0)
+      .def("run_deepset_prior_mcts", &NativeSmartEngine::run_deepset_prior_mcts,
+           py::arg("policy"), py::arg("num_iter"), py::arg("max_step"),
+           py::arg("cover_penalty"), py::arg("pen_rate") = 1.0,
+           py::arg("exp_weight") = 0.001, py::arg("gamma") = 1.0,
+           py::arg("seed") = 7777, py::arg("prior_weight") = 0.05,
+           py::arg("candidate_count") = 128, py::arg("hist_bins") = 3,
+           py::arg("action_prior_top_k") = 8,
+           py::arg("floor_margin") = 1.0,
+           py::arg("transposition_table") = false,
+           py::arg("transposition_table_size") = 8192)
       .def("run_refine_then_mcts", &NativeSmartEngine::run_refine_then_mcts,
            py::arg("refine_max_steps"), py::arg("mcts_iter"),
            py::arg("mcts_max_step"), py::arg("cover_penalty"),

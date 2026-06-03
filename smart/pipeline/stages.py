@@ -1163,6 +1163,7 @@ def run_tetra_mesh(
                 "epsilon": epsilon * float(retry.get("epsilon_scale", 2.0)),
                 "edge_length": edge_length * float(retry.get("edge_length_scale", 2.0)),
                 "coarsen": bool(retry.get("coarsen", True)),
+                "timeout_sec": retry.get("timeout_sec"),
                 "name": "retry",
             }
         )

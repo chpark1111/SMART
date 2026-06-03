@@ -11,6 +11,7 @@ recursive-include cpp *.md
 recursive-include scripts *.md
 recursive-include smart/configs *.yaml
 recursive-include smart/assets/policies *.smartmlp
+recursive-include smart/assets/skills *.json
 recursive-include cmake *.cmake
 recursive-include cpp *.cpp *.hpp
 recursive-include docs *.md *.png

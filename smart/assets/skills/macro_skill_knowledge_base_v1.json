@@ -1,0 +1,603 @@
+{
+  "skills": [
+    {
+      "categories": {
+        "airplane": 832
+      },
+      "default_repeats": [
+        3.0,
+        1.0,
+        4.5
+      ],
+      "family": "recenter_then_shrink",
+      "live_accepted": 63,
+      "mean_live_delta": 1.977923826662608,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar4-8;nbox=1",
+          "support": 311
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 200
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs4-10;aspect=ar4-8;nbox=1",
+          "support": 111
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 68
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs10-30;aspect=ar>=8;nbox=1",
+          "support": 56
+        }
+      ],
+      "program": [
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 11,
+          "median": 3.0,
+          "min": 1
+        },
+        {
+          "max": 1,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 14,
+          "median": 4.5,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_000",
+      "support": 832
+    },
+    {
+      "categories": {
+        "airplane": 20,
+        "chair": 130,
+        "table": 10
+      },
+      "default_repeats": [
+        2,
+        2,
+        3
+      ],
+      "family": "escape_local_minimum_expand_then_refine",
+      "live_accepted": 46,
+      "mean_live_delta": 1.0394470103073299,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov50-75;bvs=bvs1.2-2;aspect=ar1.2-2;nbox=4",
+          "support": 40
+        },
+        {
+          "precondition": "cov=cov75-90;bvs=bvs2-4;aspect=ar1.2-2;nbox=4",
+          "support": 40
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs2-4;aspect=ar1.2-2;nbox=4",
+          "support": 40
+        },
+        {
+          "precondition": "cov=cov75-90;bvs=bvs1-1.2;aspect=ar>=8;nbox=2",
+          "support": 10
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs2-4;aspect=ar4-8;nbox=6",
+          "support": 10
+        }
+      ],
+      "program": [
+        {
+          "op": "expand_face",
+          "target": "coverage_gap_face",
+          "until": "coverage_recovered_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "dominant_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 7,
+          "median": 2,
+          "min": 1
+        },
+        {
+          "max": 2,
+          "median": 2,
+          "min": 1
+        },
+        {
+          "max": 12,
+          "median": 3,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_001",
+      "support": 160
+    },
+    {
+      "categories": {
+        "airplane": 23256,
+        "chair": 550,
+        "table": 1169,
+        "unknown": 251
+      },
+      "default_repeats": [
+        2.0
+      ],
+      "family": "shrink_slack_face",
+      "live_accepted": 22,
+      "mean_live_delta": 1.3441066249404512,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov90-98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 6224
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar4-8;nbox=1",
+          "support": 4078
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 3713
+        },
+        {
+          "precondition": "cov=cov75-90;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 2585
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar2-4;nbox=1",
+          "support": 1588
+        }
+      ],
+      "program": [
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 16,
+          "median": 2.0,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_002",
+      "support": 25226
+    },
+    {
+      "categories": {
+        "airplane": 2177,
+        "table": 138,
+        "unknown": 30
+      },
+      "default_repeats": [
+        1.0,
+        3.0
+      ],
+      "family": "recenter_then_shrink",
+      "live_accepted": 15,
+      "mean_live_delta": 1.1543302921489125,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar4-8;nbox=1",
+          "support": 735
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar2-4;nbox=1",
+          "support": 315
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 292
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar2-4;nbox=1",
+          "support": 258
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar>=8;nbox=1",
+          "support": 179
+        }
+      ],
+      "program": [
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 2,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 15,
+          "median": 3.0,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_003",
+      "support": 2345
+    },
+    {
+      "categories": {
+        "airplane": 23
+      },
+      "default_repeats": [
+        1.5,
+        1.0,
+        6.5,
+        1.0,
+        2.0
+      ],
+      "family": "recenter_then_shrink",
+      "live_accepted": 14,
+      "mean_live_delta": 1.6175134317597113,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 12
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 11
+        }
+      ],
+      "program": [
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 2,
+          "median": 1.5,
+          "min": 1
+        },
+        {
+          "max": 1,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 10,
+          "median": 6.5,
+          "min": 3
+        },
+        {
+          "max": 1,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 3,
+          "median": 2.0,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_004",
+      "support": 23
+    },
+    {
+      "categories": {
+        "airplane": 10,
+        "table": 10
+      },
+      "default_repeats": [
+        1.5,
+        1.0,
+        1.5,
+        1.0,
+        3.0
+      ],
+      "family": "escape_local_minimum_expand_then_refine",
+      "live_accepted": 6,
+      "mean_live_delta": 0.3289908520093818,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov75-90;bvs=bvs1-1.2;aspect=ar>=8;nbox=2",
+          "support": 10
+        },
+        {
+          "precondition": "cov=cov90-98;bvs=bvs2-4;aspect=ar4-8;nbox=6",
+          "support": 10
+        }
+      ],
+      "program": [
+        {
+          "op": "expand_face",
+          "target": "coverage_gap_face",
+          "until": "coverage_recovered_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "dominant_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "mid_volume_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 2,
+          "median": 1.5,
+          "min": 1
+        },
+        {
+          "max": 1,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 2,
+          "median": 1.5,
+          "min": 1
+        },
+        {
+          "max": 1,
+          "median": 1.0,
+          "min": 1
+        },
+        {
+          "max": 3,
+          "median": 3.0,
+          "min": 3
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_005",
+      "support": 20
+    },
+    {
+      "categories": {
+        "airplane": 719,
+        "unknown": 13
+      },
+      "default_repeats": [
+        3,
+        1
+      ],
+      "family": "recenter_then_shrink",
+      "live_accepted": 5,
+      "mean_live_delta": 0.9614622409921761,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov75-90;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 157
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 151
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar>=8;nbox=1",
+          "support": 87
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs10-30;aspect=ar4-8;nbox=1",
+          "support": 67
+        },
+        {
+          "precondition": "cov=cov>=98;bvs=bvs4-10;aspect=ar4-8;nbox=1",
+          "support": 62
+        }
+      ],
+      "program": [
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 15,
+          "median": 3,
+          "min": 1
+        },
+        {
+          "max": 1,
+          "median": 1,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_006",
+      "support": 732
+    },
+    {
+      "categories": {
+        "airplane": 13
+      },
+      "default_repeats": [
+        3,
+        1,
+        3,
+        1
+      ],
+      "family": "recenter_then_shrink",
+      "live_accepted": 5,
+      "mean_live_delta": 0.7954198622215456,
+      "precondition_memory": [
+        {
+          "precondition": "cov=cov>=98;bvs=bvs>=30;aspect=ar>=8;nbox=1",
+          "support": 13
+        }
+      ],
+      "program": [
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        },
+        {
+          "op": "shrink_face",
+          "target": "max_slack_face",
+          "until": "coverage_margin_low_or_score_stalls"
+        },
+        {
+          "op": "recenter_box",
+          "target": "single_box",
+          "until": "center_shift_stalls"
+        }
+      ],
+      "repeat_ranges": [
+        {
+          "max": 3,
+          "median": 3,
+          "min": 3
+        },
+        {
+          "max": 1,
+          "median": 1,
+          "min": 1
+        },
+        {
+          "max": 3,
+          "median": 3,
+          "min": 3
+        },
+        {
+          "max": 1,
+          "median": 1,
+          "min": 1
+        }
+      ],
+      "risk_policy": {
+        "accept": "exact_reward_delta_positive",
+        "fallback": "guarded_mcts_or_legacy_refine",
+        "rollback": "non_positive_exact_delta_or_invalid_state"
+      },
+      "skill_id": "skill_007",
+      "support": 13
+    }
+  ],
+  "source_repeat_report": "experiments/macro_search/runs/parameterized_skills_4k/template_repeat_predictor_report.json",
+  "source_templates": "experiments/macro_search/runs/parameterized_skills_4k/generalized_skill_templates.json",
+  "source_two_stage_report": "experiments/macro_search/runs/parameterized_skills_4k/two_stage_template_skill_controller_5seed_guarded_report.json",
+  "summary": {
+    "repeat_default_exact_vector_accuracy": 0.8943396226415095,
+    "repeat_default_method": "template_median",
+    "skill_count": 8,
+    "two_stage_guarded_top3_delta": 0.9518388974007512,
+    "unrestricted_guarded_delta": 0.9634512674346599
+  },
+  "version": 1
+}
