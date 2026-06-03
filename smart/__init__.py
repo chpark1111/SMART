@@ -21,6 +21,7 @@ __all__ = [
     "doctor",
     "evaluate",
     "load_action_prior",
+    "load_config",
     "load_local_refine_gate",
     "load_pruning_gate",
     "load",
@@ -28,6 +29,7 @@ __all__ = [
     "quality_gain_score",
     "predict_box_proposals",
     "run_native_pipeline",
+    "run",
     "run_pipeline",
     "score_local_refine_gate",
     "score_pruning_gate",
@@ -38,7 +40,7 @@ __all__ = [
     "workspace",
 ]
 
-__version__ = "0.1.14"
+__version__ = "0.1.15"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
     "build_linear_action_prior_from_traces",
@@ -56,6 +58,7 @@ _API_EXPORTS = {
     "doctor",
     "evaluate",
     "load_action_prior",
+    "load_config",
     "load_local_refine_gate",
     "load_pruning_gate",
     "load",
@@ -63,6 +66,7 @@ _API_EXPORTS = {
     "quality_gain_score",
     "predict_box_proposals",
     "run_native_pipeline",
+    "run",
     "run_pipeline",
     "score_local_refine_gate",
     "score_pruning_gate",

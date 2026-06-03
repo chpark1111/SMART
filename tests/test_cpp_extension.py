@@ -3270,17 +3270,25 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
         1024,
         "mesh",
     )
-    dynamic_mcts_prior_result = sc.run_builtin_deepset_dynamic_prior_mcts(
-        dynamic_mcts_prior_engine,
-        num_iter=2,
-        candidate_count=16,
-    )
-    assert dynamic_mcts_prior_result["learned_mcts_prior_used"] is True
-    assert dynamic_mcts_prior_result["dynamic_mcts_prior_used"] is True
-    assert dynamic_mcts_prior_result["dynamic_deepset_prior"] is True
-    assert dynamic_mcts_prior_result["dynamic_prior_refreshes"] >= 1
-    assert dynamic_mcts_prior_result["mcts_prior_top_k"] == 15
-    assert dynamic_mcts_prior_result["mcts_prior_max_step"] == 2
+    if hasattr(dynamic_mcts_prior_engine, "run_deepset_prior_mcts"):
+        dynamic_mcts_prior_result = sc.run_builtin_deepset_dynamic_prior_mcts(
+            dynamic_mcts_prior_engine,
+            num_iter=2,
+            candidate_count=16,
+        )
+        assert dynamic_mcts_prior_result["learned_mcts_prior_used"] is True
+        assert dynamic_mcts_prior_result["dynamic_mcts_prior_used"] is True
+        assert dynamic_mcts_prior_result["dynamic_deepset_prior"] is True
+        assert dynamic_mcts_prior_result["dynamic_prior_refreshes"] >= 1
+        assert dynamic_mcts_prior_result["mcts_prior_top_k"] == 15
+        assert dynamic_mcts_prior_result["mcts_prior_max_step"] == 2
+    else:
+        with pytest.raises(RuntimeError, match="dynamic DeepSets MCTS support"):
+            sc.run_builtin_deepset_dynamic_prior_mcts(
+                dynamic_mcts_prior_engine,
+                num_iter=2,
+                candidate_count=16,
+            )
 
 
 def test_cpp_native_smart_engine_can_apply_recenter_action_in_mcts() -> None:
