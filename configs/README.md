@@ -7,6 +7,7 @@ YAML configs define the pipeline, parameters, data roots, and backend choices.
 - `smoke_5.yaml`: fastest local smoke profile.
 - `example_3x3.yaml`: local 3-per-category example profile.
 - `learned_auto_safe.yaml`: opt-in production-candidate guarded learned MCTS profile.
+- `learned_macro_safe.yaml`: opt-in release-candidate learned MCTS plus exact-validated macro-skill polishing profile.
 - `learned_frontier.yaml`: opt-in guarded DeepSets MCTS-prior production-candidate profile.
 - `demo.yaml`: small demo data profile.
 - `paper_like.yaml`: paper-style parameters.
@@ -26,9 +27,10 @@ default-candidate profile: all accepted states still use exact SMART/Manifold
 reward, risky multibox states fall back to exact shallow MCTS, and the current
 local state-level validation has zero observed quality losses.
 
-Do not make learned macro-skill polishing the global default yet.  It remains
-an opt-in post-refinement quality controller until the 500-case fresh matched
-benchmark has zero-loss replacement evidence.
+Do not make learned macro-skill polishing the global default yet.  Use
+`learned_macro_safe.yaml` when you explicitly want the post-MCTS macro-skill
+stage.  It remains opt-in until the 500-case fresh matched benchmark has
+zero-loss replacement evidence.
 
 ## Wheel Copy
 

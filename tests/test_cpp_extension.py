@@ -1817,7 +1817,7 @@ def test_builtin_macro_skill_controller_smoke_on_native_engine() -> None:
     assert result["exact_validator"] == "native_smart_manifold"
     assert result["rollback_on_failure"] is True
     assert result["accepted_non_worse"] is True
-    assert result["deployment_status"] == "experimental_opt_in_post_refine"
+    assert result["deployment_status"] == "release_candidate_opt_in_post_refine"
     assert result["profile"]["profile"] == "geometry_top5_exact_guarded_variable_repeat_v2_balanced"
     assert result["native_selector_cache_stats"]["calls"] > 0.0
     assert "cached_checks_saved" in result["native_selector_cache_stats"]
@@ -3452,6 +3452,13 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert guarded_mcts_prior_defaults["guard_fast_num_iter"] == 50
     assert sc.native_deepset_mcts_prior_defaults("auto_safe") == guarded_mcts_prior_defaults
     assert sc.native_deepset_mcts_prior_defaults("production_candidate") == guarded_mcts_prior_defaults
+    learned_summary = sc.learned_router_profile_summary()
+    assert learned_summary["status"] == "release_candidate_opt_in"
+    assert learned_summary["release_gate"]["can_ship_opt_in"] is True
+    assert learned_summary["release_gate"]["can_be_default"] is False
+    assert learned_summary["validation_snapshot"]["refine_full_token_split"]["quality_losses"] == 0
+    assert learned_summary["runtime_requirements"]["deepset_scorer_available"] is True
+    assert learned_summary["runtime_requirements"]["policy_asset_exists"] is True
 
     auto_engine = sc.NativeSmartEngine(
         vertices,

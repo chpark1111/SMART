@@ -16,11 +16,14 @@ from smart.pipeline.stages import (
     inspect_tetra_output,
     latest_bbox_dir,
     list_mesh_ids,
+    mesh_tetra_dir,
     run_local_refine_mesh,
+    run_macro_skill_mesh,
     run_merge_mesh,
     run_refine_mesh,
     run_mcts_mesh,
     run_native_pipelines,
+    stage_root,
     validate_tetra_output,
 )
 from smart.pipeline import tools as pipeline_tools
@@ -76,6 +79,7 @@ def test_smart_cli_lists_config_profiles(capsys) -> None:
     assert "example_3x3.yaml" in names
     assert "learned_frontier.yaml" in names
     assert "learned_auto_safe.yaml" in names
+    assert "learned_macro_safe.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -117,6 +121,8 @@ def test_public_api_lists_config_profiles() -> None:
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
     assert "learned_frontier.yaml" in names
+    assert "learned_auto_safe.yaml" in names
+    assert "learned_macro_safe.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -184,6 +190,20 @@ def test_learned_auto_safe_config_is_default_candidate_profile() -> None:
     assert cfg["mcts"]["learned_prior"]["mode"] == "auto_safe"
 
 
+def test_learned_macro_safe_config_enables_safe_macro_stage() -> None:
+    cfg = load_config("configs/learned_macro_safe.yaml")
+
+    assert cfg["run_name"] == "learned_macro_safe"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["mcts"]["learned_prior"]["enabled"] is True
+    assert cfg["mcts"]["learned_prior"]["mode"] == "auto_safe"
+    assert cfg["stages"]["macro_skill"] is True
+    assert cfg["macro_skill"]["input_stage"] == "mcts"
+    assert cfg["macro_skill"]["quality_preset"] == "balanced"
+    assert cfg["macro_skill"]["native_executor"] is True
+    assert cfg["render"]["input_stage"] == "macro_skill"
+
+
 def test_learned_prior_schema_defaults_to_guarded_when_enabled() -> None:
     cfg = smart.load_config(None, overrides={"mcts": {"learned_prior": {"enabled": True}}})
 
@@ -192,10 +212,16 @@ def test_learned_prior_schema_defaults_to_guarded_when_enabled() -> None:
 
 
 def test_public_api_lists_and_resolves_packaged_assets() -> None:
+    policies = smart.asset_profiles("policies")
     gates = smart.asset_profiles("gates")
     priors = smart.asset_profiles("priors")
     skills = smart.asset_profiles("skills")
 
+    policy_names = {item["name"] for item in policies}
+    assert "deepset_setaware_v2_h128_v1.smartmlp" in policy_names
+    packaged_policy = next(item for item in policies if item["name"] == "deepset_setaware_v2_h128_v1.smartmlp")
+    assert packaged_policy["feature_set"] == "setaware_v2"
+    assert packaged_policy["model_type"] == "deepset_h128"
     assert gates == []
     assert priors == []
     assert {item["name"] for item in skills} >= {
@@ -203,6 +229,8 @@ def test_public_api_lists_and_resolves_packaged_assets() -> None:
         "macro_memory_policy_v1.json",
         "macro_budget_quality_rule_v1.json",
     }
+    assert smart.asset_path("policies", "default").name == "deepset_setaware_v2_h128_v1.smartmlp"
+    assert smart.asset_path("policy", "h128_v1").name == "deepset_setaware_v2_h128_v1.smartmlp"
     assert smart.asset_path("skills", "macro_v1").name == "macro_skill_knowledge_base_v1.json"
     assert smart.asset_path("skills", "macro_memory_v1").name == "macro_memory_policy_v1.json"
     assert smart.asset_path("skills", "macro_budget_quality_v1").name == "macro_budget_quality_rule_v1.json"
@@ -215,6 +243,12 @@ def test_smart_cli_lists_packaged_assets(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
 
     assert payload == []
+
+    assert smart_main(["assets", "--kind", "policies", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {item["name"] for item in payload} == {"deepset_setaware_v2_h128_v1.smartmlp"}
+    assert payload[0]["feature_set"] == "setaware_v2"
+    assert payload[0]["model_type"] == "deepset_h128"
 
     assert smart_main(["assets", "--kind", "skills", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -285,7 +319,7 @@ def test_smart_cli_macro_skill_smoke(tmp_path, capsys) -> None:
     assert stdout_payload["exact_validator"] == "native_smart_manifold"
     assert stdout_payload["rollback_on_failure"] is True
     assert stdout_payload["accepted_non_worse"] is True
-    assert stdout_payload["deployment_status"] == "experimental_opt_in_post_refine"
+    assert stdout_payload["deployment_status"] == "release_candidate_opt_in_post_refine"
     assert stdout_payload["exported_bbox_count"] == 1
     assert (bbox_dir / "bbox_params.json").exists()
 
@@ -293,10 +327,93 @@ def test_smart_cli_macro_skill_smoke(tmp_path, capsys) -> None:
 def test_smart_cli_macro_skill_summary(capsys) -> None:
     assert smart_main(["macro-skill-summary", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "experimental_opt_in"
+    assert payload["status"] == "release_candidate_opt_in_post_refine"
     assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
+    assert payload["release_gate"]["can_ship_opt_in"] is True
+    assert payload["release_gate"]["can_be_default"] is False
+    assert payload["deployment_default"]["post_refine_only"] is True
+    assert "configs/learned_macro_safe.yaml" in payload["recommended_configs"]
     assert payload["best_practical"]["losses_vs_conditional_budget_v1"] == 0
     assert payload["quality_preset"]["losses_vs_conditional_budget_v1"] == 0
+
+
+def test_smart_cli_learned_router_summary(capsys) -> None:
+    assert smart_main(["learned-router-summary", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "release_candidate_opt_in"
+    assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
+    assert payload["packaged_policy"] == "deepset_setaware_v2_h128_v1.smartmlp"
+    assert payload["release_gate"]["can_ship_opt_in"] is True
+    assert payload["release_gate"]["can_be_default"] is False
+    assert payload["validation_snapshot"]["refine_full_token_split"]["cases"] == 1015
+    assert payload["validation_snapshot"]["refine_full_token_split"]["quality_losses"] == 0
+    assert payload["validation_snapshot"]["refine_heldout_test"]["quality_losses"] == 0
+    assert payload["validation_snapshot"]["macro_skill_replay"]["status"] == "release_candidate_opt_in_post_refine"
+    assert payload["runtime_requirements"]["policy_asset_exists"] is True
+
+    api_payload = smart.learned_router_profile_summary()
+    assert api_payload["validation_snapshot"]["refine_replay_states"]["quality_losses"] == 0
+
+
+def test_smart_cli_learned_release_readiness(capsys) -> None:
+    assert smart_main(["learned-release-readiness", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "release_candidate_opt_in"
+    assert payload["can_ship_opt_in"] is True
+    assert payload["can_be_default"] is False
+    assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
+    assert "learned_macro_safe.yaml" in payload["opt_in_profiles"]
+    assert payload["packaged_assets"]["policy_ready"] is True
+    assert payload["packaged_assets"]["missing_skill_assets"] == []
+    assert payload["packaged_assets"]["configs_ready"] is True
+    assert payload["router"]["heldout_losses"] == 0
+    assert payload["macro_skill"]["balanced_losses"] == 0
+
+    assert smart_main(["learned-release-readiness"]) == 0
+    text = capsys.readouterr().out
+    assert "status=release_candidate_opt_in" in text
+    assert "opt_in=True" in text
+    assert "can_be_default=False" in text
+    assert smart_main(["learned-release-readiness", "--fail-if-not-ready"]) == 0
+    assert smart_main(["learned-release-readiness", "--require-default-ready"]) == 3
+
+
+def test_smart_cli_learned_release_readiness_fails_when_blocked(monkeypatch, capsys) -> None:
+    import smart.api as smart_api
+
+    def _blocked_summary() -> dict:
+        return {
+            "status": "blocked",
+            "can_ship_opt_in": False,
+            "can_be_default": False,
+            "default_smart_path": "unchanged_exact_cpp_native",
+            "opt_in_profiles": [],
+            "router": {
+                "heldout_losses": 1,
+                "heldout_exact_call_reduction": 0.0,
+            },
+            "macro_skill": {
+                "balanced_losses": 1,
+                "balanced_mean_delta": -0.1,
+            },
+        }
+
+    monkeypatch.setattr(smart_api, "learned_release_readiness_summary", _blocked_summary)
+    assert smart_main(["learned-release-readiness", "--json", "--fail-if-not-ready"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "blocked"
+    assert payload["can_ship_opt_in"] is False
+
+
+def test_public_api_exposes_learned_release_readiness() -> None:
+    payload = smart.learned_release_readiness_summary()
+
+    assert payload["can_ship_opt_in"] is True
+    assert payload["can_be_default"] is False
+    assert payload["router"]["status"] == "release_candidate_opt_in"
+    assert payload["macro_skill"]["status"] == "release_candidate_opt_in_post_refine"
 
 
 def test_macro_skill_assets_load_and_rank() -> None:
@@ -1397,6 +1514,132 @@ def test_local_refine_stage_skips_when_mcts_output_missing(tmp_path) -> None:
     assert record.stage == "local_refine"
     assert record.status == "skipped"
     assert "missing mcts bbox output" in str(record.error)
+
+
+def _write_macro_skill_stage_inputs(
+    tmp_path: Path,
+    *,
+    input_stage: str = "mcts",
+) -> tuple[dict[str, object], dict[str, str]]:
+    mesh_root = tmp_path / "meshes" / "table"
+    mesh_model = mesh_root / "mesh-a" / "model.obj"
+    mesh_model.parent.mkdir(parents=True)
+    mesh_model.write_text("v 0 0 0\nf 1 1 1\n", encoding="utf-8")
+    cfg = {
+        "workspace": str(tmp_path),
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "normalization": {"enabled": False},
+        "stages": {"normalize": False},
+        "macro_skill": {
+            "input_stage": input_stage,
+            "quality_preset": "balanced",
+            "repeat_mode": "guarded_variable",
+            "top_k": 3,
+            "candidate_count": 32,
+            "max_steps": 4,
+            "cover_penalty": 100,
+            "pen_rate": 1.0,
+            "num_action_scale": 2,
+            "action_unit": 0.01,
+            "volume_method": "mesh",
+            "stateful_union_cache": True,
+            "stateful_cache_capacity": 128,
+            "native_executor": True,
+            "target_aware_execution": False,
+        },
+        "categories": [],
+    }
+    category = {"name": "table", "mesh_root": str(mesh_root)}
+    msh = mesh_tetra_dir(cfg, category, "mesh-a") / "tetra.msh"
+    msh.parent.mkdir(parents=True)
+    msh.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    bbox_dir = (
+        stage_root(cfg, input_stage, category)
+        / "exp"
+        / "result"
+        / "updated0"
+        / "mesh-a"
+        / "bboxs_steps0"
+    )
+    bbox_dir.mkdir(parents=True)
+    (bbox_dir / "bbox0.obj").write_text("v 0 0 0\nf 1 1 1\n", encoding="utf-8")
+    (bbox_dir / "bbox_params.json").write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [-0.3, -0.3, -0.3, 0.7, 0.7, 0.7],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg, category
+
+
+def test_macro_skill_stage_dry_run_uses_package_cli(tmp_path) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path)
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", dry_run=True, force=True)
+
+    assert record.stage == "macro_skill"
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart", "macro-skill"]
+    assert record.command[record.command.index("--quality-preset") + 1] == "balanced"
+    assert record.command[record.command.index("--top-k") + 1] == "3"
+    assert record.output_path is not None
+    assert record.output_path.endswith("bboxs_steps0")
+    assert record.metadata["input_stage"] == "mcts"
+    assert record.metadata["safe_noop_fallback"] is True
+    assert record.metadata["exact_validator"] == "native_smart_manifold"
+
+
+def test_macro_skill_stage_exports_noop_fallback(tmp_path, monkeypatch) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path)
+
+    class FakeEngine:
+        def export_bbox_dir(self, output: str) -> int:
+            out = Path(output)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "bbox0.obj").write_text("v 0 0 0\nf 1 1 1\n", encoding="utf-8")
+            (out / "bbox_params.json").write_text('{"boxes":[]}', encoding="utf-8")
+            return 1
+
+    def fake_controller(**kwargs):
+        return {
+            "engine": FakeEngine(),
+            "accepted": False,
+            "accepted_non_worse": True,
+            "score_delta": 0.0,
+            "attempt_count": 3,
+            "exact_budget": 1,
+            "deployment_status": "release_candidate_opt_in_post_refine",
+        }
+
+    monkeypatch.setattr("smart.api.run_macro_skill_controller_from_files", fake_controller)
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", force=True)
+
+    assert record.status == "success"
+    assert record.output_path is not None
+    output = Path(record.output_path)
+    assert (output / "bbox0.obj").exists()
+    assert (output / "bbox_params.json").exists()
+    assert record.metadata["accepted"] is False
+    assert record.metadata["accepted_non_worse"] is True
+    assert record.metadata["safe_noop_fallback"] is True
+    assert record.metadata["exported_bbox_count"] == 1
+    result_path = Path(record.metadata["result_json"])
+    assert json.loads(result_path.read_text(encoding="utf-8"))["accepted"] is False
+
+
+def test_render_can_use_macro_skill_stage_output(tmp_path) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path, input_stage="macro_skill")
+
+    assert bbox_dir_for_render(cfg, category, "mesh-a", "macro_skill") is not None
 
 
 def test_relative_config_prefers_current_working_directory(tmp_path, monkeypatch) -> None:

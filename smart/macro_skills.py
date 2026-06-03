@@ -1,9 +1,9 @@
-"""Experimental variable-length macro-skill controller for SMART.
+"""Release-candidate opt-in variable-length macro-skill controller for SMART.
 
-This module packages the current research controller behind a small opt-in API.
-It does not replace the default exact C++ SMART path. A caller passes an active
-``NativeSmartEngine`` instance, and every accepted update is still validated by
-the engine's exact reward backend.
+This module packages the current research controller behind a small opt-in API
+and pipeline stage.  It does not replace the default exact C++ SMART path.  A
+caller passes an active ``NativeSmartEngine`` instance, and every accepted
+update is still validated by the engine's exact reward backend.
 """
 
 from __future__ import annotations
@@ -52,17 +52,54 @@ def load_builtin_macro_skill_policy() -> dict[str, Any]:
 
 
 def macro_skill_profile_summary() -> dict[str, Any]:
-    """Return the current packaged research profile numbers.
+    """Return the current packaged macro-skill release profile numbers.
 
     These are benchmark-result summaries, not runtime guarantees. They document
-    why the packaged rule keeps the default path conservative and exposes
-    higher-budget variants as opt-in research presets.
+    why the packaged rule can ship as an opt-in post-refine controller while
+    keeping the default SMART path conservative.
     """
 
     return {
-        "status": "experimental_opt_in",
+        "status": "release_candidate_opt_in_post_refine",
         "default_smart_path": "unchanged_exact_cpp_native",
         "packaged_profile": "geometry_top5_exact_guarded_variable_repeat_v2_balanced",
+        "release_gate": {
+            "can_ship_opt_in": True,
+            "can_be_default": False,
+            "default_blockers": [
+                "500+ replay-ready held-out states with zero exact-score regression",
+                "fresh full-pipeline mesh-level validation after refine/MCTS",
+                "automatic no-op fallback integration in normal pipeline stage orchestration",
+            ],
+            "promotion_requirements": {
+                "min_replay_states": 500,
+                "max_exact_score_loss_cases": 0,
+                "min_mean_quality_gain_vs_balanced": 0.0,
+                "fallback_contract_required": True,
+                "pipeline_stage_required": True,
+            },
+        },
+        "exact_reward_contract": [
+            "skills are proposals, not reward replacements",
+            "every attempted skill is scored by exact native SMART/Manifold",
+            "accepted skills must be non-worse than the input state",
+            "failed or worsening skills rollback to the input state",
+        ],
+        "deployment_default": {
+            "recommended_preset": "balanced",
+            "quality_preset": "learned_efficient",
+            "native_executor": True,
+            "stateful_union_cache": True,
+            "post_refine_only": True,
+        },
+        "recommended_configs": [
+            "configs/learned_macro_safe.yaml",
+        ],
+        "recommended_commands": [
+            "smart macro-skill-summary --json",
+            "smart --config configs/learned_macro_safe.yaml run",
+            "smart --config configs/smoke_5.yaml --set stages.macro_skill=true --set render.input_stage=macro_skill run",
+        ],
         "heldout_cases": 173,
         "previous_best": {
             "profile": "geometry_top2_exact_macro_memory",
@@ -647,7 +684,7 @@ def _macro_skill_controller_payload(**payload: Any) -> dict[str, Any]:
     payload["accepted_non_worse"] = score_delta >= -1.0e-12
     payload["exact_validator"] = "native_smart_manifold"
     payload["rollback_on_failure"] = True
-    payload["deployment_status"] = "experimental_opt_in_post_refine"
+    payload["deployment_status"] = "release_candidate_opt_in_post_refine"
     payload["default_smart_path_changed"] = False
     payload["quality_contract"] = (
         "accepted updates are exact SMART/Manifold non-worse; rejected updates restore the input state"

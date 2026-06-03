@@ -34,9 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Override a config value, e.g. --set mcts.mcts_iter=100 --set render.joint_mesh=true",
     )
     public_commands = (
-        "{run,native-run,normalize,tetra,preseg,merge,refine,mcts,local_refine,"
+        "{run,native-run,normalize,tetra,preseg,merge,refine,mcts,macro_skill,local_refine,"
         "render,build-tools,build-cpp,audit-wheel,check-data,configs,assets,"
-        "summary,doctor,evaluate,macro-skill,macro-skill-summary}"
+        "summary,doctor,evaluate,macro-skill,macro-skill-summary,learned-router-summary,"
+        "learned-release-readiness}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
@@ -56,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         "merge",
         "refine",
         "mcts",
+        "macro_skill",
         "local_refine",
         "render",
     ]:
@@ -104,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     configs.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     assets = sub.add_parser("assets", help="List optional SMART model assets")
-    assets.add_argument("--kind", choices=["gates", "priors", "skills"], help="Limit to one asset kind")
+    assets.add_argument("--kind", choices=["policies", "gates", "priors", "skills"], help="Limit to one asset kind")
     assets.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     summary = sub.add_parser("summary", help="Summarize the latest manifest record for each stage/mesh")
@@ -188,6 +190,28 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the packaged macro-skill research profile and safety contract",
     )
     macro_skill_summary.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+
+    learned_router_summary = sub.add_parser(
+        "learned-router-summary",
+        help="Print the packaged learned-router release profile and promotion gate",
+    )
+    learned_router_summary.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+
+    learned_release_readiness = sub.add_parser(
+        "learned-release-readiness",
+        help="Print combined release readiness for learned router and macro-skill paths",
+    )
+    learned_release_readiness.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    learned_release_readiness.add_argument(
+        "--fail-if-not-ready",
+        action="store_true",
+        help="Exit non-zero unless the learned router/macro-skill opt-in release gate is ready",
+    )
+    learned_release_readiness.add_argument(
+        "--require-default-ready",
+        action="store_true",
+        help="Exit non-zero unless learned paths are also ready to become the package-wide default",
+    )
 
     prior = sub.add_parser("build-prior", help=argparse.SUPPRESS)
     prior.add_argument("traces", nargs="*", help="Trace JSONL file(s) from mcts.trace_actions_path")
@@ -666,18 +690,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(summary_payload, indent=2, sort_keys=True))
         else:
+            gate = summary_payload["release_gate"]
             practical = summary_payload["best_practical"]
             efficient = summary_payload["efficient_quality_preset"]
             learned = summary_payload["learned_quality_gate_preset"]
             quality = summary_payload["quality_preset"]
             print(
-                "status={status} default={default} cases={cases} "
+                "status={status} default={default} opt_in={opt_in} can_be_default={can_default} cases={cases} "
                 "balanced_delta={balanced_delta:.4f} balanced_attempts={balanced_attempts:.3f} "
                 "efficient_delta={efficient_delta:.4f} efficient_open={efficient_open} "
                 "learned_delta={learned_delta:.4f} learned_eff={learned_eff:.3f} "
                 "quality_delta={quality_delta:.4f} quality_attempts={quality_attempts:.3f}".format(
                     status=summary_payload["status"],
                     default=summary_payload["default_smart_path"],
+                    opt_in=gate["can_ship_opt_in"],
+                    can_default=gate["can_be_default"],
                     cases=summary_payload["heldout_cases"],
                     balanced_delta=practical["mean_delta"],
                     balanced_attempts=practical["mean_exact_attempts"],
@@ -689,6 +716,65 @@ def main(argv: list[str] | None = None) -> int:
                     quality_attempts=quality["mean_exact_attempts"],
                 )
             )
+        return 0
+
+    if args.command == "learned-router-summary":
+        from .api import learned_router_profile_summary
+
+        summary_payload = learned_router_profile_summary()
+        if args.json:
+            print(json.dumps(summary_payload, indent=2, sort_keys=True))
+        else:
+            gate = summary_payload["release_gate"]
+            full = summary_payload["validation_snapshot"]["refine_full_token_split"]
+            heldout = summary_payload["validation_snapshot"]["refine_heldout_test"]
+            print(
+                "status={status} default={default} opt_in={opt_in} can_be_default={can_default} "
+                "policy={policy} full_cases={full_cases} full_losses={full_losses} "
+                "full_exact_call_reduction={full_reduction:.3f} heldout_cases={heldout_cases} "
+                "heldout_losses={heldout_losses} heldout_exact_call_reduction={heldout_reduction:.3f}".format(
+                    status=summary_payload["status"],
+                    default=summary_payload["default_smart_path"],
+                    opt_in=gate["can_ship_opt_in"],
+                    can_default=gate["can_be_default"],
+                    policy=summary_payload["packaged_policy"],
+                    full_cases=full["cases"],
+                    full_losses=full["quality_losses"],
+                    full_reduction=full["exact_call_reduction"],
+                    heldout_cases=heldout["cases"],
+                    heldout_losses=heldout["quality_losses"],
+                    heldout_reduction=heldout["exact_call_reduction"],
+                )
+            )
+        return 0
+
+    if args.command == "learned-release-readiness":
+        from .api import learned_release_readiness_summary
+
+        summary_payload = learned_release_readiness_summary()
+        if args.json:
+            print(json.dumps(summary_payload, indent=2, sort_keys=True))
+        else:
+            router = summary_payload["router"]
+            macro = summary_payload["macro_skill"]
+            print(
+                "status={status} opt_in={opt_in} can_be_default={can_default} "
+                "profiles={profiles} router_losses={router_losses} macro_losses={macro_losses} "
+                "router_exact_call_reduction={router_reduction:.3f} macro_balanced_delta={macro_delta:.4f}".format(
+                    status=summary_payload["status"],
+                    opt_in=summary_payload["can_ship_opt_in"],
+                    can_default=summary_payload["can_be_default"],
+                    profiles=",".join(summary_payload["opt_in_profiles"]),
+                    router_losses=router["heldout_losses"],
+                    macro_losses=macro["balanced_losses"],
+                    router_reduction=router["heldout_exact_call_reduction"],
+                    macro_delta=macro["balanced_mean_delta"],
+                )
+            )
+        if args.require_default_ready and not summary_payload["can_be_default"]:
+            return 3
+        if args.fail_if_not_ready and not summary_payload["can_ship_opt_in"]:
+            return 2
         return 0
 
     if args.command == "build-prior":

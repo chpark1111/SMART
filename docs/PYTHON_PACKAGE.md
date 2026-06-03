@@ -176,10 +176,21 @@ dynamic top4/top15 introduced quality-loss cases.
 
 ## Opt-In Macro-Skill Polishing
 
-The package also includes an experimental variable-length macro-skill
-controller. This is different from the one-step learned router above: it tries
-reusable multi-step fitting programs such as "shrink, recenter, then shrink
-again" and accepts only an exact SMART/Manifold non-worse final state.
+The package also includes a release-candidate opt-in variable-length
+macro-skill controller. This is different from the one-step learned router
+above: it tries reusable multi-step fitting programs such as "shrink, recenter,
+then shrink again" and accepts only an exact SMART/Manifold non-worse final
+state.
+
+The easiest release-candidate profile is:
+
+```bash
+smart --config configs/learned_macro_safe.yaml run
+```
+
+This runs the learned MCTS-prior profile, then the exact-validated macro-skill
+stage, and renders from `render.input_stage=macro_skill`. If no skill improves
+the score, the stage restores and exports the original bbox state.
 
 Use it after you already have prepared SMART tetra data and bbox metadata from
 merge/refine/MCTS:
@@ -219,6 +230,8 @@ debugging or research ablation.
 Check the packaged benchmark/profile metadata with:
 
 ```bash
+smart learned-release-readiness --json
+smart learned-release-readiness --fail-if-not-ready
 smart macro-skill-summary --json
 ```
 
@@ -227,7 +240,7 @@ The result payload includes a stable safety contract:
 ```text
 exact_validator=native_smart_manifold
 rollback_on_failure=true
-deployment_status=experimental_opt_in_post_refine
+deployment_status=release_candidate_opt_in_post_refine
 default_smart_path_changed=false
 ```
 

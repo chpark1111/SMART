@@ -287,6 +287,24 @@ selected subset with native SMART/Manifold before applying an action.  The
 accepted reward therefore remains exact; the speed gain comes from fewer exact
 geometry calls.
 
+Installed wheels expose the packaged learned-router status and checkpoint:
+
+```bash
+smart learned-release-readiness --json
+smart learned-release-readiness --fail-if-not-ready
+smart learned-router-summary --json
+smart assets --kind policies --json
+```
+
+From Python:
+
+```python
+import smart
+
+print(smart.learned_router_profile_summary()["validation_snapshot"])
+print(smart.asset_path("policies", "default"))
+```
+
 The learned refine helper's `profile="auto"` now resolves to the v9
 production-candidate router for multibox states while preserving exact native
 refine for one-box states:
@@ -330,9 +348,39 @@ smart --config configs/smoke_5.yaml refine \
 See [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md)
 for profile details.
 
-The variable-length macro-skill controller is a newer experimental
+The variable-length macro-skill controller is a release-candidate opt-in
 post-refinement path. It proposes reusable multi-step fitting skills and accepts
 only exact SMART/Manifold non-worse updates:
+
+Config profile:
+
+```bash
+smart --config configs/learned_macro_safe.yaml run
+```
+
+Pipeline stage usage:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set macro_skill.input_stage=mcts \
+  --set macro_skill.quality_preset=balanced \
+  macro_skill
+```
+
+To render the macro-skill output in the same pipeline:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set stages.macro_skill=true \
+  --set render.input_stage=macro_skill \
+  run
+```
+
+If no macro skill improves the exact SMART score, the stage restores and exports
+the input bbox state so downstream rendering and evaluation still have a valid
+output.
+
+Prepared-state CLI usage:
 
 ```bash
 smart macro-skill \
@@ -346,6 +394,14 @@ smart macro-skill \
 
 The default macro-skill executor is the compact C++ path. Use
 `--no-native-executor` only for ablations against the Python skill loop.
+Check the packaged release gate with:
+
+```bash
+smart learned-release-readiness --json
+smart learned-release-readiness --fail-if-not-ready
+smart macro-skill-summary --json
+```
+
 Use `--quality-preset efficient` to spend the higher exact budget only on the
 currently validated chair-like scheduler bucket. Use the learned Pareto family
 `--quality-preset learned_fast`, `learned_efficient`, or `learned_quality` to
@@ -410,6 +466,10 @@ smart-release-preflight \
   --recreate-venv \
   --run-asan-smoke
 ```
+
+The preflight also checks the opt-in learned-router and macro-skill release
+contract with `smart learned-release-readiness --fail-if-not-ready`, both from
+the source checkout and from the installed wheel.
 
 Release notes and publishing steps are in [`docs/RELEASE.md`](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE.md).
 

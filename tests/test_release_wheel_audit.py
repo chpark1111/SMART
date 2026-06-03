@@ -62,6 +62,7 @@ def _minimal_release_names() -> list[str]:
         "smart/configs/example_3x3.yaml",
         "smart/configs/learned_frontier.yaml",
         "smart/configs/learned_auto_safe.yaml",
+        "smart/configs/learned_macro_safe.yaml",
         "smart/legacy/renderer/boxes.blend",
         "smart/legacy/renderer/semantic_colors.txt",
         "pymesh.py",

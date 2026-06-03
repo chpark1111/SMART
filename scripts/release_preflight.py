@@ -47,6 +47,7 @@ def run_preflight(
     build_env = _release_build_env()
 
     if not skip_build:
+        _run([sys.executable, "-m", "smart", "learned-release-readiness", "--fail-if-not-ready"], cwd=repo_root)
         _run(
             [
                 sys.executable,
@@ -112,6 +113,7 @@ def run_preflight(
     python = _venv_python(venv_dir)
     _run([str(python), "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], cwd=repo_root)
     _run([str(_venv_script(venv_dir, "smart-smoke-console-scripts")), "--timeout-sec", str(timeout_sec)], cwd=repo_root)
+    _run([str(_venv_script(venv_dir, "smart")), "learned-release-readiness", "--fail-if-not-ready"], cwd=repo_root)
     smoke_code = (
         "import smart, smart.native as sn, smart.cpp as sc, smart.pymesh_compat as compat, pymesh; "
         "from smart.pipeline.config import load_config; "

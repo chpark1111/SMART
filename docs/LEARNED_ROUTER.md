@@ -30,14 +30,31 @@ The bundled policy checkpoint is:
 smart/assets/policies/deepset_setaware_v2_h128_v1.smartmlp
 ```
 
+Installed wheels expose the release profile and packaged policy list:
+
+```bash
+smart learned-release-readiness --json
+smart learned-release-readiness --fail-if-not-ready
+smart learned-router-summary --json
+smart assets --kind policies --json
+```
+
 It is loaded through:
 
 ```python
+import smart
 import smart.cpp as sc
 
+summary = smart.learned_router_profile_summary()
+policy_path = smart.asset_path("policies", "default")
 policy = sc.load_builtin_deepset_policy()
 defaults = sc.native_deepset_refine_defaults("auto")
 ```
+
+`summary["release_gate"]` records the current deployment contract: the router
+is packaged and safe to use as an opt-in candidate reducer, while the exact
+C++ SMART path remains the default until a fresh full-pipeline held-out gate is
+passed.
 
 As of the 2026-06-03 validation pass, `auto`, `auto_safe`,
 `learned_auto_safe`, and `production_candidate` all resolve to the v9
@@ -106,8 +123,8 @@ enough to pay for model inference.
 ## Current Validation Snapshot
 
 Current local validation is still not a paper-level benchmark, but it is strong
-enough to ship as the learned-router default profile.  The router was compared
-against exact candidate-pool scoring on native refine states.
+enough to ship as the opt-in learned-router `auto` profile.  The router was
+compared against exact candidate-pool scoring on native refine states.
 
 ### Same-Turn Acceleration
 
@@ -297,10 +314,10 @@ mcts:
     mode: auto_safe
 ```
 
-The variable-length macro-skill controller is one step behind the MCTS prior:
-it has strong quality results as an opt-in post-refinement controller, but it
-has not yet replaced the historical live controller without losses.  It should
-not be the global default until the strict fresh matched benchmark passes.
+The variable-length macro-skill controller is now packaged as an opt-in
+post-refinement release candidate: it has strong quality results with exact
+rollback safety, but it should not be the global default until the strict fresh
+matched benchmark and larger end-to-end mesh-level validation pass.
 
 This strengthens the quality claim but also clarifies the runtime claim:
 multibox and case41-style states show large speedups, while the unseen probe
@@ -2676,8 +2693,9 @@ artifact, the quality preset improves the reference delta from `+0.7586` to
 clear exact-safe quality-improving controller in the current live-state
 benchmark.
 
-These macro-skill artifacts are packaged as experimental assets so they can be
-referenced reproducibly without depending on the ignored `experiments/` tree:
+These macro-skill artifacts are packaged as release-candidate opt-in assets so
+they can be referenced reproducibly without depending on the ignored
+`experiments/` tree:
 
 ```python
 import smart
@@ -2689,8 +2707,8 @@ budget_rule = smart.asset_path("skills", "macro_budget_quality_v1")
 
 They are not the default SMART backend.  The release-safe path remains exact
 native SMART and the opt-in DeepSets router above.  The macro-skill controller
-is now available as an experimental Python API that drives the native C++
-engine:
+is now available as a release-candidate opt-in Python API that drives the
+native C++ engine:
 
 ```python
 import smart
@@ -2709,9 +2727,9 @@ result = sc.run_builtin_macro_skill_controller(
 The wrapper ranks the packaged skills, chooses the conditional exact budget,
 executes candidate skills on the live C++ engine, and accepts only a
 positive-exact-reward skill.  If no skill improves the exact score, it restores
-the original engine state.  This is still marked experimental because the
-current held-out evidence is log/live-state based; larger end-to-end mesh-level
-checks and direct C++ integration are not complete.
+the original engine state.  It remains opt-in, not package-wide default, because
+the current evidence is replay/live-state based; larger end-to-end mesh-level
+checks are still required for automatic pipeline promotion.
 
 `repeat_mode="guarded_variable"` is the current recommended research profile.
 Use it in one of two presets:
@@ -3180,6 +3198,38 @@ smart macro-skill \
   --json
 ```
 
+Release-candidate config profile:
+
+```bash
+smart --config configs/learned_macro_safe.yaml run
+```
+
+Pipeline stage:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set macro_skill.input_stage=mcts \
+  --set macro_skill.quality_preset=balanced \
+  macro_skill
+```
+
+Full run with macro-skill output rendered:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set stages.macro_skill=true \
+  --set render.input_stage=macro_skill \
+  run
+```
+
+This stage is deliberately post-refinement/post-MCTS and opt-in.  The controller
+loads the prepared tetra mesh and bbox metadata into the native C++ engine,
+tries the packaged variable-length skills, and accepts only exact non-worse
+updates.  If all skills fail, it restores the original state and still exports
+that bbox directory under `runs/.../macro_skill/.../bboxs_steps0`.  That no-op
+fallback is the runtime contract that makes the research feature safe enough to
+ship as an opt-in pipeline stage.
+
 Current packaged benchmark/profile summary:
 
 ```bash
@@ -3205,7 +3255,7 @@ The returned result payload is deliberately conservative.  It includes:
 exact_validator: native_smart_manifold
 rollback_on_failure: true
 accepted_non_worse: true/false
-deployment_status: experimental_opt_in_post_refine
+deployment_status: release_candidate_opt_in_post_refine
 default_smart_path_changed: false
 ```
 
@@ -4318,8 +4368,8 @@ the same exact budget.
 Current default-promotion status:
 
 ```text
-release as learned-router auto/default profile: yes
-make entire SMART pipeline bypass exact baseline by default: no
+ship as opt-in learned-router auto profile: yes
+make learned router the package-wide default path: no
 best strict 1000-state result: 0 losses, 1.203x vs exact oracle, 30.7% fewer exact calls
 held-out test split: 0 losses, 1.361x vs exact oracle, 38.7% fewer exact calls
 remaining blocker for stronger paper claim: larger independent ShapeNet-scale held-out split

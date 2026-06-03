@@ -35,6 +35,7 @@ STAGE_ORDER = [
     "merge",
     "refine",
     "mcts",
+    "macro_skill",
     "local_refine",
     "render",
 ]
@@ -462,6 +463,10 @@ def run_stage(
         return run_refine_mesh(cfg, category, mesh_id, dry_run=dry_run, force=force)
     if stage == "mcts":
         return run_mcts_mesh(cfg, category, mesh_id, dry_run=dry_run, force=force)
+    if stage == "macro_skill":
+        return run_macro_skill_mesh(
+            cfg, category, mesh_id, dry_run=dry_run, force=force
+        )
     if stage == "local_refine":
         return run_local_refine_mesh(
             cfg, category, mesh_id, dry_run=dry_run, force=force
@@ -3246,6 +3251,273 @@ def run_mcts_mesh(
     )
 
 
+def _macro_skill_exp_name(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    stage_cfg: dict[str, Any],
+) -> str:
+    preset = str(stage_cfg.get("quality_preset", "balanced") or "balanced")
+    repeat = str(stage_cfg.get("repeat_mode", "guarded_variable") or "guarded_variable")
+    input_stage = str(stage_cfg.get("input_stage", "mcts") or "mcts")
+    name = (
+        f"{tetra_root(cfg, category).name}_{input_stage}_macro_skill"
+        f"_{preset}_{repeat}"
+        f"_top{int(stage_cfg.get('top_k', 5) or 5)}"
+        f"_steps{int(stage_cfg.get('max_steps', 16) or 16)}"
+    )
+    exact_budget = stage_cfg.get("exact_budget")
+    if exact_budget is not None:
+        name += f"_budget{int(exact_budget)}"
+    if not stage_cfg.get("native_executor", True):
+        name += "_pythonexec"
+    exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
+    return f"{name}_{exp_tag}" if exp_tag else name
+
+
+def _macro_skill_stage_command(
+    *,
+    msh_path: Path,
+    metadata_path: Path,
+    category_name: str,
+    stage_cfg: dict[str, Any],
+    result_json: Path,
+    bbox_out: Path,
+) -> list[str]:
+    command = [
+        "smart",
+        "macro-skill",
+        "--msh",
+        str(msh_path),
+        "--bbox-metadata",
+        str(metadata_path),
+        "--category",
+        category_name,
+        "--cover-penalty",
+        str(stage_cfg.get("cover_penalty", 100)),
+        "--pen-rate",
+        str(stage_cfg.get("pen_rate", 1.0)),
+        "--num-action-scale",
+        str(stage_cfg.get("num_action_scale", 2)),
+        "--action-unit",
+        str(stage_cfg.get("action_unit", 0.01)),
+        "--candidate-count",
+        str(stage_cfg.get("candidate_count", 256)),
+        "--top-k",
+        str(stage_cfg.get("top_k", 5)),
+        "--max-steps",
+        str(stage_cfg.get("max_steps", 16)),
+        "--quality-preset",
+        str(stage_cfg.get("quality_preset", "balanced")),
+        "--repeat-mode",
+        str(stage_cfg.get("repeat_mode", "guarded_variable")),
+        "--volume-method",
+        str(stage_cfg.get("volume_method", "mesh")),
+        "--cache-capacity",
+        str(stage_cfg.get("stateful_cache_capacity", 65536)),
+        "--output",
+        str(result_json),
+        "--output-bbox-dir",
+        str(bbox_out),
+        "--json",
+    ]
+    if stage_cfg.get("exact_budget") is not None:
+        command.extend(["--exact-budget", str(stage_cfg["exact_budget"])])
+    if not stage_cfg.get("stateful_union_cache", True):
+        command.append("--no-stateful-union-cache")
+    if not stage_cfg.get("native_executor", True):
+        command.append("--no-native-executor")
+    if stage_cfg.get("target_aware_execution", False):
+        command.append("--target-aware-execution")
+    return command
+
+
+def run_macro_skill_mesh(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+) -> StageRecord:
+    """Run the packaged exact-validated macro-skill controller as a stage.
+
+    The stage is an opt-in post-MCTS/post-refine polish pass.  It exports a bbox
+    directory even when no skill is accepted, because the controller restores the
+    original exact state before returning.  Downstream render/local-refine stages
+    can therefore consume ``macro_skill`` without special fallback logic.
+    """
+
+    started = time.time()
+    stage_cfg = cfg.get("macro_skill", {})
+    existing = latest_bbox_dir(stage_root(cfg, "macro_skill", category), mesh_id)
+    if existing and not force:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="skipped",
+            output_path=existing,
+            metadata={"safe_noop_fallback": True},
+        )
+
+    input_stage = str(stage_cfg.get("input_stage", "mcts") or "mcts")
+    input_root = stage_root(cfg, input_stage, category)
+    input_exp = latest_exp_dir_for_bbox(input_root, mesh_id)
+    if input_exp is None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="skipped",
+            error=f"missing {input_stage} bbox output",
+            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
+        )
+
+    try:
+        from smart import native_runner
+    except Exception as exc:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="blocked",
+            error=f"native runner unavailable: {exc}",
+            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
+        )
+
+    metadata_path = native_runner.find_bbox_params_metadata(input_exp, mesh_id)
+    if metadata_path is None or not metadata_path.exists():
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="skipped",
+            error=f"missing bbox_params.json for {input_stage} output",
+            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
+        )
+
+    msh_path = mesh_tetra_dir(cfg, category, mesh_id) / "tetra.msh"
+    if not msh_path.exists():
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="skipped",
+            error="missing tetra.msh",
+            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
+        )
+
+    result_root = stage_root(cfg, "macro_skill", category)
+    exp_name = _macro_skill_exp_name(cfg, category, stage_cfg)
+    mesh_root = result_root / exp_name / "result" / "updated0" / mesh_id
+    bbox_out = mesh_root / "bboxs_steps0"
+    result_json = mesh_root / "macro_skill_result.json"
+    command = _macro_skill_stage_command(
+        msh_path=msh_path,
+        metadata_path=metadata_path,
+        category_name=category["name"],
+        stage_cfg=stage_cfg,
+        result_json=result_json,
+        bbox_out=bbox_out,
+    )
+
+    metadata: dict[str, Any] = {
+        "input_stage": input_stage,
+        "bbox_metadata_path": str(metadata_path),
+        "msh_path": str(msh_path),
+        "safe_noop_fallback": True,
+        "quality_preset": str(stage_cfg.get("quality_preset", "balanced")),
+        "repeat_mode": str(stage_cfg.get("repeat_mode", "guarded_variable")),
+        "native_executor": bool(stage_cfg.get("native_executor", True)),
+        "exact_validator": "native_smart_manifold",
+    }
+    if dry_run:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="dry_run",
+            output_path=bbox_out,
+            command=command,
+            metadata=metadata,
+        )
+
+    try:
+        from smart.api import run_macro_skill_controller_from_files
+
+        result = run_macro_skill_controller_from_files(
+            msh_path=msh_path,
+            bbox_metadata_path=metadata_path,
+            category=category["name"],
+            cover_penalty=float(stage_cfg.get("cover_penalty", 100)),
+            pen_rate=float(stage_cfg.get("pen_rate", 1.0)),
+            num_action_scale=int(stage_cfg.get("num_action_scale", 2)),
+            action_unit=float(stage_cfg.get("action_unit", 0.01)),
+            candidate_count=int(stage_cfg.get("candidate_count", 256)),
+            top_k=int(stage_cfg.get("top_k", 5)),
+            exact_budget=stage_cfg.get("exact_budget"),
+            max_steps=int(stage_cfg.get("max_steps", 16)),
+            quality_preset=str(stage_cfg.get("quality_preset", "balanced")),
+            repeat_mode=str(stage_cfg.get("repeat_mode", "guarded_variable")),
+            target_aware_execution=bool(stage_cfg.get("target_aware_execution", False)),
+            native_executor=bool(stage_cfg.get("native_executor", True)),
+            volume_method=str(stage_cfg.get("volume_method", "mesh")),
+            stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", True)),
+            cache_capacity=int(stage_cfg.get("stateful_cache_capacity", 65536)),
+        )
+        engine = result.pop("engine", None)
+        if engine is None or not hasattr(engine, "export_bbox_dir"):
+            raise RuntimeError("macro-skill controller returned no exportable native engine")
+        bbox_out.mkdir(parents=True, exist_ok=True)
+        exported = int(engine.export_bbox_dir(str(bbox_out)))
+        result["exported_bbox_count"] = exported
+        result["output_bbox_dir"] = str(bbox_out)
+        result_json.parent.mkdir(parents=True, exist_ok=True)
+        result_json.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        metadata.update(
+            {
+                "accepted": bool(result.get("accepted", False)),
+                "accepted_non_worse": bool(result.get("accepted_non_worse", False)),
+                "score_delta": float(result.get("score_delta", 0.0) or 0.0),
+                "attempt_count": int(result.get("attempt_count", 0) or 0),
+                "exact_budget": int(result.get("exact_budget", 0) or 0),
+                "exported_bbox_count": exported,
+                "result_json": str(result_json),
+                "deployment_status": str(result.get("deployment_status", "")),
+            }
+        )
+        status = "success" if exported > 0 else "failed"
+        error = None if status == "success" else "macro-skill exported no bbox objects"
+    except Exception as exc:
+        status = "failed"
+        error = f"macro-skill failed: {exc}"
+
+    return _base_record(
+        cfg,
+        category,
+        mesh_id,
+        "macro_skill",
+        started,
+        status=status,
+        output_path=bbox_out if status == "success" else None,
+        command=command,
+        error=error,
+        metadata=metadata,
+    )
+
+
 def run_local_refine_mesh(
     cfg: dict[str, Any],
     category: dict[str, Any],
@@ -3988,7 +4260,14 @@ def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: 
     manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
     if manifest_bbox is not None:
         return manifest_bbox
-    if input_stage in {"mcts", "mcts_guarded", "refine", "local_refine", "local_refine_guarded"}:
+    if input_stage in {
+        "mcts",
+        "mcts_guarded",
+        "refine",
+        "macro_skill",
+        "local_refine",
+        "local_refine_guarded",
+    }:
         return latest_bbox_dir(stage_root(cfg, input_stage, category), mesh_id)
     if input_stage == "merge":
         return latest_bbox_dir(stage_root(cfg, "merge", category), mesh_id)

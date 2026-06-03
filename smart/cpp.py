@@ -1867,6 +1867,113 @@ def native_deepset_mcts_prior_defaults(mode: str = "balanced") -> dict[str, Any]
     return dict(_DEEPSET_MCTS_PRIOR_PRESETS[key])
 
 
+def learned_router_profile_summary() -> dict[str, Any]:
+    """Return the packaged learned-router release profile and promotion gate.
+
+    This is intentionally data-bearing metadata, not a benchmark runner.  It
+    lets source checkouts and installed wheels report exactly what the bundled
+    learned router is allowed to do: prune/order candidates, then let native
+    exact SMART/Manifold scoring choose the accepted action.
+    """
+
+    policy_path = ""
+    policy_error = ""
+    try:
+        policy_path = builtin_deepset_policy_path()
+    except Exception as exc:
+        policy_error = str(exc)
+    refine_defaults = native_deepset_refine_defaults("production_candidate")
+    mcts_defaults = native_deepset_mcts_prior_defaults("production_candidate")
+    return {
+        "status": "release_candidate_opt_in",
+        "default_smart_path": "unchanged_exact_cpp_native",
+        "packaged_policy": Path(policy_path).name if policy_path else "deepset_setaware_v2_h128_v1.smartmlp",
+        "policy_path": policy_path,
+        "policy_error": policy_error,
+        "feature_schema": "setaware_v2",
+        "refine_profile": "production_candidate",
+        "refine_profile_aliases": ["auto", "auto_safe", "learned_auto_safe"],
+        "mcts_prior_mode": "production_candidate",
+        "exact_reward_contract": [
+            "learned policy only ranks or prunes candidate actions",
+            "selected candidates are exact-scored by native SMART/Manifold",
+            "one-box, small-pool, and hard-risk states use exact fallback or larger exact budgets",
+            "accepted updates remain exact-reward selected and rollback-safe",
+        ],
+        "release_gate": {
+            "can_ship_opt_in": True,
+            "can_be_default": False,
+            "default_blockers": [
+                "fresh full-pipeline mesh-level validation across categories",
+                "CI-sized replay benchmark artifact with zero quality-loss gate",
+                "macro-skill controller evidence on 500+ replay-ready held-out states",
+            ],
+            "promotion_requirements": {
+                "min_state_checks": 1000,
+                "max_quality_loss_cases": 0,
+                "min_exact_call_reduction": 0.20,
+                "fresh_pipeline_cases": 50,
+                "fallback_contract_required": True,
+            },
+        },
+        "validation_snapshot": {
+            "refine_full_token_split": {
+                "cases": 1015,
+                "quality_losses": 0,
+                "exact_call_reduction": 0.30542,
+                "speedup_vs_oracle_pool": 1.204,
+                "profile": "production_candidate",
+            },
+            "refine_replay_states": {
+                "cases": 1000,
+                "quality_losses": 0,
+                "exact_call_reduction": 0.307,
+                "speedup_vs_oracle_pool": 1.203,
+                "profile": "production_candidate",
+            },
+            "refine_heldout_test": {
+                "cases": 264,
+                "quality_losses": 0,
+                "exact_call_reduction": 0.387,
+                "speedup_vs_oracle_pool": 1.361,
+                "profile": "production_candidate",
+            },
+            "mcts_guarded_weighted_state_checks": {
+                "weighted_checks": 9670,
+                "quality_losses": 0,
+                "status": "validation_only_not_default",
+            },
+            "macro_skill_replay": {
+                "status": "release_candidate_opt_in_post_refine",
+                "heldout_cases": 173,
+                "quality_losses_vs_conditional_budget_v1": 0,
+                "default_ready": False,
+            },
+        },
+        "runtime_requirements": {
+            "native_cpp_imported": using_cpp(),
+            "native_core_available": native_core_available(),
+            "deepset_scorer_available": NativeDeepSetCandidateScorer is not None,
+            "policy_asset_exists": bool(policy_path and Path(policy_path).exists()),
+            "dynamic_mcts_prior_available": bool(
+                NativeSmartEngine is not None and hasattr(NativeSmartEngine, "run_deepset_prior_mcts")
+            ),
+        },
+        "refine_defaults": refine_defaults,
+        "mcts_prior_defaults": mcts_defaults,
+        "recommended_configs": [
+            "configs/learned_auto_safe.yaml",
+            "configs/learned_macro_safe.yaml",
+            "configs/learned_frontier.yaml",
+        ],
+        "recommended_commands": [
+            "smart learned-router-summary --json",
+            "smart assets --kind policies --json",
+            "smart --config configs/smoke_5.yaml refine --set refine.learned_router.enabled=true --set refine.learned_router.profile=auto",
+        ],
+    }
+
+
 def run_builtin_deepset_prior_mcts(
     engine: Any,
     *,
