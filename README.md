@@ -305,6 +305,7 @@ result = sc.run_builtin_deepset_policy_refine(
 Local validation for this profile:
 
 ```text
+full token split 1015 states: 0 losses, 30.5% fewer exact calls, 1.204x vs exact oracle
 1000 replay states:        0 losses, 30.7% fewer exact calls, 1.203x vs exact oracle
 held-out test 264 states:  0 losses, 38.7% fewer exact calls, 1.361x vs exact oracle
 ```

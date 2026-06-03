@@ -4295,6 +4295,7 @@ python experiments/macro_search/benchmark_native_deepset_refine_api.py \
 | `hard_risk_v8_candidate` | 1000 | 0 | 284.60 | 203.80 | 28.4% | 1.166x | safe, too slow |
 | `hard_risk_v8_candidate`, base budget 24 | 1000 | 3 | 284.60 | 195.42 | 31.3% | 1.209x | fast, not safe |
 | `hard_risk_v9_candidate` | 1000 | 0 | 284.60 | 197.24 | 30.7% | 1.203x | production candidate |
+| `production_candidate` / `auto`, full token split | 1015 | 0 | 281.79 | 195.72 | 30.5% | 1.204x | full split pass |
 | `production_candidate` / `auto`, held-out test | 264 | 0 | 319.91 | 195.95 | 38.7% | 1.361x | held-out pass |
 | `production_candidate` / `auto`, held-out shape-dedup | 10 | 0 | 339.20 | 163.80 | 51.7% | 0.972x | quality sanity pass |
 
