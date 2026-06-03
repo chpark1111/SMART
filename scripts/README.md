@@ -11,7 +11,7 @@ by git.
 - `quickstart_reproduce.py`: guided local reproduction helper.
 - `analyze_pipeline_failures.py`: inspect pipeline manifests and failure logs.
 - `audit_release_wheel.py`: audit wheel/sdist contents before release.
-- `release_preflight.py`: build and validate local release artifacts.
+- `release_preflight.py`: build and validate local release artifacts, including installed-wheel smoke and opt-in learned release readiness checks.
 - `smoke_console_scripts.py`: check installed console scripts.
 - `smoke_native_sanitizers.py`: run a short native AddressSanitizer smoke.
 

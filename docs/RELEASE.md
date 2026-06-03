@@ -67,7 +67,10 @@ smart-release-preflight \
 The preflight command audits wheel/sdist contents, runs `twine check`, installs
 the wheel into a temporary venv, runs installed console-script smoke, and checks
 that `smart.native`, `smart.cpp`, the packaged `smart-cpp-native` executable,
-and the bundled `pymanifold` runtime are available.
+and the bundled `pymanifold` runtime are available.  It also runs
+`smart learned-release-readiness --fail-if-not-ready` from the source checkout
+and again from the installed wheel, so packaged learned-router policies,
+macro-skill assets, and opt-in configs cannot silently disappear from a release.
 On Apple Silicon, local setuptools builds and `smart-release-preflight` force
 `-arch arm64` and default `MACOSX_DEPLOYMENT_TARGET=11.0` so `smart._cpp`,
 `smart-cpp-native`, and `pymanifold` match the `macosx_11_0_arm64` wheel tag.
