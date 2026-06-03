@@ -2222,15 +2222,20 @@ class NativeFastGeometryMlpPolicy {
           FastCandidate{actions[idx], rewards[idx], coverage[idx], bvs[idx],
                         0.0, 0});
     }
-    std::sort(candidates.begin(), candidates.end(), [](const FastCandidate& lhs,
-                                                       const FastCandidate& rhs) {
+    auto proxy_cmp = [](const FastCandidate& lhs, const FastCandidate& rhs) {
       if (lhs.reward != rhs.reward) {
         return lhs.reward > rhs.reward;
       }
       return lhs.action < rhs.action;
-    });
+    };
     if (candidates.size() > candidate_count) {
+      std::partial_sort(candidates.begin(),
+                        candidates.begin() +
+                            static_cast<std::ptrdiff_t>(candidate_count),
+                        candidates.end(), proxy_cmp);
       candidates.resize(candidate_count);
+    } else {
+      std::sort(candidates.begin(), candidates.end(), proxy_cmp);
     }
     for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
       candidates[rank].proxy_rank = rank;
@@ -2631,8 +2636,12 @@ class NativeDeepSetCandidateScorer {
     }
     mean_ = read_vector(input, "mean", dim_);
     std_ = read_vector(input, "std", dim_);
+    inv_std_.resize(dim_, 1.0);
     for (double& value : std_) {
       if (value < 1.0e-6) value = 1.0;
+    }
+    for (std::size_t idx = 0; idx < dim_; ++idx) {
+      inv_std_[idx] = 1.0 / std_[idx];
     }
 
     phi_.reserve(phi_depth);
@@ -2749,10 +2758,9 @@ class NativeDeepSetCandidateScorer {
     const double proxy_margin_top12 = proxy_top - proxy_second;
     const double proxy_margin_top15 = proxy_top - proxy_fifth;
 
-    std::vector<std::size_t> same_bbox_best(
-        bounds.size(), std::numeric_limits<std::size_t>::max());
-    std::map<std::pair<std::size_t, std::size_t>, std::size_t>
-        same_axis_best;
+    const std::size_t missing_rank = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> same_bbox_best(bounds.size(), missing_rank);
+    std::vector<std::size_t> same_axis_best(bounds.size() * 3, missing_rank);
     const std::size_t per_bbox = 6 * std::max<std::size_t>(1, num_action_scale) + 1;
     for (std::size_t rank = 0; rank < proxy_order.size(); ++rank) {
       const std::size_t cand_idx = proxy_order[rank];
@@ -2764,10 +2772,14 @@ class NativeDeepSetCandidateScorer {
       }
       const std::size_t coord_idx = local / num_action_scale;
       const std::size_t axis = coord_idx < 3 ? coord_idx : coord_idx - 3;
-      if (same_bbox_best[bbox_idx] == std::numeric_limits<std::size_t>::max()) {
+      if (same_bbox_best[bbox_idx] == missing_rank) {
         same_bbox_best[bbox_idx] = rank;
       }
-      same_axis_best.emplace(std::make_pair(bbox_idx, axis), rank);
+      const std::size_t same_axis_slot = bbox_idx * 3 + axis;
+      if (same_axis_slot < same_axis_best.size() &&
+          same_axis_best[same_axis_slot] == missing_rank) {
+        same_axis_best[same_axis_slot] = rank;
+      }
     }
 
     double hist_mean = 0.0;
@@ -2790,7 +2802,7 @@ class NativeDeepSetCandidateScorer {
       hist_nonzero /= static_cast<double>(volume_histogram.size());
     }
 
-    std::vector<double> rows(n * dim_, 0.0);
+    std::vector<double> normalized(n * dim_, 0.0);
     std::vector<std::uint8_t> valid(n, 1);
     for (std::size_t cand_idx = 0; cand_idx < n; ++cand_idx) {
       const std::size_t action = actions[cand_idx];
@@ -2826,97 +2838,101 @@ class NativeDeepSetCandidateScorer {
           n > 0 ? finite_or_zero(proxy_rewards[proxy_order[next_rank]]) : proxy;
       std::size_t same_bbox_rank = rank;
       if (bbox_idx < same_bbox_best.size() &&
-          same_bbox_best[bbox_idx] != std::numeric_limits<std::size_t>::max()) {
+          same_bbox_best[bbox_idx] != missing_rank) {
         same_bbox_rank = same_bbox_best[bbox_idx];
       }
       std::size_t same_axis_rank = rank;
-      auto same_axis_it = same_axis_best.find(std::make_pair(bbox_idx, axis));
-      if (same_axis_it != same_axis_best.end()) {
-        same_axis_rank = same_axis_it->second;
+      const std::size_t same_axis_slot = bbox_idx * 3 + axis;
+      if (same_axis_slot < same_axis_best.size() &&
+          same_axis_best[same_axis_slot] != missing_rank) {
+        same_axis_rank = same_axis_best[same_axis_slot];
       }
       const double rank_den = std::max(1.0, static_cast<double>(n > 0 ? n - 1 : 0));
 
-      std::vector<double> row;
-      row.reserve(dim_);
-      row.push_back(category == "airplane" ? 1.0 : 0.0);
-      row.push_back(category == "chair" ? 1.0 : 0.0);
-      row.push_back(category == "table" ? 1.0 : 0.0);
-      row.push_back(category == "airplane" || category == "chair" ||
-                            category == "table"
-                        ? 0.0
-                        : 1.0);
-      row.push_back(static_cast<double>(turn) / 10.0);
-      row.push_back(static_cast<double>(bounds.size()) / 32.0);
-      row.push_back(std::log1p(std::max(0.0, volume_sum)) / 2.0);
-      row.push_back(finite_or_zero(current_coverage));
-      row.push_back(finite_or_zero(current_bvs) / 10.0);
+      std::size_t col = 0;
+      auto push_feature = [&](double value) {
+        if (col >= dim_) {
+          throw std::runtime_error(
+              "native setaware feature builder dimension overflow");
+        }
+        normalized[cand_idx * dim_ + col] =
+            finite_or_zero((value - mean_[col]) * inv_std_[col]);
+        ++col;
+      };
+
+      push_feature(category == "airplane" ? 1.0 : 0.0);
+      push_feature(category == "chair" ? 1.0 : 0.0);
+      push_feature(category == "table" ? 1.0 : 0.0);
+      push_feature(category == "airplane" || category == "chair" ||
+                           category == "table"
+                       ? 0.0
+                       : 1.0);
+      push_feature(static_cast<double>(turn) / 10.0);
+      push_feature(static_cast<double>(bounds.size()) / 32.0);
+      push_feature(std::log1p(std::max(0.0, volume_sum)) / 2.0);
+      push_feature(finite_or_zero(current_coverage));
+      push_feature(finite_or_zero(current_bvs) / 10.0);
       for (std::size_t idx = 0; idx < 3; ++idx) {
-        row.push_back(idx < centroid_extent.size() ? finite_or_zero(centroid_extent[idx]) : 0.0);
+        push_feature(idx < centroid_extent.size()
+                         ? finite_or_zero(centroid_extent[idx])
+                         : 0.0);
       }
       for (std::size_t idx = 0; idx < 3; ++idx) {
-        row.push_back(idx < pca_extent.size() ? finite_or_zero(pca_extent[idx]) : 0.0);
+        push_feature(idx < pca_extent.size() ? finite_or_zero(pca_extent[idx])
+                                             : 0.0);
       }
-      row.push_back(hist_mean);
-      row.push_back(hist_std);
-      row.push_back(hist_max);
-      row.push_back(hist_nonzero);
+      push_feature(hist_mean);
+      push_feature(hist_std);
+      push_feature(hist_max);
+      push_feature(hist_nonzero);
 
-      row.push_back(static_cast<double>(bbox_idx) /
-                    std::max(1.0, static_cast<double>(bounds.size())));
-      row.push_back(0.5 * (box[0] + box[3]));
-      row.push_back(0.5 * (box[1] + box[4]));
-      row.push_back(0.5 * (box[2] + box[5]));
-      row.push_back(dx);
-      row.push_back(dy);
-      row.push_back(dz);
-      row.push_back(volume / std::max(volume_sum, 1.0e-12) / 10.0);
-      row.push_back(dims[0] / dim_sum);
-      row.push_back(dims[1] / dim_sum);
-      row.push_back(dims[2] / dim_sum);
-      row.push_back(std::log1p(std::min(1.0e6, std::max(0.0, aspect))) / 16.0);
+      push_feature(static_cast<double>(bbox_idx) /
+                   std::max(1.0, static_cast<double>(bounds.size())));
+      push_feature(0.5 * (box[0] + box[3]));
+      push_feature(0.5 * (box[1] + box[4]));
+      push_feature(0.5 * (box[2] + box[5]));
+      push_feature(dx);
+      push_feature(dy);
+      push_feature(dz);
+      push_feature(volume / std::max(volume_sum, 1.0e-12) / 10.0);
+      push_feature(dims[0] / dim_sum);
+      push_feature(dims[1] / dim_sum);
+      push_feature(dims[2] / dim_sum);
+      push_feature(std::log1p(std::min(1.0e6, std::max(0.0, aspect))) /
+                   16.0);
 
-      row.push_back(1.0);
-      row.push_back(0.0);
-      row.push_back(0.0);
-      row.push_back(static_cast<double>(bbox_idx) /
-                    std::max(1.0, static_cast<double>(bounds.size())));
-      row.push_back(static_cast<double>(coord_idx) / 6.0);
-      row.push_back(static_cast<double>(axis) / 3.0);
-      row.push_back(static_cast<double>(coord_idx));
-      row.push_back(delta_scale / 4.0);
-      row.push_back(delta_scale * action_unit / 0.05);
-      row.push_back(finite_or_zero(coverage_after[cand_idx]));
-      row.push_back(finite_or_zero(coverage_delta[cand_idx]));
-      row.push_back(finite_or_zero(bvs_after[cand_idx]) / 10.0);
-      row.push_back(finite_or_zero(bvs_delta[cand_idx]));
-      row.push_back(proxy / 100.0);
-      row.push_back((dx <= 0.0 || dy <= 0.0 || dz <= 0.0) ? 1.0 : 0.0);
+      push_feature(1.0);
+      push_feature(0.0);
+      push_feature(0.0);
+      push_feature(static_cast<double>(bbox_idx) /
+                   std::max(1.0, static_cast<double>(bounds.size())));
+      push_feature(static_cast<double>(coord_idx) / 6.0);
+      push_feature(static_cast<double>(axis) / 3.0);
+      push_feature(static_cast<double>(coord_idx));
+      push_feature(delta_scale / 4.0);
+      push_feature(delta_scale * action_unit / 0.05);
+      push_feature(finite_or_zero(coverage_after[cand_idx]));
+      push_feature(finite_or_zero(coverage_delta[cand_idx]));
+      push_feature(finite_or_zero(bvs_after[cand_idx]) / 10.0);
+      push_feature(finite_or_zero(bvs_delta[cand_idx]));
+      push_feature(proxy / 100.0);
+      push_feature((dx <= 0.0 || dy <= 0.0 || dz <= 0.0) ? 1.0 : 0.0);
 
-      row.push_back(static_cast<double>(n) / 128.0);
-      row.push_back(static_cast<double>(rank) / 128.0);
-      row.push_back(static_cast<double>(rank) / rank_den);
-      row.push_back((proxy - proxy_mean) / proxy_std);
-      row.push_back(proxy - proxy_mean);
-      row.push_back(proxy_top - proxy);
-      row.push_back(proxy - next_value);
-      row.push_back(proxy_margin_top12);
-      row.push_back(proxy_margin_top15);
-      row.push_back(proxy - proxy_top20);
-      row.push_back(static_cast<double>(same_bbox_rank) / rank_den);
-      row.push_back(static_cast<double>(same_axis_rank) / rank_den);
+      push_feature(static_cast<double>(n) / 128.0);
+      push_feature(static_cast<double>(rank) / 128.0);
+      push_feature(static_cast<double>(rank) / rank_den);
+      push_feature((proxy - proxy_mean) / proxy_std);
+      push_feature(proxy - proxy_mean);
+      push_feature(proxy_top - proxy);
+      push_feature(proxy - next_value);
+      push_feature(proxy_margin_top12);
+      push_feature(proxy_margin_top15);
+      push_feature(proxy - proxy_top20);
+      push_feature(static_cast<double>(same_bbox_rank) / rank_den);
+      push_feature(static_cast<double>(same_axis_rank) / rank_den);
 
-      if (row.size() != dim_) {
+      if (col != dim_) {
         throw std::runtime_error("native setaware feature builder dimension mismatch");
-      }
-      std::copy(row.begin(), row.end(), rows.begin() + cand_idx * dim_);
-    }
-
-    std::vector<double> normalized(rows.size(), 0.0);
-    for (std::size_t row = 0; row < n; ++row) {
-      if (!valid[row]) continue;
-      for (std::size_t col = 0; col < dim_; ++col) {
-        normalized[row * dim_ + col] =
-            finite_or_zero((rows[row * dim_ + col] - mean_[col]) / std_[col]);
       }
     }
     std::vector<double> scores = score_normalized(normalized, n);
@@ -2946,7 +2962,7 @@ class NativeDeepSetCandidateScorer {
         const double value = data[row * dim_ + col];
         normalized[row * dim_ + col] =
             already_normalized ? finite_or_zero(value)
-                               : finite_or_zero((value - mean_[col]) / std_[col]);
+                               : finite_or_zero((value - mean_[col]) * inv_std_[col]);
       }
     }
     return score_normalized(normalized, n_rows);
@@ -2990,7 +3006,7 @@ class NativeDeepSetCandidateScorer {
         const double value = data[row * dim_ + col];
         normalized[row * dim_ + col] =
             already_normalized ? finite_or_zero(value)
-                               : finite_or_zero((value - mean_[col]) / std_[col]);
+                               : finite_or_zero((value - mean_[col]) * inv_std_[col]);
       }
     }
     std::vector<double> sums(n_rows, 0.0);
@@ -3024,7 +3040,7 @@ class NativeDeepSetCandidateScorer {
         const double value = data[row * dim_ + col];
         normalized[row * dim_ + col] =
             already_normalized ? finite_or_zero(value)
-                               : finite_or_zero((value - mean_[col]) / std_[col]);
+                               : finite_or_zero((value - mean_[col]) * inv_std_[col]);
       }
     }
     std::vector<double> h(n_rows * hidden_, 0.0);
@@ -3076,7 +3092,7 @@ class NativeDeepSetCandidateScorer {
         const double value = data[row * dim_ + col];
         normalized[row * dim_ + col] =
             already_normalized ? finite_or_zero(value)
-                               : finite_or_zero((value - mean_[col]) / std_[col]);
+                               : finite_or_zero((value - mean_[col]) * inv_std_[col]);
       }
     }
     std::vector<double> h(n_rows * hidden_, 0.0);
@@ -3129,7 +3145,7 @@ class NativeDeepSetCandidateScorer {
         const double value = data[row * dim_ + col];
         normalized[row * dim_ + col] =
             already_normalized ? finite_or_zero(value)
-                               : finite_or_zero((value - mean_[col]) / std_[col]);
+                               : finite_or_zero((value - mean_[col]) * inv_std_[col]);
       }
     }
     std::vector<double> h(n_rows * hidden_, 0.0);
@@ -3231,9 +3247,9 @@ class NativeDeepSetCandidateScorer {
     return 0.5 * x * (1.0 + std::erf(x * 0.70710678118654752440));
   }
 
-  static std::vector<double> forward_layer(const Layer& layer,
-                                           const double* input) {
-    std::vector<double> out(layer.rows, 0.0);
+  static void forward_layer_into(const Layer& layer, const double* input,
+                                 std::vector<double>& out) {
+    out.resize(layer.rows);
     for (std::size_t row = 0; row < layer.rows; ++row) {
       double value = layer.bias[row];
       const double* weights = layer.weight.data() + row * layer.cols;
@@ -3256,17 +3272,28 @@ class NativeDeepSetCandidateScorer {
       out[idx] = (out[idx] - mean) * inv_std * layer.ln_weight[idx] +
                  layer.ln_bias[idx];
     }
+  }
+
+  static std::vector<double> forward_layer(const Layer& layer,
+                                           const double* input) {
+    std::vector<double> out(layer.rows, 0.0);
+    forward_layer_into(layer, input, out);
     return out;
   }
 
   std::vector<double> score_normalized(const std::vector<double>& rows,
                                        std::size_t n_rows) const {
     std::vector<double> h(n_rows * hidden_, 0.0);
+    std::vector<double> current;
+    std::vector<double> next;
+    current.reserve(std::max(dim_, hidden_));
+    next.reserve(hidden_);
     for (std::size_t row = 0; row < n_rows; ++row) {
       const double* input = rows.data() + row * dim_;
-      std::vector<double> current(input, input + dim_);
+      current.assign(input, input + dim_);
       for (std::size_t layer_idx = 0; layer_idx < phi_.size(); ++layer_idx) {
-        current = forward_layer(phi_[layer_idx], current.data());
+        forward_layer_into(phi_[layer_idx], current.data(), next);
+        current.swap(next);
       }
       std::copy(current.begin(), current.end(), h.begin() + row * hidden_);
     }
@@ -3284,14 +3311,17 @@ class NativeDeepSetCandidateScorer {
 
     std::vector<double> scores(n_rows, 0.0);
     std::vector<double> rho_input(hidden_ * 3, 0.0);
+    current.reserve(hidden_ * 3);
+    next.reserve(hidden_);
     for (std::size_t row = 0; row < n_rows; ++row) {
       const double* item = h.data() + row * hidden_;
       std::copy(item, item + hidden_, rho_input.begin());
       std::copy(mean.begin(), mean.end(), rho_input.begin() + hidden_);
       std::copy(maxv.begin(), maxv.end(), rho_input.begin() + hidden_ * 2);
-      std::vector<double> current = rho_input;
+      current.assign(rho_input.begin(), rho_input.end());
       for (std::size_t layer_idx = 0; layer_idx < rho_.size(); ++layer_idx) {
-        current = forward_layer(rho_[layer_idx], current.data());
+        forward_layer_into(rho_[layer_idx], current.data(), next);
+        current.swap(next);
       }
       double score = out_bias_;
       for (std::size_t col = 0; col < hidden_; ++col) {
@@ -3307,6 +3337,7 @@ class NativeDeepSetCandidateScorer {
   std::string feature_schema_;
   std::vector<double> mean_;
   std::vector<double> std_;
+  std::vector<double> inv_std_;
   std::vector<Layer> phi_;
   std::vector<Layer> rho_;
   std::vector<double> out_weight_;
@@ -7158,17 +7189,23 @@ class NativeSmartEngine {
         centroids_, tet_volumes_, copied.first, copied.second,
         num_action_scale_, action_unit_, volume_sum_,
         state_->last_bbox_score(), cover_penalty, pen_rate);
-    std::sort(rows.begin(), rows.end(), [](const py::tuple& lhs,
-                                           const py::tuple& rhs) {
+    auto tuple_proxy_cmp = [](const py::tuple& lhs,
+                              const py::tuple& rhs) {
       const double left_reward = lhs[1].cast<double>();
       const double right_reward = rhs[1].cast<double>();
       if (left_reward != right_reward) {
         return left_reward > right_reward;
       }
       return lhs[0].cast<std::size_t>() < rhs[0].cast<std::size_t>();
-    });
+    };
     if (candidate_count > 0 && rows.size() > candidate_count) {
+      std::partial_sort(rows.begin(),
+                        rows.begin() +
+                            static_cast<std::ptrdiff_t>(candidate_count),
+                        rows.end(), tuple_proxy_cmp);
       rows.resize(candidate_count);
+    } else {
+      std::sort(rows.begin(), rows.end(), tuple_proxy_cmp);
     }
     return rows;
   }
@@ -7221,15 +7258,21 @@ class NativeSmartEngine {
     std::vector<ProxyAxisMetric> candidates =
         centroid_proxy_axis_metrics_raw(copied.first, copied.second,
                                         cover_penalty, pen_rate);
-    std::sort(candidates.begin(), candidates.end(),
-              [](const ProxyAxisMetric& lhs, const ProxyAxisMetric& rhs) {
-                if (lhs.reward != rhs.reward) {
-                  return lhs.reward > rhs.reward;
-                }
-                return lhs.action < rhs.action;
-              });
+    auto proxy_cmp = [](const ProxyAxisMetric& lhs,
+                        const ProxyAxisMetric& rhs) {
+      if (lhs.reward != rhs.reward) {
+        return lhs.reward > rhs.reward;
+      }
+      return lhs.action < rhs.action;
+    };
     if (candidates.size() > candidate_count) {
+      std::partial_sort(candidates.begin(),
+                        candidates.begin() +
+                            static_cast<std::ptrdiff_t>(candidate_count),
+                        candidates.end(), proxy_cmp);
       candidates.resize(candidate_count);
+    } else {
+      std::sort(candidates.begin(), candidates.end(), proxy_cmp);
     }
     if (candidates.empty()) {
       return {};
@@ -7785,7 +7828,85 @@ class NativeSmartEngine {
       std::size_t adaptive_margin_rank = 8,
       std::size_t small_pool_exact_threshold = 0,
       std::size_t nonfinite_proxy_rescue_budget = 0,
-      std::size_t proxy_rescue_budget = 0) {
+      std::size_t proxy_rescue_budget = 0,
+      std::size_t structural_high_budget = 0,
+      const std::string& structural_category = "",
+      double structural_action_unit_min =
+          -std::numeric_limits<double>::infinity(),
+      double structural_action_unit_max =
+          std::numeric_limits<double>::infinity(),
+      std::size_t structural_min_boxes = 0,
+      std::size_t structural_min_turn = 0,
+      double structural_min_coverage =
+          -std::numeric_limits<double>::infinity(),
+      double structural_max_coverage =
+          std::numeric_limits<double>::infinity(),
+      double structural_max_bvs = std::numeric_limits<double>::infinity(),
+      double structural_min_aspect_mean =
+          -std::numeric_limits<double>::infinity(),
+      double structural_max_aspect_mean =
+          std::numeric_limits<double>::infinity(),
+      double structural_min_proxy_gap =
+          -std::numeric_limits<double>::infinity(),
+      std::size_t structural_initial_high_budget = 0,
+      std::size_t structural_initial_max_turn =
+          std::numeric_limits<std::size_t>::max(),
+      double structural_initial_min_coverage =
+          -std::numeric_limits<double>::infinity(),
+      double structural_initial_max_coverage =
+          std::numeric_limits<double>::infinity(),
+      double structural_initial_min_bvs =
+          -std::numeric_limits<double>::infinity(),
+      double structural_initial_max_bvs =
+          std::numeric_limits<double>::infinity(),
+      double structural_initial_min_aspect_mean =
+          -std::numeric_limits<double>::infinity(),
+      double structural_initial_max_aspect_mean =
+          std::numeric_limits<double>::infinity(),
+      double structural_initial_min_proxy_gap =
+          -std::numeric_limits<double>::infinity(),
+      std::size_t structural_secondary_high_budget = 0,
+      const std::string& structural_secondary_category = "",
+      std::size_t structural_secondary_min_turn = 0,
+      std::size_t structural_secondary_max_turn =
+          std::numeric_limits<std::size_t>::max(),
+      double structural_secondary_min_coverage =
+          -std::numeric_limits<double>::infinity(),
+      double structural_secondary_max_coverage =
+          std::numeric_limits<double>::infinity(),
+      double structural_secondary_min_bvs =
+          -std::numeric_limits<double>::infinity(),
+      double structural_secondary_max_bvs =
+          std::numeric_limits<double>::infinity(),
+      double structural_secondary_min_aspect_mean =
+          -std::numeric_limits<double>::infinity(),
+      double structural_secondary_max_aspect_mean =
+          std::numeric_limits<double>::infinity(),
+      double structural_secondary_min_proxy_gap =
+          -std::numeric_limits<double>::infinity(),
+      double structural_secondary_max_proxy_gap =
+          std::numeric_limits<double>::infinity(),
+      std::size_t structural_tertiary_high_budget = 0,
+      const std::string& structural_tertiary_category = "",
+      std::size_t structural_tertiary_min_turn = 0,
+      std::size_t structural_tertiary_max_turn =
+          std::numeric_limits<std::size_t>::max(),
+      double structural_tertiary_min_coverage =
+          -std::numeric_limits<double>::infinity(),
+      double structural_tertiary_max_coverage =
+          std::numeric_limits<double>::infinity(),
+      double structural_tertiary_min_bvs =
+          -std::numeric_limits<double>::infinity(),
+      double structural_tertiary_max_bvs =
+          std::numeric_limits<double>::infinity(),
+      double structural_tertiary_min_aspect_mean =
+          -std::numeric_limits<double>::infinity(),
+      double structural_tertiary_max_aspect_mean =
+          std::numeric_limits<double>::infinity(),
+      double structural_tertiary_min_proxy_gap =
+          -std::numeric_limits<double>::infinity(),
+      double structural_tertiary_max_proxy_gap =
+          std::numeric_limits<double>::infinity()) {
     py::dict out;
     py::list actions;
     std::size_t exact_checks = 0;
@@ -7794,6 +7915,10 @@ class NativeSmartEngine {
     std::size_t small_pool_exact_uses = 0;
     std::size_t nonfinite_proxy_rescue_checks = 0;
     std::size_t proxy_rescue_checks = 0;
+    std::size_t structural_high_budget_uses = 0;
+    std::size_t structural_initial_high_budget_uses = 0;
+    std::size_t structural_secondary_high_budget_uses = 0;
+    std::size_t structural_tertiary_high_budget_uses = 0;
     double total_reward = 0.0;
     for (std::size_t turn = 0; turn < max_steps; ++turn) {
       bool used_small_pool_exact = false;
@@ -7804,16 +7929,21 @@ class NativeSmartEngine {
         std::vector<ProxyAxisMetric> candidates =
             centroid_proxy_axis_metrics_raw(copied.first, copied.second,
                                             cover_penalty, pen_rate);
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const ProxyAxisMetric& lhs,
-                     const ProxyAxisMetric& rhs) {
-                    if (lhs.reward != rhs.reward) {
-                      return lhs.reward > rhs.reward;
-                    }
-                    return lhs.action < rhs.action;
-                  });
+        auto proxy_cmp = [](const ProxyAxisMetric& lhs,
+                            const ProxyAxisMetric& rhs) {
+          if (lhs.reward != rhs.reward) {
+            return lhs.reward > rhs.reward;
+          }
+          return lhs.action < rhs.action;
+        };
         if (candidate_count > 0 && candidates.size() > candidate_count) {
+          std::partial_sort(candidates.begin(),
+                            candidates.begin() +
+                                static_cast<std::ptrdiff_t>(candidate_count),
+                            candidates.end(), proxy_cmp);
           candidates.resize(candidate_count);
+        } else {
+          std::sort(candidates.begin(), candidates.end(), proxy_cmp);
         }
         for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
           candidates[rank].proxy_rank = rank;
@@ -7892,6 +8022,139 @@ class NativeSmartEngine {
                                                      : fallback_budget;
       std::size_t effective_budget = budget;
       double model_margin = std::numeric_limits<double>::infinity();
+      bool structural_high_risk = false;
+      double structural_coverage = std::numeric_limits<double>::quiet_NaN();
+      double structural_bvs = std::numeric_limits<double>::quiet_NaN();
+      double structural_aspect_mean = std::numeric_limits<double>::quiet_NaN();
+      double structural_proxy_gap = std::numeric_limits<double>::quiet_NaN();
+      bool structural_initial_high_risk = false;
+      bool structural_secondary_high_risk = false;
+      bool structural_tertiary_high_risk = false;
+      const bool structural_common_gate_possible =
+          !used_small_pool_exact && ranked.size() > 1 &&
+          action_unit_ >= structural_action_unit_min &&
+          action_unit_ <= structural_action_unit_max &&
+          state_->num_boxes() >= structural_min_boxes;
+      const bool structural_category_matches =
+          structural_category.empty() || structural_category == category_;
+      const bool structural_secondary_category_matches =
+          structural_secondary_category.empty() ||
+          structural_secondary_category == category_;
+      const bool structural_tertiary_category_matches =
+          structural_tertiary_category.empty() ||
+          structural_tertiary_category == category_;
+      if (structural_common_gate_possible &&
+          (structural_high_budget > effective_budget ||
+           structural_initial_high_budget > effective_budget ||
+           structural_secondary_high_budget > effective_budget ||
+           structural_tertiary_high_budget > effective_budget)) {
+        auto copied_for_gate = state_->copy_bounds_rotations();
+        const std::vector<std::vector<double>>& gate_bounds =
+            copied_for_gate.first;
+        structural_coverage =
+            centroid_current_coverage(gate_bounds, copied_for_gate.second);
+        structural_bvs = state_->bvs();
+        double aspect_sum = 0.0;
+        std::size_t aspect_count = 0;
+        for (const auto& row : gate_bounds) {
+          if (row.size() < 6) {
+            continue;
+          }
+          const double dx = std::max(0.0, row[3] - row[0]);
+          const double dy = std::max(0.0, row[4] - row[1]);
+          const double dz = std::max(0.0, row[5] - row[2]);
+          const double max_dim = std::max({dx, dy, dz});
+          const double min_dim = std::max(1.0e-12, std::min({dx, dy, dz}));
+          aspect_sum += max_dim / min_dim;
+          ++aspect_count;
+        }
+        structural_aspect_mean =
+            aspect_count == 0 ? 0.0 : aspect_sum / aspect_count;
+        double best_proxy = -std::numeric_limits<double>::infinity();
+        double second_proxy = -std::numeric_limits<double>::infinity();
+        for (const ProxyAxisMetric& row : ranked) {
+          const double value = row.reward;
+          if (!std::isfinite(value)) {
+            continue;
+          }
+          if (value > best_proxy) {
+            second_proxy = best_proxy;
+            best_proxy = value;
+          } else if (value > second_proxy) {
+            second_proxy = value;
+          }
+        }
+        structural_proxy_gap =
+            std::isfinite(best_proxy) && std::isfinite(second_proxy)
+                ? best_proxy - second_proxy
+                : std::numeric_limits<double>::infinity();
+        structural_high_risk =
+            structural_high_budget > effective_budget &&
+            structural_category_matches &&
+            turn >= structural_min_turn &&
+            structural_coverage >= structural_min_coverage &&
+            structural_coverage <= structural_max_coverage &&
+            structural_bvs <= structural_max_bvs &&
+            structural_aspect_mean >= structural_min_aspect_mean &&
+            structural_aspect_mean <= structural_max_aspect_mean &&
+            structural_proxy_gap >= structural_min_proxy_gap;
+        structural_initial_high_risk =
+            structural_initial_high_budget > effective_budget &&
+            structural_category_matches &&
+            turn <= structural_initial_max_turn &&
+            structural_coverage >= structural_initial_min_coverage &&
+            structural_coverage <= structural_initial_max_coverage &&
+            structural_bvs >= structural_initial_min_bvs &&
+            structural_bvs <= structural_initial_max_bvs &&
+            structural_aspect_mean >= structural_initial_min_aspect_mean &&
+            structural_aspect_mean <= structural_initial_max_aspect_mean &&
+            structural_proxy_gap >= structural_initial_min_proxy_gap;
+        structural_secondary_high_risk =
+            structural_secondary_high_budget > effective_budget &&
+            structural_secondary_category_matches &&
+            turn >= structural_secondary_min_turn &&
+            turn <= structural_secondary_max_turn &&
+            structural_coverage >= structural_secondary_min_coverage &&
+            structural_coverage <= structural_secondary_max_coverage &&
+            structural_bvs >= structural_secondary_min_bvs &&
+            structural_bvs <= structural_secondary_max_bvs &&
+            structural_aspect_mean >= structural_secondary_min_aspect_mean &&
+            structural_aspect_mean <= structural_secondary_max_aspect_mean &&
+            structural_proxy_gap >= structural_secondary_min_proxy_gap &&
+            structural_proxy_gap <= structural_secondary_max_proxy_gap;
+        structural_tertiary_high_risk =
+            structural_tertiary_high_budget > effective_budget &&
+            structural_tertiary_category_matches &&
+            turn >= structural_tertiary_min_turn &&
+            turn <= structural_tertiary_max_turn &&
+            structural_coverage >= structural_tertiary_min_coverage &&
+            structural_coverage <= structural_tertiary_max_coverage &&
+            structural_bvs >= structural_tertiary_min_bvs &&
+            structural_bvs <= structural_tertiary_max_bvs &&
+            structural_aspect_mean >= structural_tertiary_min_aspect_mean &&
+            structural_aspect_mean <= structural_tertiary_max_aspect_mean &&
+            structural_proxy_gap >= structural_tertiary_min_proxy_gap &&
+            structural_proxy_gap <= structural_tertiary_max_proxy_gap;
+        if (structural_high_risk) {
+          effective_budget = structural_high_budget;
+          ++structural_high_budget_uses;
+        }
+        if (structural_initial_high_risk &&
+            structural_initial_high_budget > effective_budget) {
+          effective_budget = structural_initial_high_budget;
+          ++structural_initial_high_budget_uses;
+        }
+        if (structural_secondary_high_risk &&
+            structural_secondary_high_budget > effective_budget) {
+          effective_budget = structural_secondary_high_budget;
+          ++structural_secondary_high_budget_uses;
+        }
+        if (structural_tertiary_high_risk &&
+            structural_tertiary_high_budget > effective_budget) {
+          effective_budget = structural_tertiary_high_budget;
+          ++structural_tertiary_high_budget_uses;
+        }
+      }
       if (!used_small_pool_exact && adaptive_high_budget > effective_budget &&
           std::isfinite(adaptive_margin_threshold) && ranked.size() > 1) {
         const std::size_t rank_idx = std::min<std::size_t>(
@@ -8011,6 +8274,17 @@ class NativeSmartEngine {
       rec["budget"] = py::int_(limit);
       rec["effective_checked"] = py::int_(selected_indices.size());
       rec["model_margin"] = py::float_(model_margin);
+      rec["structural_high_risk"] = py::bool_(structural_high_risk);
+      rec["structural_initial_high_risk"] =
+          py::bool_(structural_initial_high_risk);
+      rec["structural_secondary_high_risk"] =
+          py::bool_(structural_secondary_high_risk);
+      rec["structural_tertiary_high_risk"] =
+          py::bool_(structural_tertiary_high_risk);
+      rec["structural_coverage"] = py::float_(structural_coverage);
+      rec["structural_bvs"] = py::float_(structural_bvs);
+      rec["structural_aspect_mean"] = py::float_(structural_aspect_mean);
+      rec["structural_proxy_gap"] = py::float_(structural_proxy_gap);
       rec["used_small_pool_exact"] = py::bool_(used_small_pool_exact);
       rec["exact_checked"] = py::int_(exact_checks);
       rec["selected_exact_reward"] = py::float_(best_reward);
@@ -8036,6 +8310,14 @@ class NativeSmartEngine {
         static_cast<double>(nonfinite_proxy_rescue_checks);
     stats_["native_deepset_policy_refine_proxy_rescue_checks"] +=
         static_cast<double>(proxy_rescue_checks);
+    stats_["native_deepset_policy_refine_structural_high_budget_uses"] +=
+        static_cast<double>(structural_high_budget_uses);
+    stats_["native_deepset_policy_refine_structural_initial_high_budget_uses"] +=
+        static_cast<double>(structural_initial_high_budget_uses);
+    stats_["native_deepset_policy_refine_structural_secondary_high_budget_uses"] +=
+        static_cast<double>(structural_secondary_high_budget_uses);
+    stats_["native_deepset_policy_refine_structural_tertiary_high_budget_uses"] +=
+        static_cast<double>(structural_tertiary_high_budget_uses);
     out["actions"] = actions;
     out["exact_checks"] = py::int_(exact_checks);
     out["exact_errors"] = py::int_(exact_errors);
@@ -8044,6 +8326,14 @@ class NativeSmartEngine {
     out["nonfinite_proxy_rescue_checks"] =
         py::int_(nonfinite_proxy_rescue_checks);
     out["proxy_rescue_checks"] = py::int_(proxy_rescue_checks);
+    out["structural_high_budget_uses"] =
+        py::int_(structural_high_budget_uses);
+    out["structural_initial_high_budget_uses"] =
+        py::int_(structural_initial_high_budget_uses);
+    out["structural_secondary_high_budget_uses"] =
+        py::int_(structural_secondary_high_budget_uses);
+    out["structural_tertiary_high_budget_uses"] =
+        py::int_(structural_tertiary_high_budget_uses);
     out["total_reward"] = py::float_(total_reward);
     out["last_bbox_score"] = py::float_(state_->last_bbox_score());
     out["best_bbox_score"] = py::float_(best_score_);
@@ -11091,7 +11381,86 @@ PYBIND11_MODULE(_cpp, module) {
            py::arg("adaptive_margin_rank") = 8,
            py::arg("small_pool_exact_threshold") = 0,
            py::arg("nonfinite_proxy_rescue_budget") = 0,
-           py::arg("proxy_rescue_budget") = 0)
+           py::arg("proxy_rescue_budget") = 0,
+           py::arg("structural_high_budget") = 0,
+           py::arg("structural_category") = "",
+           py::arg("structural_action_unit_min") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_action_unit_max") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_min_boxes") = 0,
+           py::arg("structural_min_turn") = 0,
+           py::arg("structural_min_coverage") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_max_coverage") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_max_bvs") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_min_aspect_mean") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_max_aspect_mean") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_min_proxy_gap") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_high_budget") = 0,
+           py::arg("structural_initial_max_turn") =
+               std::numeric_limits<std::size_t>::max(),
+           py::arg("structural_initial_min_coverage") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_max_coverage") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_min_bvs") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_max_bvs") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_min_aspect_mean") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_max_aspect_mean") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_initial_min_proxy_gap") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_high_budget") = 0,
+           py::arg("structural_secondary_category") = "",
+           py::arg("structural_secondary_min_turn") = 0,
+           py::arg("structural_secondary_max_turn") =
+               std::numeric_limits<std::size_t>::max(),
+           py::arg("structural_secondary_min_coverage") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_max_coverage") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_min_bvs") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_max_bvs") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_min_aspect_mean") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_max_aspect_mean") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_min_proxy_gap") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_secondary_max_proxy_gap") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_high_budget") = 0,
+           py::arg("structural_tertiary_category") = "",
+           py::arg("structural_tertiary_min_turn") = 0,
+           py::arg("structural_tertiary_max_turn") =
+               std::numeric_limits<std::size_t>::max(),
+           py::arg("structural_tertiary_min_coverage") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_max_coverage") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_min_bvs") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_max_bvs") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_min_aspect_mean") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_max_aspect_mean") =
+               std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_min_proxy_gap") =
+               -std::numeric_limits<double>::infinity(),
+           py::arg("structural_tertiary_max_proxy_gap") =
+               std::numeric_limits<double>::infinity())
       .def("run_refine", &NativeSmartEngine::run_refine,
            py::arg("max_steps"), py::arg("cover_penalty"),
            py::arg("pen_rate") = 1.0)

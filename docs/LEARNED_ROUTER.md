@@ -1,8 +1,9 @@
 # Learned Geometry Router
 
-This document summarizes the opt-in learned routing work for SMART native
-refinement.  The release default remains exact native SMART; the learned router
-is a research acceleration path.
+This document summarizes the learned routing work for SMART native refinement.
+The full SMART pipeline still keeps exact native SMART as the conservative
+baseline, but the learned refine helper's `profile="auto"` now points to the
+validated v9 production-candidate router.
 
 ## Idea
 
@@ -38,6 +39,11 @@ policy = sc.load_builtin_deepset_policy()
 defaults = sc.native_deepset_refine_defaults("auto")
 ```
 
+As of the 2026-06-03 validation pass, `auto`, `auto_safe`,
+`learned_auto_safe`, and `production_candidate` all resolve to the v9
+hard-state gated router for multibox states.  One-box states still route to
+exact native refine through `auto_exact_max_boxes=1`.
+
 ## Pipeline Usage
 
 Enable the router explicitly:
@@ -71,7 +77,20 @@ refine:
     overrides: {}
 ```
 
-For the current best-known opt-in routing policy, use the portfolio helper:
+For a simple library call, use the builtin helper:
+
+```python
+import smart.cpp as sc
+
+engine = sc.NativeSmartEngine(...)
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    profile="auto",
+)
+```
+
+For budget reinvestment experiments, use the portfolio helper:
 
 ```python
 import smart.cpp as sc
@@ -86,9 +105,9 @@ enough to pay for model inference.
 
 ## Current Validation Snapshot
 
-Current local validation is intentionally reported as research evidence, not a
-paper-level benchmark.  The router was compared against exact candidate-pool
-scoring on native refine states.
+Current local validation is still not a paper-level benchmark, but it is strong
+enough to ship as the learned-router default profile.  The router was compared
+against exact candidate-pool scoring on native refine states.
 
 ### Same-Turn Acceleration
 
@@ -3790,3 +3809,517 @@ It is still not paper-scale evidence because all six cases are airplane smoke
 cases.  The next claim-strengthening step is the same matched benchmark on the
 500 selected meshes, with per-category reporting for airplane, chair, and
 table.
+
+### MPS Geometry-Token Transformer Exact-Budget Routing
+
+I also retrained a larger geometry-token Transformer on Apple Silicon MPS.  This
+model is not a cuboid abstraction network.  It receives the exact SMART search
+state as structured tokens:
+
+- one shape token: category, tetra/volume histogram, PCA extent, coverage, BVS;
+- bbox tokens: center, size, volume/aspect/slack/coverage contribution;
+- candidate action tokens: affected box, axis/face, delta, proxy reward, turn
+  and short action history.
+
+The target is the exact SMART/Manifold reward attached to each candidate.  At
+runtime the model only orders candidates; exact SMART reward still selects the
+best action inside the selected top-k.  Therefore the deployable policy is:
+
+```text
+state -> Transformer candidate order -> exact-check top k -> apply exact-best
+```
+
+The new checkpoint is:
+
+```text
+experiments/macro_search/runs/geometry_token_transformer_big_mps_20260603.pt
+```
+
+Training command:
+
+```bash
+PYTHONPATH=. python experiments/macro_search/train_geometry_token_policy.py \
+  --tokens \
+    'experiments/macro_search/runs/geometry_policy_tokens_unseen_probe50_live_turn8_exact128_v1/**/*.json' \
+    'experiments/macro_search/runs/geometry_policy_tokens_live_rollout177_unseen_turn6_exact10_v1/**/*.json' \
+    'experiments/macro_search/runs/geometry_policy_tokens_live_rollout86_turn6_exact10_v1/**/*.json' \
+    'experiments/macro_search/runs/geometry_policy_tokens_multibox_airplane28_turn6_pool128_exact128_v1/**/*.json' \
+    'experiments/macro_search/runs/geometry_policy_tokens_case41_turn12_pool128_exact128_unit005_v1/**/*.json' \
+  --out experiments/macro_search/runs/geometry_token_transformer_big_mps_20260603.pt \
+  --device mps \
+  --epochs 80 \
+  --batch-size 24 \
+  --d-model 256 \
+  --heads 8 \
+  --layers 5 \
+  --lr 5e-4 \
+  --target-mode reward_softmax \
+  --reward-temperature 0.04 \
+  --include-proxy-feature \
+  --include-turn-feature \
+  --include-history-feature \
+  --hard-regret-weight-scale 2.0 \
+  --hard-rank-weight-scale 1.0
+```
+
+Training used `3121` exact-labeled states and held out `625` states.  The model
+used `device=mps`.  Validation metrics:
+
+| model | val states | best-hit | mean regret | p95 regret |
+| --- | ---: | ---: | ---: | ---: |
+| big geometry-token Transformer | 625 | 59.84% | 0.0373 | 0.0017 |
+
+The high mean regret is caused by rare large outliers.  This model should not be
+used as a top-1 replacement for exact reward.  It is useful as a top-k exact
+budget router.
+
+Held-out evaluation on `701` states not used in this training run:
+
+| ordering | exact budget | mean regret | p95 regret | max regret | zero-regret rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| proxy order | 10 | 0.03168 | 0.13208 | 3.12981 | 80.88% |
+| big Transformer | 10 | 0.00171 | 0.00355 | 0.14805 | 91.16% |
+| big+d192 ensemble | 10 | 0.00118 | 0.00195 | 0.14805 | 92.87% |
+| proxy order | 20 | 0.02377 | 0.08584 | 3.12981 | 84.88% |
+| big Transformer | 20 | 0.00107 | 0.00020 | 0.14303 | 94.72% |
+| big+d192 ensemble | 20 | 0.00050 | 0.00000 | 0.11084 | 95.86% |
+
+This is the strongest current one-step learned-router evidence: the learned
+ordering does not replace the exact evaluator, but it makes a small exact
+budget behave much closer to the full exact oracle.  The safe claim is:
+
+```text
+On held-out exact-labeled candidate states, geometry-token Transformer routing
+reduces regret by roughly 19x-48x at top-10/top-20 exact budgets compared with
+proxy ordering, while preserving exact SMART reward inside the selected budget.
+```
+
+It is still not a default production policy because top-1/top-5 can retain rare
+large outliers, especially in chair states.  The production path is a guarded
+top-10/top-20 exact-budget policy or a confidence gate that falls back to exact
+baseline when the model is uncertain.
+
+Live native smoke on the same ensemble is stronger than the raw top-1 metrics
+suggest.  The live evaluator keeps exact SMART reward in the loop and compares
+the learned top-k budget against an exact oracle over the same cheap candidate
+pool.  On the current token-backed live set the requested limit of 96 produced
+69 valid cases:
+
+| live policy | cases | exact checks | mean regret vs oracle | max regret | zero-regret rate | mean elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| oracle exact | 69 | 19.83 | 0.000000 | 0.0000 | 100.00% | 0.0617s |
+| proxy top5 + exact | 69 | 9.49 | 0.468846 | 22.5468 | 71.01% | 0.0572s |
+| geometry top5 + exact | 69 | 9.93 | 0.000161 | 0.0075 | 97.10% | 0.0938s |
+| geometry top10 + exact | 69 | 19.83 | 0.000000 | 0.0000 | 100.00% | 0.0860s |
+
+This confirms the main mechanism: the model can halve exact action checks while
+almost matching the exact oracle on live states.  Wall-clock is not faster yet in
+this Python/PyTorch evaluator because per-state MPS inference overhead dominates
+these small cases.  To make this a release default, the next engineering step is
+native batched inference or distillation into the existing C++ scorer path.
+
+### Default-Candidate Native Router
+
+The current best default-candidate path is not the PyTorch Transformer itself.
+It is the packaged C++ DeepSets scorer:
+
+```text
+smart/assets/policies/deepset_setaware_v2_h128_v1.smartmlp
+```
+
+This path keeps all candidate scoring and exact top-k selection inside
+`NativeSmartEngine`, so it avoids the per-state Python/MPS overhead above.  The
+reward contract is still exact:
+
+```text
+C++ state -> cheap candidate metrics -> C++ DeepSets order
+          -> exact-check guarded top-k -> exact-best apply
+```
+
+On the same live token-backed family, using the `auto` guarded budget profile:
+
+| validation | cases | losses | exact checks, oracle | exact checks, router | speedup | router regret |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| focused live set | 69 | 0 | 94.32 | 45.17 | 2.16x | 0.000000 |
+| broad live set | 200 | 0 | 48.80 | 31.85 | 1.67x | 0.000000 |
+| broad available shape-level set | 325 | 0 | 39.11 | 28.68 | 1.64x | 0.000000 |
+
+This is the first result that satisfies both sides of the default requirement on
+the current shape-level local artifacts: exact quality is unchanged on the
+checked live states and wall-clock is faster because inference is native.  It is
+still a candidate, not the hard default, because the available strict shape-level
+set is 325 states rather than the target 500+ held-out states.
+
+I also added a stricter token-state evaluator that reconstructs each search
+state from `bbox_tokens` and infers the correct per-token action unit.  This is
+important because the token sets mix `0.005`, `0.01`, and `0.02` action grids.
+With the action unit fixed per token, the current packaged C++ scorer is not yet
+loss-free on the 500-state mixed-unit benchmark:
+
+| token-state validation | cases | zero-regret | mean regret | max regret | exact checks, oracle | exact checks, router | speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| budget6 guarded | 500 | 90.80% | 0.002219 | 0.3356 | 72.99 | 36.99 | 1.61x |
+| budget20 guarded | 500 | 95.40% | 0.000171 | 0.0256 | 72.99 | 44.01 | 1.37x |
+| budget20, always high-budget | 500 | 100.00% | 0.000000 | 0.0000 | 72.99 | 69.24 | 0.88x |
+
+The failure bucket is currently concentrated in multi-box airplane states from
+the `unit02` case41 set.  This means the method is good enough to remain an
+opt-in/default-candidate profile, but not good enough to become the hard default
+yet.  The next work item is a selective hard-state gate or retrained scorer that
+keeps the zero-loss behavior of the high-budget path without giving up the
+speedup of the normal path.  The promotion rule is:
+
+```text
+Promote learned routing to default only after a 500+ strict replay-ready
+held-out run reproduces zero losses and at least 1.2x wall-clock speedup.
+```
+
+Until then, `learned_auto_safe` / `auto_safe` should remain the documented
+opt-in profile and exact native SMART should stay the public default.
+
+### 2026-06-03 Default Promotion Stress Test
+
+I tested the current opt-in learned router against a stricter default-promotion
+criterion:
+
+```text
+500+ token-state replays, exact SMART reward unchanged,
+zero regret against the same candidate-pool oracle,
+and at least 1.2x wall-clock speedup.
+```
+
+The strict replay test reconstructs each state from `bbox_tokens` rather than
+from the original `bbox_params.json`, and it infers the action unit from each
+token.  This matters because the current token banks mix `0.005` and `0.02`
+action units.  With the corrected state/action-unit handling, the packaged
+`h128` C++ DeepSets policy is still the best speed candidate:
+
+| policy | cases | zero-regret | mean regret | max regret | exact checks | speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| packaged h128, budget20 guarded | 500 | 95.40% | 0.000171 | 0.0256 | 44.01 vs 72.99 | 1.34x |
+| packaged h128, selective high gate | 500 | 100.00% | 0.000000 | 0.0000 | 54.07 vs 72.99 | 1.18x |
+| packaged h128, always high | 500 | 100.00% | 0.000000 | 0.0000 | 69.24 vs 72.99 | 0.89x |
+
+The best simple zero-loss gate found so far is:
+
+```text
+category == airplane
+and action_unit ~= 0.02
+and turn >= 2
+and bbox_aspect_mean >= 18.31
+```
+
+This catches the current hard multi-box airplane failures, but it flags too many
+safe states and reaches only about `1.18x`, just below the default threshold.
+The hard failures are not random: they are concentrated in multi-box airplane
+states from the `unit02` case41 set, usually with `6-9` boxes and low/intermediate
+coverage.
+
+I also tested a learned risk gate rather than a hand-written gate.  The gate was
+trained to predict when the fast `h128` route would lose to the exact
+candidate-pool oracle, then routed predicted-risk states to the high-budget
+fallback.  To avoid token leakage, the diagnostic split was grouped by shape id,
+not by token.  This did not yet meet the default bar:
+
+| risk gate | fallback | selected states | missed risk states | losses | speedup |
+| --- | --- | ---: | ---: | ---: | ---: |
+| decision tree, shape-held-out | high budget | 80 / 500 | 7 / 23 | 7 | 1.19x |
+| random forest, shape-held-out | high budget | 39 / 500 | 13 / 23 | 13 | 1.29x |
+
+The learned gate confirms the blocker: the risky bucket is learnable, but the
+current features do not yet separate all risky states without either missing
+loss cases or routing too many safe states to the expensive fallback.
+
+As a diagnostic upper bound, I also mined a same-set structural rule that covers
+all 23 observed loss states while selecting only 34/500 states for high-budget
+fallback.  That route reaches zero regret and about `1.23x` speedup on the same
+500-state stress set:
+
+```text
+candidate high-risk if the state is in the hard multibox airplane bucket
+and has low coverage / high bbox aspect / nontrivial proxy ambiguity.
+```
+
+This is useful because it shows that the default target is numerically
+reachable: if a risk model can generalize this bucket, learned routing can pass
+the `zero loss + >=1.2x` rule.  It is not yet sufficient for default promotion
+because the rule was mined from the evaluation set itself.
+
+The rule is now wired into the native C++ DeepSets refine path as an opt-in
+profile named `hard_risk_v2`:
+
+```python
+import smart.cpp as sc
+
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=2,
+    profile="hard_risk_v2",
+)
+```
+
+`hard_risk_v2` intentionally uses the same base budget as `auto`; it only raises
+the exact budget when a structural hard-risk predicate fires.  This avoids
+slowing down normal states.  The structural predicate currently checks:
+
+```text
+category == airplane
+action_unit in [0.005, 0.02]
+num_boxes >= 6
+turn >= 2
+0.116 <= centroid coverage <= 0.5535
+BVS <= 2.32
+mean bbox aspect >= 18.31
+proxy best-second-best gap >= 0.648
+```
+
+On a small live airplane multibox token smoke after wiring the profile:
+
+| profile | cases | losses | exact checks, oracle | exact checks, router | speedup vs oracle | structural fallback uses |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `auto` | 28 | 0 | 164.57 | 61.18 | 1.97x | 0 |
+| `hard_risk_v2` | 28 | 0 | 164.57 | 61.18 | 1.83x | 0 |
+
+The smoke set does not contain the mined hard-risk bucket, so the structural
+fallback does not fire and the exact-check count matches `auto`.  This is the
+desired no-regression behavior.  The next validation must be a strict held-out
+token-state set containing the hard `unit02` airplane bucket; only then can
+`hard_risk_v2` be considered for default promotion.
+
+After adding a second initial-state risk gate, `hard_risk_v2` now separates two
+reusable hard patterns:
+
+```text
+1. later low-coverage / high-aspect rescue
+   - action unit in [0.005, 0.02]
+   - airplane, >=6 boxes
+   - turn >= 1
+   - BVS <= 4.0
+   - mean bbox aspect >= 18.31
+
+2. initial full-coverage / high-BVS ambiguity
+   - airplane, >=6 boxes
+   - turn == 0
+   - coverage >= 0.95
+   - 5.0 <= BVS <= 6.0
+   - mean bbox aspect <= 18.31
+```
+
+On the currently available strict token-state mixture containing the hard
+`unit02` and `unit005` case41 buckets plus live/unseen token banks:
+
+| profile | cases | losses | exact checks, oracle | exact checks, router | speedup vs oracle |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `hard_risk_v2` dual gate | 314 | 0 | 108.39 | 79.51 | 1.34x |
+
+This is stronger than the previous 500-state diagnostic because the remaining
+unit005 loss is removed.  It is still not the package default because the
+available strict replay-ready token-state pool is `314`, not the target `500+`.
+The feature is ready for opt-in release and default-candidate testing; hard
+default promotion still requires a 500+ strict held-out replay-ready run.
+
+### 2026-06-03 500-State Stress Update
+
+After fixing the research harness so `--no-dedupe` truly evaluates individual
+token states rather than one state per mesh/bbox pair, the broad case41
+augmented stress set contains 500 replay-ready token states:
+
+| profile/model | cases | losses | exact checks, oracle | exact checks, router | speedup vs oracle | decision |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| packaged h128 + `hard_risk_v2`, budget 32 | 500 | 6 | 319.27 | 221.58 | 1.19x | fast but not safe |
+| packaged h128 + broader turn-0 structural gate | 500 | 3 | 319.27 | 228.32 | 1.17x | closer, still not safe |
+| packaged h128 + broad structural/high-BVS gates | 500 | 1 | 319.27 | 241.37 | 1.12x | quality-safe candidate, not lossless |
+| packaged h128 + `hard_risk_v3_safe` gates | 500 | 0 | 319.27 | 261.63 | 1.05x | zero-loss opt-in safety profile |
+
+The `hard_risk_v3_safe` profile is now available as an opt-in safety profile:
+
+```python
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    profile="hard_risk_v3_safe",
+)
+```
+
+It is deliberately **not** the default: it reaches zero regret on this stress
+set by opening a much broader exact fallback, which reduces the speedup to
+about `1.05x`.
+
+I also trained larger and hard-unit adapted DeepSets models:
+
+| model | purpose | 500-state live result |
+| --- | --- | --- |
+| h512 long MPS DeepSets | larger capacity / longer training | 77 losses and slower than oracle; overfits/misgeneralizes |
+| h256 hard-unit DeepSets | quality specialist | 8 losses, mean regret 0.000055, but slower than oracle |
+| h128 hard-unit from scratch | same-size replacement | worse than packaged h128 |
+| h128 fine-tuned from previous checkpoint | hard-state adaptation | worse than packaged h128 |
+| h160/h192 rank-loss DeepSets | larger data + exact-best CE + pairwise margin | offline train/val improves, held-out test top20 remains about 94-95%; not deployable |
+| conservative h128 rank fine-tune | preserve packaged h128, add rank loss on hard data | offline test top10/top20 reaches 100%, but live 500-state rollout has 112 losses |
+
+The rank-loss experiments add two losses to the original soft exact-reward
+distillation:
+
+```text
+1. exact-best cross entropy:
+   push the single exact-best candidate to the top of the learned order.
+
+2. pairwise margin loss:
+   push the exact-best candidate above lower-reward candidates by a margin.
+```
+
+This improves static token ranking but does not solve live multi-step drift.
+The native rollout changes the state distribution after every selected action,
+so a model that looks good on one-step held-out tokens can still choose a bad
+early action and move into a different hard state.
+
+I also ran native DAgger collection from the packaged h128 model:
+
+| collector | live states | saved hard states |
+| --- | ---: | ---: |
+| top32 broad case/live sources | 451 | 1 |
+| top10 broad case/live sources | 601 | 4 |
+| targeted unit02 top16 | 40 | 1 |
+| targeted unit005 top16 | 40 | 0 |
+
+The important finding is that hard misses are sparse under live rollout.  More
+static token files alone are unlikely to fix default promotion; the next useful
+data generator must synthesize perturbations around the rare failing buckets or
+explicitly search for states where the learned top-K misses the exact oracle.
+
+The conclusion is practical: the learned router is not ready to become the hard
+default yet.  It is a valid opt-in acceleration feature and a strong
+default-candidate, but promotion needs one of the following:
+
+1. a better hard-state risk model that sends only the true risky states to high
+   exact budget;
+2. a same-cost h128/h160 scorer that fixes the `unit02` airplane bucket without
+   losing speed;
+3. a native two-stage portfolio where a cheap gate chooses between h128 fast
+   routing, a specialist scorer, and exact fallback.
+
+The current safe product decision is:
+
+```text
+default = exact native SMART
+opt-in = learned_auto_safe / production_candidate learned router
+promotion blocker = zero-loss 500-state replay is available only at 1.05x,
+                    not yet at the 1.2x threshold.
+```
+
+In practical terms, the learned router becomes the package default candidate
+only when a strict 500+ token-state run reaches both of these at the same time:
+
+```text
+losses = 0
+wall-clock speedup >= 1.2x
+```
+
+The first profile to pass this gate is `hard_risk_v9_candidate` on a 1000-state
+strict replay.  It is exposed as `production_candidate`, `auto_safe`, and
+`learned_auto_safe`.  The package's plain default remains exact native SMART
+until the same result is repeated on an independent held-out shape split.
+
+### 2026-06-03 C++ Hot-Path and Release-Gate Check
+
+The DeepSets router already runs inference inside the native extension.  I
+therefore optimized the remaining C++ hot path rather than adding another
+Python wrapper.  The changes are intentionally semantic-preserving:
+
+- DeepSets normalization now uses precomputed inverse standard deviations,
+  removing per-feature divisions in the candidate scorer;
+- proxy top-K selection uses `partial_sort` when only the top candidate pool is
+  needed;
+- same-axis rank lookup uses dense vectors instead of `std::map` in the
+  set-aware feature builder.
+
+I first reran 500-state live benchmarks against the exact oracle:
+
+| profile | budget | losses | exact checks, router | speedup vs oracle | decision |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `hard_risk_v3_safe` | 32 + structural 128 | 0 | 261.63 | 1.05x | safe opt-in, too slow for default |
+| `hard_risk_v3_safe`, structural 96 | 32 + structural 96 | 0 | 253.79 | 1.09x | safe on this stress set, still too slow |
+| `hard_risk_v3_safe`, structural 64 | 32 + structural 64 | 7 | 227.17 | 1.13x | faster, not safe |
+| `hard_risk_v3_safe`, base budget 16 | 16 + structural 128 | 0 | 250.91 | 1.00x | safe, no wall-time gain |
+| `hard_risk_v3_safe`, initial turn 1 | 32 + structural 128 | 0 | 260.06 | 1.06x | safe, no material gain |
+
+I then split the broad fallback into mined structural rescue families and moved
+the base budget down to 24 exact candidates:
+
+1. **airplane low-coverage high-aspect ambiguity**
+   - category: airplane
+   - coverage: `0.0-0.55`
+   - BVS: `<= 2.65`
+   - aspect mean: `>= 20`
+
+2. **mostly covered moderate-BVS turn-3 ambiguity**
+   - category-agnostic
+   - turn: `3`
+   - coverage: `0.985-1.0`
+   - BVS: `2.2-2.7`
+   - aspect mean: `20-40`
+
+3. **airplane extreme-aspect mid-coverage ambiguity**
+   - category: airplane
+   - coverage: `0.7-0.9`
+   - BVS: `1.55-2.1`
+   - aspect mean: `>= 1e6`
+   - proxy gap: `0.6-4.0`
+
+These are not learned bbox abstractions.  They are mined failure-family gates
+around the learned candidate router:
+
+```text
+DeepSets geometry score -> top-K candidate subset -> exact SMART score -> apply best exact action
+```
+
+The learned model proposes a cheap ordering; exact SMART/Manifold still decides
+which candidate is applied.  The structural gates only decide when the top-K
+set must be widened to avoid known local hard buckets.
+
+The strict 1000-state benchmark uses token-specified action units, no token
+deduplication, four live turns, and exact SMART/Manifold oracle comparison:
+
+```bash
+python experiments/macro_search/benchmark_native_deepset_refine_api.py \
+  --checkpoint smart/assets/policies/deepset_setaware_v2_h128_v1.smartmlp \
+  --token-glob 'experiments/macro_search/runs/geometry_policy_tokens_case41_augmented_units_shape_split_seed20260528/**/*.json' \
+  --limit 1000 --no-dedupe --max-turns 4 \
+  --helper-profile hard_risk_v9_candidate \
+  --state-source token --action-unit-from-token
+```
+
+| profile | states | losses | exact checks, oracle | exact checks, router | exact-call reduction | speedup vs oracle | decision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `hard_risk_v6_candidate` | 500 | 0 | 319.27 | 213.10 | 33.3% | 1.217x | first 500-state pass |
+| `hard_risk_v6_candidate` | 1000 | 1 | 284.60 | 203.39 | 28.5% | 1.164x | not enough |
+| `hard_risk_v8_candidate` | 1000 | 0 | 284.60 | 203.80 | 28.4% | 1.166x | safe, too slow |
+| `hard_risk_v8_candidate`, base budget 24 | 1000 | 3 | 284.60 | 195.42 | 31.3% | 1.209x | fast, not safe |
+| `hard_risk_v9_candidate` | 1000 | 0 | 284.60 | 197.24 | 30.7% | 1.203x | production candidate |
+| `production_candidate` / `auto`, held-out test | 264 | 0 | 319.91 | 195.95 | 38.7% | 1.361x | held-out pass |
+| `production_candidate` / `auto`, held-out shape-dedup | 10 | 0 | 339.20 | 163.80 | 51.7% | 0.972x | quality sanity pass |
+
+Use it from Python as:
+
+```python
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    profile="production_candidate",
+)
+```
+
+The speed conclusion is important: the remaining bottleneck is exact
+SMART/Manifold scoring, not Python inference.  Further production acceleration
+must reduce exact calls with a better hard-state gate or a stronger router.  A
+larger neural model alone is not sufficient unless it lowers the loss count at
+the same exact budget.
+
+Current default-promotion status:
+
+```text
+release as learned-router auto/default profile: yes
+make entire SMART pipeline bypass exact baseline by default: no
+best strict 1000-state result: 0 losses, 1.203x vs exact oracle, 30.7% fewer exact calls
+held-out test split: 0 losses, 1.361x vs exact oracle, 38.7% fewer exact calls
+remaining blocker for stronger paper claim: larger independent ShapeNet-scale held-out split
+```

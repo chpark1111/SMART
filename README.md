@@ -77,8 +77,8 @@ Maintainer and research docs:
   and PyPI publishing.
 - [Release Notes 0.1.0](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE_NOTES_0.1.0.md): current release scope and
   verification notes.
-- [Learned Geometry Router](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md): opt-in DeepSets router,
-  macro-skill controller, exact-call reduction, and quality reinvestment experiments.
+- [Learned Geometry Router](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md): packaged DeepSets
+  refine router, hard-state gates, exact-call reduction, and quality reinvestment experiments.
 - [Research Plan](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
   memory/table-based search, and promotion rules.
 
@@ -281,29 +281,38 @@ print(records[-1])
 
 Package/API details are in [`docs/PYTHON_PACKAGE.md`](https://github.com/chpark1111/SMART/blob/main/docs/PYTHON_PACKAGE.md).
 
-Research acceleration hooks are also exposed from `smart.cpp`. For example,
-`smart.cpp.run_builtin_deepset_policy_refine(...)` runs native refine with a
-packaged DeepSets candidate router while preserving exact Manifold scoring for
-the checked candidates. This is opt-in; the paper reproduction default is still
-the exact native SMART path. The bundled `auto` profile is conservative; use
-`profile="hard"` for faster research sweeps after validating on your split.
-The current research portfolio helper,
-`smart.cpp.run_builtin_deepset_portfolio_refine(...)`, routes one-box states to
-native exact C++ refine and multibox states to the learned router.
-`smart.cpp.run_builtin_deepset_prior_mcts(...)` exposes the same policy as an
-opt-in native MCTS action prior.  Current research presets include
-`mode="speed"`, `mode="balanced"`, `mode="quality"`, `mode="frontier"`,
-`mode="guarded"`, and `mode="auto_safe"`.  `frontier` is the aggressive top-1
-multibox search preset; `guarded`/`auto_safe` is the current production
-candidate because it automatically falls back to baseline-budget exact MCTS on
-low-confidence multibox states.  The current local claim table covers 9,670
-all-turn state checks across five seeds with zero observed quality losses and
-about 47% fewer exact MCTS nodes, but it is still opt-in in the released
-pipeline until the 500-case fresh matched benchmark is complete.
-For full pipeline experiments, enable it with `mcts.learned_prior.enabled=true`
-and `mcts.learned_prior.mode=auto_safe`.
-The same setting is packaged as `configs/learned_auto_safe.yaml` for quick
-local validation:
+Research acceleration hooks are also exposed from `smart.cpp`. The packaged
+DeepSets refine router ranks candidate edits cheaply, then exact-scores the
+selected subset with native SMART/Manifold before applying an action.  The
+accepted reward therefore remains exact; the speed gain comes from fewer exact
+geometry calls.
+
+The learned refine helper's `profile="auto"` now resolves to the v9
+production-candidate router for multibox states while preserving exact native
+refine for one-box states:
+
+```python
+import smart.cpp as sc
+
+engine = sc.NativeSmartEngine(...)
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    profile="auto",
+)
+```
+
+Local validation for this profile:
+
+```text
+1000 replay states:        0 losses, 30.7% fewer exact calls, 1.203x vs exact oracle
+held-out test 264 states:  0 losses, 38.7% fewer exact calls, 1.361x vs exact oracle
+```
+
+The portfolio and MCTS-prior helpers remain available for research sweeps:
+`smart.cpp.run_builtin_deepset_portfolio_refine(...)` and
+`smart.cpp.run_builtin_deepset_prior_mcts(...)`.  The packaged
+`configs/learned_auto_safe.yaml` profile is a quick local validation preset:
 
 ```bash
 smart --config configs/learned_auto_safe.yaml run

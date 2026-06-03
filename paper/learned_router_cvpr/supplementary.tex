@@ -1,0 +1,285 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage[final]{cvpr}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+
+\def\paperID{0000}
+\def\confName{CVPR}
+\def\confYear{2027}
+
+\title{Supplementary Material: Learning Reusable Geometry Programs for Fast Tight Bounding Box Fitting}
+
+\author{Chanhyeok Park \and Minhyuk Sung}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This supplementary document records implementation details for the learned
+SMART~\cite{park2024smart} router and variable-length macro-skill experiments.
+The key principle is unchanged from the main paper: learned components propose
+actions, but exact SMART/Manifold~\cite{huang2020manifoldplus} reward validates
+accepted updates.
+
+\section{Token Schema}
+
+\subsection{Shape Tokens}
+
+Shape tokens summarize the current refine state:
+
+\begin{itemize}
+\item category id or category embedding,
+\item current turn,
+\item number of active boxes,
+\item current exact score if available,
+\item coverage and BVS proxy summaries,
+\item centroid extent and PCA-like extent,
+\item volume histogram or occupancy summary.
+\end{itemize}
+
+\subsection{Box Tokens}
+
+Each active box contributes:
+
+\begin{itemize}
+\item center in normalized object coordinates,
+\item side lengths,
+\item volume and relative volume,
+\item aspect ratio statistics,
+\item rotation summary,
+\item slack/coverage contribution proxies.
+\end{itemize}
+
+\subsection{Candidate Tokens}
+
+Each candidate primitive edit contributes:
+
+\begin{itemize}
+\item action type,
+\item affected box id,
+\item affected face, axis, or center coordinate,
+\item signed delta/scale,
+\item proxy coverage after action,
+\item proxy BVS after action,
+\item proxy rank and z-score within the current candidate set,
+\item invalidity and guard flags.
+\end{itemize}
+
+Offline training files additionally store exact SMART reward for every
+candidate.  This exact reward is the supervision target, not an inference-time
+replacement.
+
+\section{Skill Representation}
+
+The current mined skills are stored as parameterized programs.  A typical
+record has the following logical form:
+
+\begin{verbatim}
+{
+  "skill": "repeat_shrink_recenter",
+  "precondition": {
+    "category": ["airplane", "chair", "table"],
+    "feature": "max_bbox_volume_ratio",
+    "op": "<",
+    "threshold": 1.5581414368932673
+  },
+  "program": [
+    {"op": "shrink_face", "repeat": "upper_quantile"},
+    {"op": "recenter_box", "repeat": 1},
+    {"op": "shrink_face", "repeat": "upper_quantile"}
+  ],
+  "termination": {
+    "max_steps": 16,
+    "accept": "exact_non_worse"
+  }
+}
+\end{verbatim}
+
+The program is intentionally not a fixed raw action sequence.  It can be
+instantiated with different boxes, faces, and repeat counts depending on the
+state.  This is the difference between memorizing a trace and extracting a
+reusable geometry skill.
+
+\section{Observed Skill Families}
+
+\paragraph{Shrink--recenter--shrink.}
+This is the strongest current family.  It tends to appear when a box already
+covers the relevant mass but has excess slack.  A recenter step between shrink
+bursts prevents the box from drifting into a bad local configuration.
+
+\paragraph{Coverage rescue then tighten.}
+This family first expands or recenters toward uncovered mass, then shrinks
+slack faces once coverage is recovered.  It is useful for local-minimum escape
+because a temporary score-neutral or score-negative expansion can enable a
+later score-positive tightening sequence.
+
+\paragraph{Major-axis extend then trim.}
+This pattern appears in elongated structures where a box must first align with
+or extend along the object's dominant direction before minor faces can be
+tightened safely.
+
+\section{Conservative Repeat-Budget Gate}
+
+The current strongest variable-length skill result uses a conservative gate for
+longer repeat budgets.  The mined rule is:
+
+\begin{verbatim}
+airplane/chair -> upper-repeat
+table -> upper-repeat only if num_actions >= 130
+\end{verbatim}
+
+The interpretation is that table states should use a longer repeat budget only
+when the current decomposition exposes enough legal actions.  Low-action-count
+one-box table states are unsafe because the longer repeat program can fail to
+recover from under-decomposition.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Policy & States & Mean delta & Accepted \\
+\midrule
+Median repeat & 173 & $+1.5200$ & 173/173 \\
+Blind upper repeat & 173 & $+1.5447$ & 172/173 \\
+Conservative gate & 173 & $+1.5759$ & 173/173 \\
+\bottomrule
+\end{tabular}
+\caption{Full hard-state validation for the repeat-budget gate.}
+\end{table}
+
+On table states alone, blind upper-repeat gives 10 wins, 28 ties, and 5 losses
+against median-repeat, with negative mean difference.  The conservative gate
+gives 7 wins, 36 ties, and 0 losses.  This supports the option view: the skill
+is useful, but only under a geometric precondition.
+
+\paragraph{Runtime versus mining mode.}
+The runtime controller uses first-positive acceptance and averages 1.023 exact
+skill attempts on the hard-state portfolio.  For analysis only, best-positive
+acceptance exact-scores all top-3 attempts, improving mean delta from
+$+1.5759$ to $+1.6020$ but increasing mean time from 0.177s to 0.380s.  The
+extra evaluations reveal that hard states require learning option parameters:
+repeat budget, target role, and whether the controller should use direct long
+shrink or a recenter-then-shrink program.
+
+\paragraph{Pattern-memory replay.}
+On the same hard-state candidate logs, a macro-heavy memory score over
+macro-id, canonical pattern, family, and skill recovers most of the logged
+top-3 oracle.  One exact call improves the held-out replay mean from $+1.1207$
+to $+1.4675$, while two exact calls reach $+1.5267$ versus the three-call
+oracle at $+1.5269$.  This is a bounded replay estimate, but it shows that
+reusable program identity is a stronger signal than semantic family alone.
+
+\paragraph{Live hybrid selector.}
+We also tested a live hybrid selector that first builds a top-3 pool with the
+program gate, then reorders only that pool using macro-memory and exact-scores
+the top two candidates.  On the hard-state portfolio this gives $+1.6017$ mean
+delta with 2.0 exact attempts, compared with $+1.6020$ for top-3
+best-positive at 3.0 exact attempts.  Thus the hybrid selector removes one
+third of exact skill evaluations with negligible loss inside the current
+candidate set.
+
+\paragraph{Conditional second exact.}
+The top-2 logs show that the second exact skill wins only $31/173$ states, with
+$25$ of those wins on table states.  A single branch-opening precondition,
+\texttt{category=table} and \texttt{num\_actions < 138}, opens the second exact
+skill on $34/173$ states.  This gives $+1.6015$ mean delta, $1.197$ exact
+attempts, and $0.195$s mean elapsed time, compared with $+1.6020$, $3.000$
+attempts, and $0.380$s for top-3 best-positive.  This is a $60.1\%$ exact-call
+reduction and a $1.95\times$ per-state speedup with $0.00044$ mean delta loss.
+In five-fold train/test mining, the held-out gate gives $+1.5984$ mean delta
+with $1.197$ exact attempts, compared with $+1.5996$ for the top-2 exact oracle
+and $+1.5478$ for first-skill only.
+
+\paragraph{Conditional exact-budget ladder.}
+We also mined the exact budget as an option precondition.  Instead of always
+checking top-3 skills, the controller chooses budget 1, 2, or 3 from cheap state
+rules.  On the runnable 133-state portfolio, the mined rule is category-level:
+airplane states use one exact skill check, chair states use two, and table
+states use three.  Live execution gives $+1.7237$ mean delta with $1.669$ exact
+attempts and $0.254$s mean elapsed time, compared with $+1.7247$, $3.000$
+attempts, and $0.292$s for top-3 exact.  On the harder 173-state conservative
+portfolio, a quality-preserving bbox-volume rule reaches $+1.60175$ versus
+$+1.60196$ for top-3 exact, with $2.595$ exact attempts.  These rules are less
+aggressive than the speed-first second-exact gate, but they preserve top-3
+quality more tightly.
+
+\section{Validation Checklist}
+
+Before promoting any learned or macro path to a default setting, the following
+checks should pass:
+
+\begin{itemize}
+\item accepted updates are exact-score non-worse than baseline under the target
+budget,
+\item rollback leaves the native C++ engine state unchanged after failed skill
+attempts,
+\item candidate pruning has zero losses on a frozen held-out split,
+\item learned MCTS prior improves or ties score under equal or lower wall time,
+\item macro preconditions are selected using validation data only, not test
+data,
+\item rare category-specific failures are reported separately.
+\end{itemize}
+
+\section{Benchmark Manifest Template}
+
+For paper experiments, each benchmark run should be declared in a manifest
+rather than assembled manually.  A minimal manifest should include:
+
+\begin{verbatim}
+experiment:
+  name: guarded_mcts_prior_v1
+  seed: 0
+  engine: cpp_native
+  exact_reward: manifold
+
+data:
+  train_states: path/to/train.jsonl
+  val_states: path/to/val.jsonl
+  test_states: path/to/test.jsonl
+  categories: [airplane, chair, table]
+
+baseline:
+  refine_turns: 4
+  mcts_iter: 50
+  mcts_depth: 2
+
+learned:
+  router_checkpoint: path/to/router.smartmlp
+  profile: guarded
+  topk_multibox: 1
+  topk_onebox: 15
+  transposition_table: true
+
+metrics:
+  - exact_score_delta
+  - exact_call_count
+  - wall_time
+  - quality_losses
+  - rollback_count
+\end{verbatim}
+
+The test split should be evaluated once after model and precondition selection.
+Any additional tuning after seeing test failures should create a new frozen
+split.
+
+\section{Current Research Caveat}
+
+The macro-skill evidence is promising but not yet a release default.  The
+largest current risk is overfitting preconditions to a small number of rare
+failure examples.  The next data collection round should deliberately increase
+hard table, chair-leg, thin-part, and disconnected-component cases.
+
+{\small
+\bibliographystyle{ieeenat_fullname}
+\bibliography{refs}
+}
+
+\end{document}

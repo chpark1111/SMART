@@ -3335,6 +3335,10 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert "small_pool_exact_uses" in result
     assert "nonfinite_proxy_rescue_checks" in result
     assert "proxy_rescue_checks" in result
+    assert "structural_high_budget_uses" in result
+    assert "structural_initial_high_budget_uses" in result
+    assert "structural_secondary_high_budget_uses" in result
+    assert "structural_tertiary_high_budget_uses" in result
     assert result["exact_checks"] >= 0
 
     mixed_defaults = sc.native_deepset_refine_defaults("mixed")
@@ -3344,12 +3348,47 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert mixed_defaults["proxy_rescue_budget"] == 0
     assert sc.native_deepset_refine_defaults("balanced") == mixed_defaults
     auto_defaults = sc.native_deepset_refine_defaults("auto")
-    assert auto_defaults["budget"] == 6
+    assert auto_defaults["budget"] == 24
     assert auto_defaults["auto_exact_max_boxes"] == 1
     assert auto_defaults["small_pool_exact_threshold"] == 64
+    assert auto_defaults["structural_tertiary_category"] == "airplane"
     hard_defaults = sc.native_deepset_refine_defaults("hard")
     assert hard_defaults["budget"] == 6
     assert hard_defaults["adaptive_high_budget"] == 72
+    hard_risk_defaults = sc.native_deepset_refine_defaults("hard_risk_v2")
+    assert hard_risk_defaults["budget"] == 6
+    assert hard_risk_defaults["structural_high_budget"] == 128
+    assert hard_risk_defaults["structural_initial_high_budget"] == 128
+    assert hard_risk_defaults["structural_category"] == "airplane"
+    assert hard_risk_defaults["structural_min_turn"] == 1
+    safe_defaults = sc.native_deepset_refine_defaults("hard_risk_v3_safe")
+    assert safe_defaults["budget"] == 32
+    assert safe_defaults["structural_min_turn"] == 0
+    assert safe_defaults["structural_min_aspect_mean"] == 10.0
+    assert safe_defaults["structural_initial_max_turn"] == 3
+    assert safe_defaults["structural_initial_min_bvs"] == 4.7
+    v6_defaults = sc.native_deepset_refine_defaults("hard_risk_v6_candidate")
+    assert v6_defaults["budget"] == 32
+    assert v6_defaults["structural_max_coverage"] == 0.55
+    assert v6_defaults["structural_secondary_high_budget"] == 128
+    assert v6_defaults["structural_secondary_category"] == "airplane"
+    assert v6_defaults["structural_secondary_min_bvs"] == 2.3
+    assert v6_defaults["structural_secondary_max_bvs"] == 2.7
+    v7_defaults = sc.native_deepset_refine_defaults("hard_risk_v7_candidate")
+    assert v7_defaults["structural_secondary_category"] == "chair"
+    assert v7_defaults["structural_secondary_min_turn"] == 3
+    assert v7_defaults["structural_secondary_max_proxy_gap"] == 0.05
+    v8_defaults = sc.native_deepset_refine_defaults("hard_risk_v8_candidate")
+    assert v8_defaults["structural_secondary_category"] == ""
+    assert v8_defaults["structural_secondary_min_coverage"] == 0.985
+    assert v8_defaults["structural_secondary_max_aspect_mean"] == 40.0
+    v9_defaults = sc.native_deepset_refine_defaults("hard_risk_v9_candidate")
+    assert v9_defaults["budget"] == 24
+    assert v9_defaults["structural_tertiary_category"] == "airplane"
+    assert v9_defaults["structural_tertiary_min_aspect_mean"] == 1.0e6
+    assert sc.native_deepset_refine_defaults("production_candidate") == v9_defaults
+    assert sc.native_deepset_refine_defaults("auto_safe") == v9_defaults
+    assert sc.native_deepset_refine_defaults("learned_auto_safe") == v9_defaults
     speed_portfolio = sc.native_deepset_portfolio_defaults("speed")
     assert speed_portfolio["single_box_steps"] == 5
     assert speed_portfolio["multibox_profile"] == "auto"
@@ -3374,6 +3413,10 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     )
     assert "nonfinite_proxy_rescue_checks" in helper_result
     assert "proxy_rescue_checks" in helper_result
+    assert "structural_high_budget_uses" in helper_result
+    assert "structural_initial_high_budget_uses" in helper_result
+    assert "structural_secondary_high_budget_uses" in helper_result
+    assert "structural_tertiary_high_budget_uses" in helper_result
     assert helper_result["exact_checks"] >= 0
     prior_logits = sc.deepset_axis_prior_logits(
         engine,
@@ -3466,6 +3509,16 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert small_pool_route["reason"] == "small_candidate_pool_exact_scoring"
     assert small_pool_route["learned_router_used"] is True
     assert small_pool_route["small_pool_exact_scoring"] is True
+    hard_risk_route = sc.native_deepset_route_diagnostics(
+        small_pool_engine,
+        profile="hard_risk_v2",
+    )
+    assert hard_risk_route["route"] == "deepset_router"
+    assert hard_risk_route["structural_high_budget"] == 128
+    assert hard_risk_route["structural_initial_high_budget"] == 128
+    assert hard_risk_route["structural_secondary_high_budget"] == 0
+    assert hard_risk_route["structural_tertiary_high_budget"] == 0
+    assert hard_risk_route["structural_category"] == "airplane"
 
     builtin_auto_engine = sc.NativeSmartEngine(
         vertices,
