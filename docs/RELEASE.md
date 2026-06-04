@@ -101,20 +101,19 @@ smart-release-preflight \
 
 ## Latest Local Verification
 
-The current Apple Silicon release candidate was checked on May 20, 2026 with:
+The current Apple Silicon release candidate was checked on June 4, 2026 with:
 
-- final artifacts in the configured release preflight dist directory;
-- wheel size `1.9M`, sdist size `31M`;
-- `python -m pytest -q`: `285 passed`;
-- release artifact audit: passed;
-- `twine check`: passed;
-- `smart-release-preflight --recreate-venv`: passed, including wheel install
-  into a fresh venv, console-script smoke, `smart._cpp`, `smart-cpp-native`,
-  and bundled `pymanifold` runtime checks;
-- installed console-script smoke includes `smart-quickstart`;
-- native binaries confirmed as `arm64`: `smart._cpp` and `smart-cpp-native`;
-- a same-day source-checkout `--run-asan-smoke` check passed for diagnostic
-  `smart-cpp-native-asan`.
+- `python3 -m pytest -q tests`: `185 passed`;
+- `smart learned-release-readiness --fail-if-not-ready`: passed;
+- local wheel build: `python3 setup.py bdist_wheel --dist-dir wheelhouse-local-check`;
+- release artifact audit: `python3 scripts/audit_release_wheel.py wheelhouse-local-check/*.whl`: passed;
+- smoke native-to-learned-macro handoff: 5/5 `smoke_5` C++ native MCTS outputs
+  accepted by `macro_skill` with exact non-worse validation;
+- smoke render from learned macro output: 5/5 rendered successfully;
+- manual image inspection confirmed a non-empty rendered airplane bbox preview.
+
+The CI release workflow still remains the authoritative multi-platform wheel
+gate before PyPI upload.
 
 ## GitHub Release Build
 

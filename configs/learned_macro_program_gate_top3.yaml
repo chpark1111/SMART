@@ -1,0 +1,30 @@
+{
+  "extends": "configs/learned_macro_safe.yaml",
+  "run_name": "learned_macro_program_gate_top3",
+  "workspace": "examples/runs/learned_macro_program_gate_top3",
+  "macro_skill": {
+    "input_stage": "mcts",
+    "quality_preset": "custom",
+    "repeat_mode": "guarded_variable",
+    "top_k": 3,
+    "macro_memory_pool_size": -1,
+    "candidate_count": 256,
+    "max_steps": 16,
+    "exact_budget": 3,
+    "cover_penalty": 100,
+    "pen_rate": 1.0,
+    "num_action_scale": 2,
+    "action_unit": 0.01,
+    "volume_method": "mesh",
+    "stateful_union_cache": true,
+    "stateful_cache_capacity": 65536,
+    "native_executor": true,
+    "target_aware_execution": false,
+    "planner": {
+      "enabled": false
+    }
+  },
+  "render": {
+    "input_stage": "macro_skill"
+  }
+}

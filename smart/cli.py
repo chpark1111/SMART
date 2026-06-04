@@ -145,6 +145,12 @@ def main(argv: list[str] | None = None) -> int:
     macro_skill.add_argument("--action-unit", type=float, default=0.01)
     macro_skill.add_argument("--candidate-count", type=int, default=256)
     macro_skill.add_argument("--top-k", type=int, default=5)
+    macro_skill.add_argument(
+        "--macro-memory-pool-size",
+        type=int,
+        default=5,
+        help="Head size to re-rank by macro memory; use -1 for pure program-gate order",
+    )
     macro_skill.add_argument("--exact-budget", type=int)
     macro_skill.add_argument("--max-steps", type=int, default=16)
     macro_skill.add_argument(
@@ -179,6 +185,25 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use the native stateful Manifold union cache",
+    )
+    macro_skill.add_argument(
+        "--planner",
+        action="store_true",
+        help="Run the multi-round exact-validated 3D substructure planner instead of one controller pass",
+    )
+    macro_skill.add_argument("--planner-max-rounds", type=int, default=3)
+    macro_skill.add_argument(
+        "--planner-profile-schedule",
+        nargs="+",
+        default=["balanced", "learned_efficient", "quality"],
+        help="Profile portfolio tried in each planner round",
+    )
+    macro_skill.add_argument("--planner-min-round-delta", type=float, default=1.0e-12)
+    macro_skill.add_argument(
+        "--planner-stop-after-noop",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop planner after the first no-improvement round",
     )
     macro_skill.add_argument("--output", help="Optional JSON result path")
     macro_skill.add_argument("--output-bbox-dir", help="Optional directory for accepted bbox OBJ/metadata export")
@@ -636,28 +661,42 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "macro-skill":
-        from .api import run_macro_skill_controller_from_files
+        if args.planner:
+            from .api import run_macro_skill_planner_from_files as _run_macro_skill
+        else:
+            from .api import run_macro_skill_controller_from_files as _run_macro_skill
 
-        result = run_macro_skill_controller_from_files(
-            msh_path=args.msh,
-            bbox_metadata_path=args.bbox_metadata,
-            category=args.category,
-            cover_penalty=args.cover_penalty,
-            pen_rate=args.pen_rate,
-            num_action_scale=args.num_action_scale,
-            action_unit=args.action_unit,
-            candidate_count=args.candidate_count,
-            top_k=args.top_k,
-            exact_budget=args.exact_budget,
-            max_steps=args.max_steps,
-            quality_preset=args.quality_preset,
-            repeat_mode=args.repeat_mode,
-            target_aware_execution=args.target_aware_execution,
-            native_executor=args.native_executor,
-            volume_method=args.volume_method,
-            stateful_union_cache=args.stateful_union_cache,
-            cache_capacity=args.cache_capacity,
-        )
+        macro_kwargs = {
+            "msh_path": args.msh,
+            "bbox_metadata_path": args.bbox_metadata,
+            "category": args.category,
+            "cover_penalty": args.cover_penalty,
+            "pen_rate": args.pen_rate,
+            "num_action_scale": args.num_action_scale,
+            "action_unit": args.action_unit,
+            "candidate_count": args.candidate_count,
+            "top_k": args.top_k,
+            "macro_memory_pool_size": args.macro_memory_pool_size,
+            "exact_budget": args.exact_budget,
+            "max_steps": args.max_steps,
+            "quality_preset": args.quality_preset,
+            "repeat_mode": args.repeat_mode,
+            "target_aware_execution": args.target_aware_execution,
+            "native_executor": args.native_executor,
+            "volume_method": args.volume_method,
+            "stateful_union_cache": args.stateful_union_cache,
+            "cache_capacity": args.cache_capacity,
+        }
+        if args.planner:
+            macro_kwargs.update(
+                {
+                    "max_rounds": args.planner_max_rounds,
+                    "profile_schedule": tuple(args.planner_profile_schedule),
+                    "min_round_delta": args.planner_min_round_delta,
+                    "stop_after_noop": args.planner_stop_after_noop,
+                }
+            )
+        result = _run_macro_skill(**macro_kwargs)
         engine = result.pop("engine", None)
         if args.output_bbox_dir:
             if engine is None:

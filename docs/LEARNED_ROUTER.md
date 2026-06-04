@@ -319,6 +319,41 @@ post-refinement release candidate: it has strong quality results with exact
 rollback safety, but it should not be the global default until the strict fresh
 matched benchmark and larger end-to-end mesh-level validation pass.
 
+The package also exposes a multi-round **3D substructure planner** built on top
+of that controller.  This is the current deployable version of the reusable
+knowledge idea: instead of choosing only one primitive edit, it repeatedly
+selects a macro-skill family, executes a variable-length parameterized program,
+and commits only the best exact-validated non-worse state in each round.
+
+```python
+import smart
+import smart.cpp as sc
+
+engine = sc.NativeSmartEngine(...)
+result = smart.run_macro_skill_planner(
+    engine,
+    category="chair",
+    max_rounds=3,
+    profile_schedule=("balanced", "learned_efficient", "quality"),
+)
+assert result["accepted_non_worse"]
+```
+
+This planner is still opt-in, but it is now a release-facing API rather than a
+loose experiment.  Its contract is:
+
+- learned/knowledge rules propose reusable variable-length programs;
+- exact native SMART/Manifold score chooses what is accepted;
+- every failed or worsening round rolls back;
+- the default exact SMART path is unchanged.
+
+It becomes default-ready only when the learned router and macro planner pass
+fresh mesh-level validation together with non-worse quality.  The macro planner
+itself has now passed the strict replay gate at `507` fresh replay-ready states
+with zero exact-score regressions, so it is release-ready as an opt-in
+post-MCTS planner while the unchanged exact C++ SMART path remains the global
+default.
+
 This strengthens the quality claim but also clarifies the runtime claim:
 multibox and case41-style states show large speedups, while the unseen probe
 is now slightly faster at the all-turn/state level.  The safe paper claim is
@@ -3222,6 +3257,13 @@ smart --config configs/smoke_5.yaml \
   run
 ```
 
+The packaged stage consumes both standard `mcts`/`refine` stage outputs and the
+C++ native one-shot layout under
+`native_pipeline/<category>/<mesh>/{mcts,refine}_bboxs_steps0`.  This is the
+runtime path used by the smoke validation: native C++ search writes
+`bbox_params.json`, `macro_skill` exact-validates a learned multi-step proposal,
+and render consumes the exported macro bbox directory.
+
 This stage is deliberately post-refinement/post-MCTS and opt-in.  The controller
 loads the prepared tetra mesh and bbox metadata into the native C++ engine,
 tries the packaged variable-length skills, and accepts only exact non-worse
@@ -4374,3 +4416,309 @@ best strict 1000-state result: 0 losses, 1.203x vs exact oracle, 30.7% fewer exa
 held-out test split: 0 losses, 1.361x vs exact oracle, 38.7% fewer exact calls
 remaining blocker for stronger paper claim: larger independent ShapeNet-scale held-out split
 ```
+
+## Default Promotion Gate, 2026-06-03
+
+The learned path now has an explicit default-promotion gate:
+
+```bash
+PYTHONPATH=. python experiments/macro_search/check_learned_default_promotion.py \
+  --fresh-report experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_current53_20260603/fresh_matched_report.json \
+  --fail-if-not-ready
+```
+
+Current result:
+
+| requirement | status | current evidence |
+| --- | --- | --- |
+| router token-state validation | pass | `1015` states, `0` losses, `38.7%` held-out exact-call reduction |
+| macro-skill exact validator | pass | balanced and quality presets both have `0` losses on packaged held-out rows |
+| fresh matched mesh-level check | pass | `53` fresh states, `0` losses within `1e-3` tolerance, exact attempts `16 -> 3`, mean delta `1.5364 -> 1.9191` |
+| raw 500 expansion selection | pass | `500` ShapeNet cases selected, roughly balanced across airplane/chair/table |
+| strict replay-ready macro states | pass | `507` replay-ready states after the 2026-06-04 combined expansion |
+
+An additional 2026-06-03/04 expansion smoke processed 16 fresh airplane meshes
+through the full SMART pipeline and then reran a matched macro-skill check on
+those exact artifacts:
+
+| subset | cases | losses | exact attempts | mean portfolio delta | mean learned delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `runs/learned_macro_500_20260603`, generated seed13 | 13 | 0 | `16 -> 3` | `2.8538` | `3.9573` |
+| `runs/learned_macro_500_20260603`, generated seed16 | 16 | 0 | `16 -> 3` | `2.4721` | `3.5518` |
+| `runs/learned_macro_500_20260603`, generated seed20 | 20 | 0 | `16 -> 3` | `3.1602` | `4.1114` |
+| `runs/learned_macro_500_20260603`, 3-category seed26 | 26 | 0 | `16 -> 3` | `2.5517` | `3.4869` |
+| `runs/learned_macro_500_20260603`, 3-category seed30 | 30 | 0 | `16 -> 3` | `2.3042` | `3.1604` |
+| `runs/learned_macro_500_20260603`, 3-category seed36 | 36 | 0 | `16 -> 3` | `2.0402` | `2.8068` |
+| `runs/learned_macro_500_20260603`, 3-category seed40 | 40 | 0 | `16 -> 3` | `1.8845` | `2.6005` |
+| `runs/learned_macro_500_20260603`, 3-category seed44 | 44 | 0 | `16 -> 3` | `1.8663` | `2.6071` |
+| `runs/learned_macro_500_20260603`, 3-category seed48 | 48 | 0 | `16 -> 3` | `1.7803` | `2.4814` |
+| `runs/learned_macro_500_20260603`, 3-category seed50 | 51 | 0 | `16 -> 3` | `1.7124` | `2.3898` |
+| `runs/learned_macro_500_20260603`, 3-category seed55 | 55 | 0 | `16 -> 3` | `1.6445` | `2.2936` |
+| `runs/learned_macro_500_20260603`, 3-category balanced seed60 | 60 | 0 | `16 -> 3` | `1.5613` | `2.2043` |
+| `runs/learned_macro_500_20260603`, 3-category seed69 | 69 | 0 | `16 -> 3` | `1.5181` | `2.1609` |
+| `runs/learned_macro_500_20260603`, 3-category seed76 | 76 | 0 | `16 -> 3` | `1.4949` | `2.1103` |
+
+The `seed76` row was the first larger fresh 3-category smoke from this expansion:
+`26` airplane, `24` chair, and `26` table cases.  The balanced `seed60` row
+kept a strict `20/20/20` split.  That run proved the 500-case expansion path was
+executable across all three categories; the next 2026-06-04 combined run below
+is the one that clears the 500+ strict replay-ready macro-skill gate.
+
+### 2026-06-04 Combined 507-Case Fresh Replay Gate
+
+The strict replay-ready macro-skill expansion has now passed by combining the
+original 500-case candidate pool with an additional 180 fresh candidates.  The
+runner required at least 500 replay-ready cases and at least 25 fresh successes
+from the extra pool before launching the matched benchmark:
+
+```bash
+PYTHONPATH=. python scripts/run_learned_macro_combined_gate.py \
+  --require-min-cases 500 \
+  --min-extra-success 25
+```
+
+Final report:
+
+```text
+experiments/macro_search/runs/parameterized_skills_4k/
+fresh_matched_learned_macro_combined_500_20260604_134819/fresh_matched_report.json
+```
+
+| controller | cases | losses | exact attempts | mean delta | delta vs 16-skill portfolio | attempt reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16-skill exact portfolio | 507 | 0 | 16 | 1.4057 | reference | 0.0% |
+| learned first-positive macro | 507 | 0 | 1 | 1.6807 | +0.2750 | 93.75% |
+| learned top-3 macro | 507 | 0 | 3 | 1.8175 | +0.4118 | 81.25% |
+
+Category split:
+
+| category | cases | top-1 mean delta | top-3 mean delta |
+| --- | ---: | ---: | ---: |
+| airplane | 176 | 2.7214 | 3.0395 |
+| chair | 164 | 1.0112 | 1.0323 |
+| table | 167 | 1.2414 | 1.3009 |
+
+The mined skill families used by the learned selector are interpretable:
+`recenter_then_shrink`, `escape_local_minimum_expand_then_refine`, and
+`shrink_slack_face`.  The key point is that the learned model does not replace
+the exact SMART reward.  It selects a small set of reusable variable-length
+macro programs; each proposed update is still accepted only after exact native
+SMART/Manifold validation and rollback support.
+
+This clears the opt-in macro-skill release gate.  The learned path is still not
+the package-wide default because the default paper reproduction path is kept as
+the unchanged exact C++ SMART pipeline, and a stronger default promotion still
+requires full-pipeline learned-router plus macro-skill validation together.
+
+### 2026-06-04 Refine/MCTS Stage-Source Macro Gate
+
+The 507-case gate above validates prepared replay-ready bbox states.  I then
+added stage-aware bbox selection to the benchmark runner:
+
+```bash
+PYTHONPATH=. python experiments/macro_search/run_fresh_matched_macro_benchmark.py \
+  --run-root runs/learned_macro_500_20260603 \
+  --tetra-root runs/learned_macro_500_20260603/tetra \
+  --extra-tetra-root runs/learned_macro_extra_180_20260604/tetra \
+  --bbox-root runs/learned_macro_500_20260603 \
+  --bbox-root runs/learned_macro_extra_180_20260604 \
+  --bbox-source refine
+```
+
+The same command with `--bbox-source mcts` evaluates the post-MCTS bbox state
+instead.  This matters because a deployable macro controller must work on the
+actual refine/MCTS stage artifacts, not only on the embedded prepared bbox
+metadata in the tetra folders.
+
+The strongest stage-source setting so far is:
+
+```text
+selector: knowledge_base_program_gate
+top_k: 3
+exact_budget: 3
+macro_memory_pool_size: -1   # pure program-gate order
+```
+
+| bbox source | cases | accepted | exact attempts | mean portfolio delta | mean learned delta | learned / portfolio | attempt reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| refine | 456 | 456 | 3 | 0.7236 | 1.2881 | 1.780x | 81.25% |
+| mcts | 456 | 456 | 3 | 0.7234 | 1.2876 | 1.780x | 81.25% |
+
+Reports:
+
+```text
+experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_refine_source_456_20260604/kb_program_gate_top3_best_positive.jsonl.summary.json
+experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_mcts_source_456_20260604/kb_program_gate_top3_best_positive.jsonl.summary.json
+```
+
+Interpretation: the pure program-gate top-3 selector fixes the chair failures
+seen with the scalar MLP top-k selector.  It accepts every evaluated refine and
+MCTS stage state, still uses exact SMART/Manifold validation for each proposed
+macro, and cuts the exact skill portfolio from 16 candidates to 3.  This is a
+stronger opt-in production candidate, but it is still not a full MCTS
+replacement claim until we run mesh-level wall-time/final-metric comparisons
+against the full historical MCTS pipeline.
+
+The supported, tracked resumable expansion runner is:
+
+```bash
+PYTHONPATH=. python scripts/run_macro_replay_balanced_chunks.py \
+  --config experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/learned_macro_500_20260603.yaml \
+  --chunk-size 8 \
+  --log experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/chunk_run_log.jsonl
+```
+
+The runner skips chunks already recorded with `returncode=0` in the log, so it
+can be rerun safely after interruption:
+
+```bash
+PYTHONPATH=. python scripts/run_macro_replay_balanced_chunks.py \
+  --config experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/learned_macro_500_20260603.yaml \
+  --chunk-size 1 \
+  --limit-chunks 32 \
+  --log experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/chunk_run_log.jsonl
+```
+
+For production-default evidence, use the category-balanced scheduler rather
+than exhausting airplane first:
+
+```bash
+PYTHONPATH=. python scripts/run_macro_replay_balanced_chunks.py \
+  --config experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/learned_macro_500_20260603.yaml \
+  --chunk-size 1 \
+  --balanced-round-robin \
+  --target-per-category 50 \
+  --log experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/chunk_run_log.jsonl
+```
+
+After generating chunks, run a matched macro-skill benchmark from those
+artifacts:
+
+```bash
+PYTHONPATH=. python experiments/macro_search/run_fresh_matched_macro_benchmark.py \
+  --run-root runs/learned_macro_500_20260603 \
+  --tetra-root runs/learned_macro_500_20260603/tetra \
+  --bbox-root runs/learned_macro_500_20260603 \
+  --out-dir experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_learned_macro_500 \
+  --require-min-cases 50 \
+  --max-skills-per-case 16 \
+  --portfolio-candidate-count 64 \
+  --controller-candidate-count 256 \
+  --jobs 4
+```
+
+The package API for the multi-round substructure planner is:
+
+```python
+import smart
+
+result = smart.run_macro_skill_planner(
+    engine,
+    category="airplane",
+    max_rounds=3,
+    profile_schedule=("balanced", "learned_efficient", "quality"),
+)
+```
+
+The packaged opt-in pipeline profile now enables this planner:
+
+```bash
+smart --config configs/learned_macro_safe.yaml run
+```
+
+Internally this runs the normal exact C++ SMART stages first, then executes
+`macro_skill.planner.enabled=true` as an exact-validated post-MCTS
+substructure-planning pass.  The default paper configs remain unchanged.
+
+For smoke testing the runner:
+
+```bash
+PYTHONPATH=. python scripts/run_macro_replay_balanced_chunks.py \
+  --config experiments/macro_search/runs/parameterized_skills_4k/dataset_500_20260603/learned_macro_500_20260603.yaml \
+  --chunk-size 1 --limit-chunks 1
+```
+
+The first real chunk completed successfully in `44.62s` for one new airplane
+mesh through normalize, tetra, preseg, merge, refine, and MCTS.
+
+### Bigger Transformer Status
+
+A bigger Transformer can help as a **teacher** for ordering candidates and
+macro-skill families, but it is not automatically a better release backend.
+The production bottleneck is exact SMART/Manifold scoring.  A large PyTorch/MPS
+or Ollama/LLM model only becomes useful if it either:
+
+1. reduces exact calls while keeping the zero-regression gate,
+2. is distilled into the packaged C++ `.smartmlp`/small native scorer, or
+3. ships behind an opt-in dependency profile with measured end-to-end speed.
+
+The current deployable model is therefore still the native C++ DeepSets/MLP
+policy plus exact top-K validation.  Transformer-scale training should continue
+in `experiments/macro_search` as a teacher/distillation path, not as the default
+runtime until it passes the same 500+ strict replay-ready gate.
+
+### 2026-06-04 Release Integration Check
+
+The reusable 3D substructure planner is now wired into the release-facing
+package surface:
+
+- public Python API:
+  `smart.run_macro_skill_planner()` and
+  `smart.run_macro_skill_planner_from_files()`;
+- native-facing helper API:
+  `smart.cpp.run_builtin_macro_skill_planner()` and
+  `smart.cpp.run_builtin_macro_skill_planner_from_files()`;
+- CLI:
+  `smart macro-skill --planner --planner-profile-schedule balanced learned_efficient quality`;
+- pipeline config:
+  `configs/learned_macro_safe.yaml` and the mirrored wheel config
+  `smart/configs/learned_macro_safe.yaml` set
+  `macro_skill.planner.enabled=true`;
+- stage behavior:
+  the macro-skill stage exports the unchanged input bbox state when no exact
+  validated skill improves the score, so downstream render/evaluate stages do
+  not need special failure handling.
+
+Verification run:
+
+```bash
+PYTHONPATH=. python3 -m pytest -q tests
+PYTHONPATH=. python3 -m smart --config configs/learned_macro_safe.yaml learned-release-readiness --json
+PYTHONPATH=. python3 -m smart --config configs/learned_macro_safe.yaml run --dry-run
+```
+
+Result: `182 passed`; readiness reports `can_ship_opt_in=true` and
+`can_be_default=false`; dry-run resolves the full learned macro profile without
+changing the exact SMART default path.
+
+This means the current research contribution is deployable as an opt-in
+release-candidate planner, not yet as a default MCTS replacement.  The remaining
+production-default requirement is still the same: at least 500 fresh strict
+replay-ready mesh states with zero exact-score regressions and non-worse
+end-to-end quality.
+
+For MCTS replacement experiments, use the packaged refine-only profile. It uses
+the same exact-validated planner on the refine output and skips MCTS:
+
+```bash
+smart --config configs/learned_macro_refine_only.yaml run
+```
+
+This is the correct experimental path for the stronger claim.  It should be
+benchmarked against `learned_macro_safe.yaml` without those overrides, measuring
+final exact score, wall time, exact skill attempts, and render/evaluation
+artifacts.  The current package reports this path as
+`research_only_not_default_ready` because category-balanced 500+ fresh evidence
+is still missing.
+
+The current refine-only fresh smoke on generated 3-category cases is:
+
+```text
+cases=76, category_counts={airplane:26, chair:24, table:26}, losses=0
+exact attempts: 16 portfolio -> 3 learned top-3
+mean exact delta: 1.4949 portfolio -> 2.1103 learned top-3
+report=experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_refine_only_replacement_seed76_3cat_20260604/fresh_matched_report.json
+```
+
+This supports keeping the profile packaged for research use, but it is not yet
+category-balanced enough to replace MCTS by default.

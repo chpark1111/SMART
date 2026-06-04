@@ -34,9 +34,13 @@ __all__ = [
     "rank_builtin_macro_skills",
     "run_macro_skill_controller",
     "run_macro_skill_controller_from_files",
+    "run_macro_skill_planner",
+    "run_macro_skill_planner_from_files",
     "run_native_pipeline",
     "run_builtin_macro_skill_controller",
     "run_builtin_macro_skill_controller_from_files",
+    "run_builtin_macro_skill_planner",
+    "run_builtin_macro_skill_planner_from_files",
     "run",
     "run_pipeline",
     "score_local_refine_gate",
@@ -48,7 +52,7 @@ __all__ = [
     "workspace",
 ]
 
-__version__ = "0.1.17"
+__version__ = "0.1.19"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
     "build_linear_action_prior_from_traces",
@@ -79,8 +83,12 @@ _API_EXPORTS = {
     "rank_builtin_macro_skills",
     "run_macro_skill_controller",
     "run_macro_skill_controller_from_files",
+    "run_macro_skill_planner",
+    "run_macro_skill_planner_from_files",
     "run_builtin_macro_skill_controller",
     "run_builtin_macro_skill_controller_from_files",
+    "run_builtin_macro_skill_planner",
+    "run_builtin_macro_skill_planner_from_files",
     "run_native_pipeline",
     "run",
     "run_pipeline",
@@ -211,6 +219,16 @@ def __getattr__(name: str):
 
         globals()[name] = run_macro_skill_controller
         return run_macro_skill_controller
+    if name == "run_builtin_macro_skill_planner":
+        from .macro_skills import run_builtin_macro_skill_planner
+
+        globals()[name] = run_builtin_macro_skill_planner
+        return run_builtin_macro_skill_planner
+    if name == "run_macro_skill_planner":
+        from .api import run_macro_skill_planner
+
+        globals()[name] = run_macro_skill_planner
+        return run_macro_skill_planner
     if name == "run_builtin_macro_skill_controller_from_files":
         from .macro_skills import run_builtin_macro_skill_controller_from_files
 
@@ -221,6 +239,16 @@ def __getattr__(name: str):
 
         globals()[name] = run_macro_skill_controller_from_files
         return run_macro_skill_controller_from_files
+    if name == "run_builtin_macro_skill_planner_from_files":
+        from .macro_skills import run_builtin_macro_skill_planner_from_files
+
+        globals()[name] = run_builtin_macro_skill_planner_from_files
+        return run_builtin_macro_skill_planner_from_files
+    if name == "run_macro_skill_planner_from_files":
+        from .api import run_macro_skill_planner_from_files
+
+        globals()[name] = run_macro_skill_planner_from_files
+        return run_macro_skill_planner_from_files
     if name == "macro_skill_profile_summary":
         from .macro_skills import macro_skill_profile_summary
 

@@ -1878,6 +1878,51 @@ def test_builtin_macro_skill_controller_smoke_on_native_engine() -> None:
         assert preset_result["exact_budget"] in {1, 2}
 
 
+def test_builtin_macro_skill_planner_smoke_on_native_engine() -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    faces = sc.native_tetra_surface_faces(voxels)
+    engine = sc.NativeSmartEngine(
+        vertices,
+        faces,
+        voxels,
+        [1.0 / 6.0],
+        [[0.25, 0.25, 0.25]],
+        [[-0.3, -0.3, -0.3, 0.7, 0.7, 0.7]],
+        [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]],
+        "tet",
+        2,
+        0.1,
+        1.0 / 6.0,
+        -0.1,
+        True,
+        1024,
+        "mesh",
+    )
+
+    result = sc.run_builtin_macro_skill_planner(
+        engine,
+        category="table",
+        max_rounds=2,
+        profile_schedule=("balanced", "learned_efficient"),
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+    )
+
+    assert result["exact_validator"] == "native_smart_manifold"
+    assert result["rollback_on_failure"] is True
+    assert result["accepted_non_worse"] is True
+    assert result["deployment_status"] == "release_candidate_opt_in_substructure_planner"
+    assert result["default_smart_path_changed"] is False
+    assert result["round_count"] <= 2
+    assert result["attempt_count"] >= result["exact_budget"] >= 0
+    assert result["score_delta"] >= -1.0e-12
+    assert result["final_score"] >= result["initial_score"] - 1.0e-12
+    assert engine.stats()["num_boxes"] == 1.0
+    assert engine.stats()["native_macro_skill_execute_calls"] > 0.0
+
+
 def test_builtin_macro_skill_controller_from_files_smoke(tmp_path) -> None:
     vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
     voxels = [[0, 1, 2, 3]]
@@ -1916,6 +1961,47 @@ def test_builtin_macro_skill_controller_from_files_smoke(tmp_path) -> None:
     assert result["native_selector_cache_stats"]["calls"] > 0.0
     assert result["engine"].stats()["num_boxes"] == 1.0
     assert result["engine"].stats()["native_macro_select_exact_action_calls"] > 0.0
+
+
+def test_builtin_macro_skill_planner_from_files_smoke(tmp_path) -> None:
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    voxels = [[0, 1, 2, 3]]
+    msh = tmp_path / "one_tet.msh"
+    sc.native_save_gmsh(str(msh), vertices, sc.native_tetra_surface_faces(voxels), voxels)
+    metadata = tmp_path / "bbox_params.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [-0.3, -0.3, -0.3, 0.7, 0.7, 0.7],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = sc.run_builtin_macro_skill_planner_from_files(
+        msh_path=msh,
+        bbox_metadata_path=metadata,
+        category="table",
+        max_rounds=2,
+        profile_schedule=("balanced",),
+        top_k=2,
+        candidate_count=32,
+        max_steps=4,
+    )
+
+    assert result["exact_validator"] == "native_smart_manifold"
+    assert result["rollback_on_failure"] is True
+    assert result["accepted_non_worse"] is True
+    assert result["deployment_status"] == "release_candidate_opt_in_substructure_planner"
+    assert result["msh_path"] == str(msh)
+    assert result["bbox_metadata_path"] == str(metadata)
+    assert result["engine"].stats()["num_boxes"] == 1.0
 
 
 def test_smart_cpp_native_executable_refine_mcts_runs_in_one_process(tmp_path) -> None:

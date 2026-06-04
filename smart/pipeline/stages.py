@@ -3268,6 +3268,15 @@ def _macro_skill_exp_name(
     exact_budget = stage_cfg.get("exact_budget")
     if exact_budget is not None:
         name += f"_budget{int(exact_budget)}"
+    memory_pool = int(stage_cfg.get("macro_memory_pool_size", 5) or 5)
+    if memory_pool != 5:
+        name += f"_mempool{memory_pool}"
+    planner_cfg = stage_cfg.get("planner", {}) if isinstance(stage_cfg.get("planner", {}), dict) else {}
+    if planner_cfg.get("enabled", False):
+        schedule = "-".join(str(item) for item in planner_cfg.get("profile_schedule", ["balanced"]) if str(item))
+        name += f"_planner_r{int(planner_cfg.get('max_rounds', 3) or 3)}"
+        if schedule:
+            name += f"_{schedule}"
     if not stage_cfg.get("native_executor", True):
         name += "_pythonexec"
     exp_tag = str(stage_cfg.get("exp_tag", "") or "").strip()
@@ -3304,6 +3313,8 @@ def _macro_skill_stage_command(
         str(stage_cfg.get("candidate_count", 256)),
         "--top-k",
         str(stage_cfg.get("top_k", 5)),
+        "--macro-memory-pool-size",
+        str(stage_cfg.get("macro_memory_pool_size", 5)),
         "--max-steps",
         str(stage_cfg.get("max_steps", 16)),
         "--quality-preset",
@@ -3320,6 +3331,17 @@ def _macro_skill_stage_command(
         str(bbox_out),
         "--json",
     ]
+    planner_cfg = stage_cfg.get("planner", {}) if isinstance(stage_cfg.get("planner", {}), dict) else {}
+    if planner_cfg.get("enabled", False):
+        command.append("--planner")
+        command.extend(["--planner-max-rounds", str(planner_cfg.get("max_rounds", 3))])
+        schedule = [str(item) for item in planner_cfg.get("profile_schedule", ["balanced"]) if str(item)]
+        if schedule:
+            command.append("--planner-profile-schedule")
+            command.extend(schedule)
+        command.extend(["--planner-min-round-delta", str(planner_cfg.get("min_round_delta", 1.0e-12))])
+        if not planner_cfg.get("stop_after_noop", True):
+            command.append("--no-planner-stop-after-noop")
     if stage_cfg.get("exact_budget") is not None:
         command.extend(["--exact-budget", str(stage_cfg["exact_budget"])])
     if not stage_cfg.get("stateful_union_cache", True):
@@ -3365,17 +3387,6 @@ def run_macro_skill_mesh(
     input_stage = str(stage_cfg.get("input_stage", "mcts") or "mcts")
     input_root = stage_root(cfg, input_stage, category)
     input_exp = latest_exp_dir_for_bbox(input_root, mesh_id)
-    if input_exp is None:
-        return _base_record(
-            cfg,
-            category,
-            mesh_id,
-            "macro_skill",
-            started,
-            status="skipped",
-            error=f"missing {input_stage} bbox output",
-            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
-        )
 
     try:
         from smart import native_runner
@@ -3391,7 +3402,22 @@ def run_macro_skill_mesh(
             metadata={"input_stage": input_stage, "safe_noop_fallback": True},
         )
 
-    metadata_path = native_runner.find_bbox_params_metadata(input_exp, mesh_id)
+    metadata_path = native_runner.find_bbox_params_metadata(input_exp, mesh_id) if input_exp is not None else None
+    if metadata_path is None:
+        native_bbox = native_pipeline_bbox_dir(cfg, category, mesh_id, input_stage)
+        if native_bbox is not None:
+            metadata_path = native_bbox / "bbox_params.json"
+    if metadata_path is None:
+        return _base_record(
+            cfg,
+            category,
+            mesh_id,
+            "macro_skill",
+            started,
+            status="skipped",
+            error=f"missing {input_stage} bbox output",
+            metadata={"input_stage": input_stage, "safe_noop_fallback": True},
+        )
     if metadata_path is None or not metadata_path.exists():
         return _base_record(
             cfg,
@@ -3441,6 +3467,18 @@ def run_macro_skill_mesh(
         "native_executor": bool(stage_cfg.get("native_executor", True)),
         "exact_validator": "native_smart_manifold",
     }
+    planner_cfg = stage_cfg.get("planner", {}) if isinstance(stage_cfg.get("planner", {}), dict) else {}
+    planner_enabled = bool(planner_cfg.get("enabled", False))
+    if planner_enabled:
+        metadata.update(
+            {
+                "planner_enabled": True,
+                "planner_max_rounds": int(planner_cfg.get("max_rounds", 3) or 3),
+                "planner_profile_schedule": [
+                    str(item) for item in planner_cfg.get("profile_schedule", ["balanced"]) if str(item)
+                ],
+            }
+        )
     if dry_run:
         return _base_record(
             cfg,
@@ -3455,28 +3493,43 @@ def run_macro_skill_mesh(
         )
 
     try:
-        from smart.api import run_macro_skill_controller_from_files
+        if planner_enabled:
+            from smart.api import run_macro_skill_planner_from_files as _run_macro_skill_from_files
+        else:
+            from smart.api import run_macro_skill_controller_from_files as _run_macro_skill_from_files
 
-        result = run_macro_skill_controller_from_files(
-            msh_path=msh_path,
-            bbox_metadata_path=metadata_path,
-            category=category["name"],
-            cover_penalty=float(stage_cfg.get("cover_penalty", 100)),
-            pen_rate=float(stage_cfg.get("pen_rate", 1.0)),
-            num_action_scale=int(stage_cfg.get("num_action_scale", 2)),
-            action_unit=float(stage_cfg.get("action_unit", 0.01)),
-            candidate_count=int(stage_cfg.get("candidate_count", 256)),
-            top_k=int(stage_cfg.get("top_k", 5)),
-            exact_budget=stage_cfg.get("exact_budget"),
-            max_steps=int(stage_cfg.get("max_steps", 16)),
-            quality_preset=str(stage_cfg.get("quality_preset", "balanced")),
-            repeat_mode=str(stage_cfg.get("repeat_mode", "guarded_variable")),
-            target_aware_execution=bool(stage_cfg.get("target_aware_execution", False)),
-            native_executor=bool(stage_cfg.get("native_executor", True)),
-            volume_method=str(stage_cfg.get("volume_method", "mesh")),
-            stateful_union_cache=bool(stage_cfg.get("stateful_union_cache", True)),
-            cache_capacity=int(stage_cfg.get("stateful_cache_capacity", 65536)),
-        )
+        macro_kwargs: dict[str, Any] = {
+            "msh_path": msh_path,
+            "bbox_metadata_path": metadata_path,
+            "category": category["name"],
+            "cover_penalty": float(stage_cfg.get("cover_penalty", 100)),
+            "pen_rate": float(stage_cfg.get("pen_rate", 1.0)),
+            "num_action_scale": int(stage_cfg.get("num_action_scale", 2)),
+            "action_unit": float(stage_cfg.get("action_unit", 0.01)),
+            "candidate_count": int(stage_cfg.get("candidate_count", 256)),
+            "top_k": int(stage_cfg.get("top_k", 5)),
+            "exact_budget": stage_cfg.get("exact_budget"),
+            "max_steps": int(stage_cfg.get("max_steps", 16)),
+            "quality_preset": str(stage_cfg.get("quality_preset", "balanced")),
+            "repeat_mode": str(stage_cfg.get("repeat_mode", "guarded_variable")),
+            "target_aware_execution": bool(stage_cfg.get("target_aware_execution", False)),
+            "native_executor": bool(stage_cfg.get("native_executor", True)),
+            "volume_method": str(stage_cfg.get("volume_method", "mesh")),
+            "stateful_union_cache": bool(stage_cfg.get("stateful_union_cache", True)),
+            "cache_capacity": int(stage_cfg.get("stateful_cache_capacity", 65536)),
+        }
+        if planner_enabled:
+            macro_kwargs.update(
+                {
+                    "max_rounds": int(planner_cfg.get("max_rounds", 3) or 3),
+                    "profile_schedule": tuple(
+                        str(item) for item in planner_cfg.get("profile_schedule", ["balanced"]) if str(item)
+                    ),
+                    "min_round_delta": float(planner_cfg.get("min_round_delta", 1.0e-12)),
+                    "stop_after_noop": bool(planner_cfg.get("stop_after_noop", True)),
+                }
+            )
+        result = _run_macro_skill_from_files(**macro_kwargs)
         engine = result.pop("engine", None)
         if engine is None or not hasattr(engine, "export_bbox_dir"):
             raise RuntimeError("macro-skill controller returned no exportable native engine")
@@ -3496,8 +3549,12 @@ def run_macro_skill_mesh(
                 "exported_bbox_count": exported,
                 "result_json": str(result_json),
                 "deployment_status": str(result.get("deployment_status", "")),
+                "planner_enabled": planner_enabled,
             }
         )
+        if planner_enabled:
+            metadata["accepted_rounds"] = int(result.get("accepted_rounds", 0) or 0)
+            metadata["round_count"] = int(result.get("round_count", 0) or 0)
         status = "success" if exported > 0 else "failed"
         error = None if status == "success" else "macro-skill exported no bbox objects"
     except Exception as exc:
@@ -4256,6 +4313,34 @@ def latest_exp_dir_for_bbox(root: Path, mesh_id: str) -> Path | None:
     return Path(*parts[:result_index])
 
 
+def native_pipeline_bbox_dir(
+    cfg: dict[str, Any],
+    category: dict[str, Any],
+    mesh_id: str,
+    input_stage: str,
+) -> Path | None:
+    """Return bbox metadata exported by the C++ native one-shot pipeline.
+
+    The legacy Python stages write bbox directories under
+    ``<stage>/<category>/<exp>/result/...``.  The C++ native pipeline writes the
+    same bbox artifacts directly under ``native_pipeline/<category>/<mesh>``.
+    Downstream stages should be able to consume either layout.
+    """
+
+    stage_dir_by_input = {
+        "refine": "refine_bboxs_steps0",
+        "mcts": "mcts_bboxs_steps0",
+        "mcts_guarded": "mcts_bboxs_steps0",
+    }
+    stage_dir = stage_dir_by_input.get(str(input_stage))
+    if stage_dir is None:
+        return None
+    candidate = workspace_path(cfg, "native_pipeline", category["name"], mesh_id, stage_dir)
+    if candidate.is_dir() and (candidate / "bbox_params.json").exists():
+        return candidate
+    return None
+
+
 def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: str, input_stage: str) -> Path | None:
     manifest_bbox = latest_manifest_bbox_dir(cfg, category, mesh_id, input_stage)
     if manifest_bbox is not None:
@@ -4268,7 +4353,10 @@ def bbox_dir_for_render(cfg: dict[str, Any], category: dict[str, Any], mesh_id: 
         "local_refine",
         "local_refine_guarded",
     }:
-        return latest_bbox_dir(stage_root(cfg, input_stage, category), mesh_id)
+        found = latest_bbox_dir(stage_root(cfg, input_stage, category), mesh_id)
+        if found is not None:
+            return found
+        return native_pipeline_bbox_dir(cfg, category, mesh_id, input_stage)
     if input_stage == "merge":
         return latest_bbox_dir(stage_root(cfg, "merge", category), mesh_id)
     generic_stage_root = stage_root(cfg, input_stage, category)

@@ -67,9 +67,9 @@ def macro_skill_profile_summary() -> dict[str, Any]:
             "can_ship_opt_in": True,
             "can_be_default": False,
             "default_blockers": [
-                "500+ replay-ready held-out states with zero exact-score regression",
-                "fresh full-pipeline mesh-level validation after refine/MCTS",
-                "automatic no-op fallback integration in normal pipeline stage orchestration",
+                "paper reproduction default must remain unchanged unless the learned controller is explicitly selected",
+                "full-pipeline learned-router plus macro-skill default promotion still needs mesh-level validation together",
+                "MCTS replacement claim still needs larger full-pipeline validation beyond the current stage-source replay gates",
             ],
             "promotion_requirements": {
                 "min_replay_states": 500,
@@ -77,6 +77,18 @@ def macro_skill_profile_summary() -> dict[str, Any]:
                 "min_mean_quality_gain_vs_balanced": 0.0,
                 "fallback_contract_required": True,
                 "pipeline_stage_required": True,
+            },
+            "implemented_release_requirements": {
+                "python_api": True,
+                "cli": True,
+                "pipeline_stage": True,
+                "noop_fallback_export": True,
+                "native_skill_executor": True,
+                "exact_rollback_contract": True,
+                "fresh_replay_500_zero_regression": True,
+                "fresh_replay_500_cases": 507,
+                "refine_stage_program_gate_456_zero_regression": True,
+                "mcts_stage_program_gate_456_zero_regression": True,
             },
         },
         "exact_reward_contract": [
@@ -91,15 +103,160 @@ def macro_skill_profile_summary() -> dict[str, Any]:
             "native_executor": True,
             "stateful_union_cache": True,
             "post_refine_only": True,
+            "planner_enabled_in_learned_macro_safe": True,
         },
         "recommended_configs": [
             "configs/learned_macro_safe.yaml",
+            "configs/learned_macro_program_gate_top3.yaml",
+            "configs/learned_macro_refine_only.yaml",
         ],
         "recommended_commands": [
             "smart macro-skill-summary --json",
             "smart --config configs/learned_macro_safe.yaml run",
+            "smart --config configs/learned_macro_program_gate_top3.yaml run",
+            "smart --config configs/learned_macro_refine_only.yaml run",
+            "smart macro-skill --planner --planner-max-rounds 3 --planner-profile-schedule balanced learned_efficient quality ...",
             "smart --config configs/smoke_5.yaml --set stages.macro_skill=true --set render.input_stage=macro_skill run",
         ],
+        "substructure_planner": {
+            "status": "release_candidate_opt_in_substructure_planner",
+            "packaged_config": "configs/learned_macro_safe.yaml",
+            "profile_schedule": ["balanced", "learned_efficient", "quality"],
+            "max_rounds": 3,
+            "acceptance_rule": "commit best exact SMART/Manifold non-worse macro-skill update per round",
+            "fallback": "export unchanged bbox state when no skill improves",
+            "fresh_generated_seed13": {
+                "source": "runs/learned_macro_500_20260603",
+                "cases": 13,
+                "losses": 0,
+                "portfolio_exact_attempts": 16,
+                "learned_top3_exact_attempts": 3,
+                "exact_attempt_reduction": 0.8125,
+                "portfolio_mean_delta": 2.8538429317865424,
+                "learned_top3_mean_delta": 3.957335824896668,
+                "portfolio_ratio": 1.3866691053033269,
+            },
+            "fresh_generated_latest": {
+                "source": "runs/learned_macro_500_20260603 + runs/learned_macro_extra_180_20260604",
+                "report": (
+                    "experiments/macro_search/runs/parameterized_skills_4k/"
+                    "fresh_matched_learned_macro_combined_500_20260604_134819/fresh_matched_report.json"
+                ),
+                "cases": 507,
+                "category_counts": {"airplane": 176, "chair": 164, "table": 167},
+                "losses": 0,
+                "portfolio_exact_attempts": 16,
+                "learned_top1_exact_attempts": 1,
+                "learned_top3_exact_attempts": 3,
+                "top1_exact_attempt_reduction": 0.9375,
+                "top3_exact_attempt_reduction": 0.8125,
+                "portfolio_mean_delta": 1.4056951911381037,
+                "learned_top1_mean_delta": 1.6807023785940503,
+                "learned_top3_mean_delta": 1.8175371987451336,
+                "top1_portfolio_ratio": 1.195637851782996,
+                "top3_portfolio_ratio": 1.292981017651193,
+                "top1_delta_vs_portfolio": 0.27500718745594654,
+                "top3_delta_vs_portfolio": 0.41184200760702994,
+                "top3_oracle_regret": 0.0,
+                "positive_rate": 1.0,
+                "top1_mean_elapsed_s": 0.3883918590670615,
+                "top3_mean_elapsed_s": 0.8065568474043385,
+                "top1_skill_counts": {
+                    "recenter_then_shrink": 244,
+                    "escape_local_minimum_expand_then_refine": 176,
+                    "shrink_slack_face": 87,
+                },
+                "top3_skill_counts": {
+                    "recenter_then_shrink": 255,
+                    "escape_local_minimum_expand_then_refine": 175,
+                    "shrink_slack_face": 77,
+                },
+            },
+            "fresh_500_gate_passed": True,
+            "stage_source_latest": {
+                "selector": "knowledge_base_program_gate",
+                "config": "configs/learned_macro_program_gate_top3.yaml",
+                "top_k": 3,
+                "exact_budget": 3,
+                "macro_memory_pool_size": -1,
+                "exact_attempt_reduction": 0.8125,
+                "refine": {
+                    "source": "runs/learned_macro_500_20260603/refine + runs/learned_macro_extra_180_20260604/refine",
+                    "report": (
+                        "experiments/macro_search/runs/parameterized_skills_4k/"
+                        "fresh_matched_refine_source_456_20260604/kb_program_gate_top3_best_positive.jsonl.summary.json"
+                    ),
+                    "cases": 456,
+                    "accepted": 456,
+                    "positive_rate": 1.0,
+                    "portfolio_cases": 456,
+                    "portfolio_wins": 455,
+                    "portfolio_mean_delta": 0.7236037912762976,
+                    "learned_mean_delta": 1.2881294361511488,
+                    "delta_vs_portfolio": 0.5645256448748512,
+                    "portfolio_ratio": 1.7801584951332785,
+                    "mean_elapsed_s": 0.30388034530263214,
+                    "category_counts": {"airplane": 165, "chair": 137, "table": 154},
+                },
+                "mcts": {
+                    "source": "runs/learned_macro_500_20260603/mcts + runs/learned_macro_extra_180_20260604/mcts",
+                    "report": (
+                        "experiments/macro_search/runs/parameterized_skills_4k/"
+                        "fresh_matched_mcts_source_456_20260604/kb_program_gate_top3_best_positive.jsonl.summary.json"
+                    ),
+                    "cases": 456,
+                    "accepted": 456,
+                    "positive_rate": 1.0,
+                    "portfolio_cases": 456,
+                    "portfolio_wins": 455,
+                    "portfolio_mean_delta": 0.7233593688824418,
+                    "learned_mean_delta": 1.2876468120268543,
+                    "delta_vs_portfolio": 0.5642874431444125,
+                    "portfolio_ratio": 1.7800928105987093,
+                    "mean_elapsed_s": 0.2780545692763157,
+                    "category_counts": {"airplane": 165, "chair": 137, "table": 154},
+                },
+            },
+            "stage_source_gate_passed": True,
+            "default_blocker": (
+                "passed 507-case fresh strict replay gate and 456-case refine/MCTS "
+                "stage-source gates; still opt-in until learned router and macro-skill "
+                "are validated together on full mesh-level pipeline runs as the package default"
+            ),
+        },
+        "mcts_replacement_agent": {
+            "status": "research_only_not_default_ready",
+            "current_safe_use": "post_mcts_polishing",
+            "experimental_use": "refine_output_to_macro_planner_without_mcts",
+            "packaged_config": "configs/learned_macro_refine_only.yaml",
+            "command": "smart --config configs/learned_macro_refine_only.yaml run",
+            "fresh_refine_only_latest": {
+                "source": "runs/learned_macro_500_20260603/refine",
+                "report": (
+                    "experiments/macro_search/runs/parameterized_skills_4k/"
+                    "fresh_matched_refine_only_replacement_seed76_3cat_20260604/fresh_matched_report.json"
+                ),
+                "cases": 76,
+                "category_counts": {"airplane": 26, "chair": 24, "table": 26},
+                "losses": 0,
+                "portfolio_exact_attempts": 16,
+                "learned_top1_exact_attempts": 1,
+                "learned_top3_exact_attempts": 3,
+                "top1_exact_attempt_reduction": 0.9375,
+                "top3_exact_attempt_reduction": 0.8125,
+                "portfolio_mean_delta": 1.494923735774852,
+                "learned_top1_mean_delta": 1.9534924644994305,
+                "learned_top3_mean_delta": 2.110346960672846,
+                "top3_portfolio_ratio": 1.4116753317713606,
+                "top3_oracle_regret": 0.0,
+            },
+            "default_blockers": [
+                "456-case refine-source and MCTS-source replay gates pass with zero rejected positive states using program-gate top3",
+                "still needs 500+ mesh-level full-pipeline validation before replacing MCTS by default",
+                "needs direct wall-time and final metric comparison against full historical MCTS, not only post-stage replay",
+            ],
+            "acceptance_rule": "same exact SMART/Manifold non-worse validation as post-MCTS planner",
+        },
         "heldout_cases": 173,
         "previous_best": {
             "profile": "geometry_top2_exact_macro_memory",
@@ -396,7 +553,13 @@ def rank_macro_skills(
     memory_policy: dict[str, Any] | None,
     macro_memory_pool_size: int = 5,
 ) -> list[tuple[str, float]]:
-    """Rank skills by program gate, then re-rank the head by macro memory."""
+    """Rank skills by program gate, optionally re-ranking the head by memory.
+
+    ``macro_memory_pool_size < 0`` disables the memory re-rank and keeps the
+    pure program-gate order.  This is useful for reproducing the 456-case
+    refine/MCTS stage validation where the program-gate top-3 selector was the
+    exact-validated release candidate.
+    """
 
     rows = []
     for macro_id, skill in skills_by_id.items():
@@ -409,6 +572,8 @@ def rank_macro_skills(
         )
         rows.append((macro_id, base, memory))
     rows.sort(key=lambda item: item[1], reverse=True)
+    if macro_memory_pool_size < 0:
+        return [(macro_id, base) for macro_id, base, _memory in rows]
     pool_size = max(1, macro_memory_pool_size or len(rows))
     head = rows[:pool_size]
     tail = rows[pool_size:]
@@ -667,6 +832,150 @@ def run_builtin_macro_skill_controller(
     )
 
 
+def run_builtin_macro_skill_planner(
+    engine: Any,
+    *,
+    category: str,
+    max_rounds: int = 3,
+    profile_schedule: list[str] | tuple[str, ...] = ("balanced", "learned_efficient", "quality"),
+    min_round_delta: float = 1.0e-12,
+    stop_after_noop: bool = True,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run a guarded multi-round macro-skill planner on a native engine.
+
+    This is the deployable form of the "3D substructure planner" idea: each
+    round re-reads the current geometry state, tries a small profile portfolio,
+    and commits only the best exact-validated non-worse update.  The learned
+    skill policy proposes reusable variable-length programs, but exact
+    SMART/Manifold score remains the only acceptance signal.
+    """
+
+    max_rounds = max(0, int(max_rounds))
+    initial_bounds, initial_rotations, initial_score = engine.boxes()
+    planner_initial_score = float(initial_score)
+    profile_schedule = tuple(str(item) for item in profile_schedule if str(item))
+    if not profile_schedule:
+        profile_schedule = ("balanced",)
+    controller_kwargs = dict(kwargs)
+    controller_kwargs.pop("quality_preset", None)
+
+    rounds: list[dict[str, Any]] = []
+    total_attempt_count = 0
+    total_exact_budget = 0
+    accepted_rounds = 0
+    current_score = planner_initial_score
+    for round_index in range(max_rounds):
+        round_bounds, round_rotations, round_score = engine.boxes()
+        round_score = float(round_score)
+        best: dict[str, Any] | None = None
+        best_state: tuple[Any, Any, float] | None = None
+        profile_results: list[dict[str, Any]] = []
+
+        for preset in profile_schedule:
+            engine.reset_to_state(round_bounds, round_rotations, round_score)
+            result = run_builtin_macro_skill_controller(
+                engine,
+                category=category,
+                quality_preset=preset,
+                **controller_kwargs,
+            )
+            total_attempt_count += int(result.get("attempt_count", 0))
+            total_exact_budget += int(result.get("exact_budget", 0))
+            candidate_bounds, candidate_rotations, candidate_score = engine.boxes()
+            candidate_score = float(candidate_score)
+            candidate_delta = candidate_score - round_score
+            item = {
+                "profile": preset,
+                "accepted": bool(result.get("accepted")) and candidate_delta >= -1.0e-12,
+                "score_delta": candidate_delta,
+                "final_score": candidate_score,
+                "macro_id": result.get("macro_id"),
+                "skill": result.get("skill"),
+                "attempt_count": int(result.get("attempt_count", 0)),
+                "exact_budget": int(result.get("exact_budget", 0)),
+                "executed_steps": int(result.get("executed_steps", 0)),
+            }
+            profile_results.append(item)
+            if item["accepted"] and candidate_delta > min_round_delta:
+                if best is None or candidate_delta > float(best["score_delta"]):
+                    best = item
+                    best["controller_result"] = result
+                    best_state = (candidate_bounds, candidate_rotations, candidate_score)
+
+        if best is None or best_state is None:
+            engine.reset_to_state(round_bounds, round_rotations, round_score)
+            rounds.append(
+                {
+                    "round": round_index,
+                    "accepted": False,
+                    "initial_score": round_score,
+                    "final_score": round_score,
+                    "score_delta": 0.0,
+                    "profile_results": profile_results,
+                }
+            )
+            if stop_after_noop:
+                break
+            continue
+
+        engine.reset_to_state(best_state[0], best_state[1], best_state[2])
+        current_score = float(best_state[2])
+        accepted_rounds += 1
+        rounds.append(
+            {
+                "round": round_index,
+                "accepted": True,
+                "initial_score": round_score,
+                "final_score": current_score,
+                "score_delta": current_score - round_score,
+                "selected_profile": best["profile"],
+                "macro_id": best.get("macro_id"),
+                "skill": best.get("skill"),
+                "attempt_count": best.get("attempt_count"),
+                "exact_budget": best.get("exact_budget"),
+                "executed_steps": best.get("executed_steps"),
+                "profile_results": profile_results,
+            }
+        )
+
+    final_bounds, final_rotations, final_score = engine.boxes()
+    final_score = float(final_score)
+    total_delta = final_score - planner_initial_score
+    if total_delta < -1.0e-12:
+        engine.reset_to_state(initial_bounds, initial_rotations, planner_initial_score)
+        final_score = planner_initial_score
+        total_delta = 0.0
+        final_bounds, final_rotations = initial_bounds, initial_rotations
+
+    return {
+        "accepted": accepted_rounds > 0,
+        "accepted_rounds": accepted_rounds,
+        "round_count": len(rounds),
+        "max_rounds": max_rounds,
+        "profile_schedule": list(profile_schedule),
+        "score_delta": total_delta,
+        "initial_score": planner_initial_score,
+        "final_score": final_score,
+        "rounds": rounds,
+        "attempt_count": total_attempt_count,
+        "exact_budget": total_exact_budget,
+        "accepted_non_worse": total_delta >= -1.0e-12,
+        "exact_validator": "native_smart_manifold",
+        "rollback_on_failure": True,
+        "deployment_status": "release_candidate_opt_in_substructure_planner",
+        "default_smart_path_changed": False,
+        "quality_contract": (
+            "each planner round commits only the best exact SMART/Manifold non-worse macro-skill update"
+        ),
+        "final_state": {
+            "bounds": final_bounds,
+            "rotations": final_rotations,
+            "score": final_score,
+        },
+    }
+
+
 def _macro_skill_profile_for_preset(profile_summary: dict[str, Any], preset: str) -> dict[str, Any]:
     if preset == "quality":
         return profile_summary["quality_preset"]
@@ -753,6 +1062,54 @@ def run_builtin_macro_skill_controller_from_files(
     )
     engine.recompute_score(cover_penalty, pen_rate)
     result = run_builtin_macro_skill_controller(
+        engine,
+        category=category,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        num_action_scale=num_action_scale,
+        **kwargs,
+    )
+    result["engine"] = engine
+    result["msh_path"] = str(msh_path)
+    result["bbox_metadata_path"] = str(bbox_metadata_path)
+    return result
+
+
+def run_builtin_macro_skill_planner_from_files(
+    *,
+    msh_path: str | Path,
+    bbox_metadata_path: str | Path,
+    category: str,
+    cover_penalty: float = 100.0,
+    pen_rate: float = 1.0,
+    num_action_scale: int = 2,
+    action_unit: float = 0.01,
+    stateful_union_cache: bool = True,
+    cache_capacity: int = 65536,
+    volume_method: str = "mesh",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Load prepared SMART files and run the multi-round macro planner."""
+
+    from . import cpp
+    from .native_runner import load_bbox_params
+
+    bounds, rotations = load_bbox_params(bbox_metadata_path)
+    engine = cpp.native_smart_engine_from_gmsh(
+        str(msh_path),
+        bounds,
+        rotations,
+        category,
+        num_action_scale,
+        action_unit,
+        0.0,
+        0.0,
+        stateful_union_cache,
+        cache_capacity,
+        volume_method,
+    )
+    engine.recompute_score(cover_penalty, pen_rate)
+    result = run_builtin_macro_skill_planner(
         engine,
         category=category,
         cover_penalty=cover_penalty,

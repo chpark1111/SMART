@@ -177,6 +177,36 @@ def run_macro_skill_controller_from_files(
     )
 
 
+def run_macro_skill_planner(engine: Any, *, category: str, **kwargs: Any) -> dict[str, Any]:
+    """Run the packaged multi-round 3D substructure planner on an engine.
+
+    The planner repeatedly proposes variable-length macro skills and commits
+    only the best exact SMART/Manifold non-worse update per round.  It is an
+    opt-in release-candidate path; the default SMART pipeline is unchanged.
+    """
+    from .macro_skills import run_builtin_macro_skill_planner
+
+    return run_builtin_macro_skill_planner(engine, category=category, **kwargs)
+
+
+def run_macro_skill_planner_from_files(
+    *,
+    msh_path: str | Path,
+    bbox_metadata_path: str | Path,
+    category: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Load prepared SMART tetra/bbox files and run the macro-skill planner."""
+    from .macro_skills import run_builtin_macro_skill_planner_from_files
+
+    return run_builtin_macro_skill_planner_from_files(
+        msh_path=msh_path,
+        bbox_metadata_path=bbox_metadata_path,
+        category=category,
+        **kwargs,
+    )
+
+
 def evaluate(
     config: str | Path | dict[str, Any] | None = "configs/demo.yaml",
     *,
@@ -255,10 +285,20 @@ def learned_release_readiness_summary() -> dict[str, Any]:
         "macro_budget_quality_rule_v1.json",
         "macro_quality_gate_ridge_v1.json",
     }
-    opt_in_profiles = ["learned_auto_safe.yaml", "learned_macro_safe.yaml", "learned_frontier.yaml"]
+    opt_in_profiles = [
+        "learned_auto_safe.yaml",
+        "learned_macro_safe.yaml",
+        "learned_macro_program_gate_top3.yaml",
+        "learned_macro_refine_only.yaml",
+        "learned_frontier.yaml",
+    ]
     packaged_configs_ready = all(name in profiles for name in opt_in_profiles)
     router_opt_in = bool(router["release_gate"]["can_ship_opt_in"])
     macro_opt_in = bool(macro["release_gate"]["can_ship_opt_in"])
+    planner_latest = macro["substructure_planner"].get(
+        "fresh_generated_latest",
+        macro["substructure_planner"]["fresh_generated_seed13"],
+    )
     can_ship_opt_in = (
         router_opt_in
         and macro_opt_in
@@ -272,9 +312,9 @@ def learned_release_readiness_summary() -> dict[str, Any]:
         "can_ship_opt_in": can_ship_opt_in,
         "can_be_default": False,
         "default_blockers": [
-            "learned router and macro-skill need fresh full-pipeline held-out mesh-level validation together",
-            "macro-skill needs 500+ replay-ready fresh states with zero exact-score regression",
             "default path must preserve paper reproduction unless explicitly opted into learned controllers",
+            "learned router and macro-skill need fresh full-pipeline held-out mesh-level validation together before default promotion",
+            "MCTS replacement claim still needs full mesh-level wall-time and metric validation beyond stage-source replay",
         ],
         "opt_in_profiles": opt_in_profiles,
         "packaged_assets": {
@@ -305,11 +345,34 @@ def learned_release_readiness_summary() -> dict[str, Any]:
             "quality_mean_delta": macro["quality_preset"]["mean_delta"],
             "quality_losses": macro["quality_preset"]["losses_vs_conditional_budget_v1"],
         },
+        "substructure_planner": {
+            "status": macro["substructure_planner"]["status"],
+            "packaged_config": macro["substructure_planner"]["packaged_config"],
+            "profile_schedule": macro["substructure_planner"]["profile_schedule"],
+            "max_rounds": macro["substructure_planner"]["max_rounds"],
+            "fresh_generated_cases": planner_latest["cases"],
+            "fresh_generated_losses": planner_latest["losses"],
+            "fresh_generated_exact_attempt_reduction": planner_latest["top3_exact_attempt_reduction"],
+            "fresh_generated_mean_delta": planner_latest["learned_top3_mean_delta"],
+            "fresh_500_gate_passed": bool(macro["substructure_planner"].get("fresh_500_gate_passed", False)),
+            "fresh_generated_top1_exact_attempt_reduction": planner_latest["top1_exact_attempt_reduction"],
+            "fresh_generated_top1_mean_delta": planner_latest["learned_top1_mean_delta"],
+            "fresh_generated_top3_mean_delta": planner_latest["learned_top3_mean_delta"],
+            "fresh_generated_top1_delta_vs_portfolio": planner_latest.get("top1_delta_vs_portfolio"),
+            "fresh_generated_top3_delta_vs_portfolio": planner_latest.get("top3_delta_vs_portfolio"),
+            "fresh_generated_top1_portfolio_ratio": planner_latest.get("top1_portfolio_ratio"),
+            "fresh_generated_top3_portfolio_ratio": planner_latest.get("top3_portfolio_ratio"),
+            "stage_source_gate_passed": bool(macro["substructure_planner"].get("stage_source_gate_passed", False)),
+            "stage_source_latest": macro["substructure_planner"].get("stage_source_latest", {}),
+            "default_blocker": macro["substructure_planner"]["default_blocker"],
+        },
+        "mcts_replacement_agent": macro["mcts_replacement_agent"],
         "recommended_commands": [
             "smart learned-release-readiness --json",
             "smart learned-release-readiness --fail-if-not-ready",
             "smart --config configs/learned_auto_safe.yaml run",
             "smart --config configs/learned_macro_safe.yaml run",
+            macro["mcts_replacement_agent"]["command"],
             "smart learned-router-summary --json",
             "smart macro-skill-summary --json",
         ],

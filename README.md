@@ -358,6 +358,28 @@ Config profile:
 smart --config configs/learned_macro_safe.yaml run
 ```
 
+Stage-source validated top-3 program-gate profile:
+
+```bash
+smart --config configs/learned_macro_program_gate_top3.yaml run
+```
+
+This tighter opt-in profile keeps the exact SMART/Manifold validator, disables
+macro-memory reranking, and evaluates only the top three mined 3D macro-skill
+programs.  The current release gate passes both post-refine and post-MCTS
+stage-source replay (`456/456` accepted for each) while reducing exact
+macro-skill attempts by `81.25%` versus the 16-skill portfolio.
+
+MCTS-replacement research profile:
+
+```bash
+smart --config configs/learned_macro_refine_only.yaml run
+```
+
+This second profile skips MCTS and feeds refine output into the same
+exact-validated multi-round substructure planner. It is packaged for research
+and benchmarking, not enabled as the default paper reproduction path.
+
 Pipeline stage usage:
 
 ```bash
@@ -366,6 +388,12 @@ smart --config configs/smoke_5.yaml \
   --set macro_skill.quality_preset=balanced \
   macro_skill
 ```
+
+The stage first looks for regular `mcts`/`refine` stage outputs and then falls
+back to C++ native one-shot outputs under
+`runs/<profile>/native_pipeline/<category>/<mesh>/{mcts,refine}_bboxs_steps0`.
+This means `smart native-pipeline` results can be polished by `macro_skill`
+without manually copying `bbox_params.json`.
 
 To render the macro-skill output in the same pipeline:
 

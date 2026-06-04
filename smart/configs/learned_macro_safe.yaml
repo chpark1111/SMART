@@ -116,7 +116,14 @@
     "stateful_union_cache": true,
     "stateful_cache_capacity": 65536,
     "native_executor": true,
-    "target_aware_execution": false
+    "target_aware_execution": false,
+    "planner": {
+      "enabled": true,
+      "max_rounds": 3,
+      "profile_schedule": ["balanced", "learned_efficient", "quality"],
+      "min_round_delta": 1.0e-12,
+      "stop_after_noop": true
+    }
   },
   "render": {
     "backend": "fallback",

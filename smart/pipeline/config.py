@@ -271,6 +271,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "quality_preset": "balanced",
         "repeat_mode": "guarded_variable",
         "top_k": 5,
+        "macro_memory_pool_size": 5,
         "candidate_count": 256,
         "max_steps": 16,
         "exact_budget": None,
@@ -283,6 +284,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stateful_cache_capacity": 65536,
         "native_executor": True,
         "target_aware_execution": False,
+        "planner": {
+            "enabled": False,
+            "max_rounds": 3,
+            "profile_schedule": ["balanced", "learned_efficient", "quality"],
+            "min_round_delta": 1.0e-12,
+            "stop_after_noop": True,
+        },
         "timeout_sec": 10800,
     },
     "local_refine": {
@@ -387,24 +395,54 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     if path is None:
         return copy.deepcopy(DEFAULT_CONFIG)
 
-    config_path = Path(path).expanduser()
-    if not config_path.is_absolute():
-        cwd_path = Path.cwd() / config_path
-        repo_config_path = REPO_ROOT / config_path
-        package_config_path = Path(__file__).resolve().parents[1] / "configs" / config_path.name
-        if cwd_path.exists():
-            config_path = cwd_path
-        elif repo_config_path.exists():
-            config_path = repo_config_path
-        else:
-            config_path = package_config_path
-    text = config_path.read_text(encoding="utf-8")
-    loaded = _load_mapping(text, config_path)
+    config_path = _resolve_config_path(path)
+    loaded = _load_config_file(config_path, seen=set())
     cfg = deep_update(DEFAULT_CONFIG, loaded)
     _apply_engine_defaults(cfg, loaded)
     cfg["_config_path"] = str(config_path)
     cfg["_repo_root"] = str(REPO_ROOT)
     return cfg
+
+
+def _resolve_config_path(path: str | Path, *, current_dir: Path | None = None) -> Path:
+    config_path = Path(path).expanduser()
+    if config_path.is_absolute():
+        return config_path
+
+    candidates: list[Path] = []
+    if current_dir is not None:
+        candidates.append(current_dir / config_path)
+        candidates.append(current_dir / config_path.name)
+    candidates.extend(
+        [
+            Path.cwd() / config_path,
+            REPO_ROOT / config_path,
+            Path(__file__).resolve().parents[1] / "configs" / config_path.name,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
+
+
+def _load_config_file(config_path: Path, *, seen: set[Path]) -> dict[str, Any]:
+    resolved = config_path.resolve()
+    if resolved in seen:
+        raise ValueError(f"Circular config extends detected: {config_path}")
+    seen.add(resolved)
+    text = config_path.read_text(encoding="utf-8")
+    loaded = _load_mapping(text, config_path)
+    extends = loaded.pop("extends", None)
+    if extends is None:
+        seen.remove(resolved)
+        return loaded
+    if not isinstance(extends, (str, Path)):
+        raise TypeError(f"Config extends must be a string path: {config_path}")
+    base_path = _resolve_config_path(extends, current_dir=config_path.parent)
+    base_loaded = _load_config_file(base_path, seen=seen)
+    seen.remove(resolved)
+    return deep_update(base_loaded, loaded)
 
 
 def _apply_engine_defaults(cfg: dict[str, Any], loaded: dict[str, Any]) -> None:

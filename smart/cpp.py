@@ -98,6 +98,22 @@ def run_builtin_macro_skill_controller_from_files(**kwargs: Any) -> dict[str, An
     return _run(**kwargs)
 
 
+def run_builtin_macro_skill_planner(engine: Any, *, category: str, **kwargs: Any) -> dict[str, Any]:
+    """Run the packaged multi-round macro-skill planner on a native engine."""
+
+    from .macro_skills import run_builtin_macro_skill_planner as _run
+
+    return _run(engine, category=category, **kwargs)
+
+
+def run_builtin_macro_skill_planner_from_files(**kwargs: Any) -> dict[str, Any]:
+    """Load a native engine from files and run the macro-skill planner."""
+
+    from .macro_skills import run_builtin_macro_skill_planner_from_files as _run
+
+    return _run(**kwargs)
+
+
 ManifoldState = _backend.ManifoldState if _backend is not None and hasattr(_backend, "ManifoldState") else None  # type: ignore
 BBoxState = _backend.BBoxState if _backend is not None and hasattr(_backend, "BBoxState") else None  # type: ignore
 ManifoldBridgeMesh = _backend.ManifoldBridgeMesh if _backend is not None and hasattr(_backend, "ManifoldBridgeMesh") else None  # type: ignore
@@ -1964,6 +1980,7 @@ def learned_router_profile_summary() -> dict[str, Any]:
         "recommended_configs": [
             "configs/learned_auto_safe.yaml",
             "configs/learned_macro_safe.yaml",
+            "configs/learned_macro_refine_only.yaml",
             "configs/learned_frontier.yaml",
         ],
         "recommended_commands": [

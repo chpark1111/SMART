@@ -80,6 +80,8 @@ def test_smart_cli_lists_config_profiles(capsys) -> None:
     assert "learned_frontier.yaml" in names
     assert "learned_auto_safe.yaml" in names
     assert "learned_macro_safe.yaml" in names
+    assert "learned_macro_program_gate_top3.yaml" in names
+    assert "learned_macro_refine_only.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -123,6 +125,7 @@ def test_public_api_lists_config_profiles() -> None:
     assert "learned_frontier.yaml" in names
     assert "learned_auto_safe.yaml" in names
     assert "learned_macro_safe.yaml" in names
+    assert "learned_macro_refine_only.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -201,6 +204,47 @@ def test_learned_macro_safe_config_enables_safe_macro_stage() -> None:
     assert cfg["macro_skill"]["input_stage"] == "mcts"
     assert cfg["macro_skill"]["quality_preset"] == "balanced"
     assert cfg["macro_skill"]["native_executor"] is True
+    assert cfg["macro_skill"]["planner"]["enabled"] is True
+    assert cfg["macro_skill"]["planner"]["max_rounds"] == 3
+    assert cfg["macro_skill"]["planner"]["profile_schedule"] == [
+        "balanced",
+        "learned_efficient",
+        "quality",
+    ]
+    assert cfg["render"]["input_stage"] == "macro_skill"
+
+
+def test_learned_macro_program_gate_top3_config_matches_stage_source_gate() -> None:
+    cfg = load_config("configs/learned_macro_program_gate_top3.yaml")
+
+    assert cfg["run_name"] == "learned_macro_program_gate_top3"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["stages"]["macro_skill"] is True
+    assert cfg["macro_skill"]["input_stage"] == "mcts"
+    assert cfg["macro_skill"]["quality_preset"] == "custom"
+    assert cfg["macro_skill"]["top_k"] == 3
+    assert cfg["macro_skill"]["exact_budget"] == 3
+    assert cfg["macro_skill"]["macro_memory_pool_size"] == -1
+    assert cfg["macro_skill"]["planner"]["enabled"] is False
+    assert cfg["render"]["input_stage"] == "macro_skill"
+
+
+def test_learned_macro_refine_only_config_enables_mcts_replacement_research_profile() -> None:
+    cfg = load_config("configs/learned_macro_refine_only.yaml")
+
+    assert cfg["run_name"] == "learned_macro_refine_only"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["stages"]["refine"] is True
+    assert cfg["stages"]["mcts"] is False
+    assert cfg["stages"]["macro_skill"] is True
+    assert cfg["macro_skill"]["input_stage"] == "refine"
+    assert cfg["macro_skill"]["planner"]["enabled"] is True
+    assert cfg["macro_skill"]["planner"]["max_rounds"] == 3
+    assert cfg["macro_skill"]["planner"]["profile_schedule"] == [
+        "balanced",
+        "learned_efficient",
+        "quality",
+    ]
     assert cfg["render"]["input_stage"] == "macro_skill"
 
 
@@ -331,8 +375,48 @@ def test_smart_cli_macro_skill_summary(capsys) -> None:
     assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
     assert payload["release_gate"]["can_ship_opt_in"] is True
     assert payload["release_gate"]["can_be_default"] is False
+    assert payload["release_gate"]["implemented_release_requirements"]["pipeline_stage"] is True
     assert payload["deployment_default"]["post_refine_only"] is True
+    assert payload["deployment_default"]["planner_enabled_in_learned_macro_safe"] is True
+    assert payload["substructure_planner"]["status"] == "release_candidate_opt_in_substructure_planner"
+    assert payload["substructure_planner"]["fresh_500_gate_passed"] is True
+    assert payload["substructure_planner"]["fresh_generated_latest"]["cases"] == 507
+    assert payload["substructure_planner"]["fresh_generated_latest"]["category_counts"] == {
+        "airplane": 176,
+        "chair": 164,
+        "table": 167,
+    }
+    assert payload["substructure_planner"]["fresh_generated_latest"]["losses"] == 0
+    assert payload["substructure_planner"]["fresh_generated_latest"]["top1_exact_attempt_reduction"] == 0.9375
+    assert payload["substructure_planner"]["fresh_generated_latest"]["top3_exact_attempt_reduction"] == 0.8125
+    assert payload["substructure_planner"]["fresh_generated_latest"]["learned_top3_mean_delta"] > (
+        payload["substructure_planner"]["fresh_generated_latest"]["portfolio_mean_delta"]
+    )
+    assert payload["substructure_planner"]["stage_source_gate_passed"] is True
+    stage_latest = payload["substructure_planner"]["stage_source_latest"]
+    assert stage_latest["selector"] == "knowledge_base_program_gate"
+    assert stage_latest["top_k"] == 3
+    assert stage_latest["exact_budget"] == 3
+    assert stage_latest["macro_memory_pool_size"] == -1
+    assert stage_latest["refine"]["cases"] == 456
+    assert stage_latest["refine"]["accepted"] == 456
+    assert stage_latest["mcts"]["cases"] == 456
+    assert stage_latest["mcts"]["accepted"] == 456
+    assert stage_latest["refine"]["portfolio_ratio"] > 1.0
+    assert stage_latest["mcts"]["portfolio_ratio"] > 1.0
+    assert payload["substructure_planner"]["fresh_generated_seed13"]["losses"] == 0
+    assert payload["mcts_replacement_agent"]["status"] == "research_only_not_default_ready"
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 76
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["category_counts"] == {
+        "airplane": 26,
+        "chair": 24,
+        "table": 26,
+    }
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["losses"] == 0
     assert "configs/learned_macro_safe.yaml" in payload["recommended_configs"]
+    assert "configs/learned_macro_program_gate_top3.yaml" in payload["recommended_configs"]
+    assert "configs/learned_macro_refine_only.yaml" in payload["recommended_configs"]
     assert payload["best_practical"]["losses_vs_conditional_budget_v1"] == 0
     assert payload["quality_preset"]["losses_vs_conditional_budget_v1"] == 0
 
@@ -365,11 +449,26 @@ def test_smart_cli_learned_release_readiness(capsys) -> None:
     assert payload["can_be_default"] is False
     assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
     assert "learned_macro_safe.yaml" in payload["opt_in_profiles"]
+    assert "learned_macro_program_gate_top3.yaml" in payload["opt_in_profiles"]
+    assert "learned_macro_refine_only.yaml" in payload["opt_in_profiles"]
     assert payload["packaged_assets"]["policy_ready"] is True
     assert payload["packaged_assets"]["missing_skill_assets"] == []
     assert payload["packaged_assets"]["configs_ready"] is True
     assert payload["router"]["heldout_losses"] == 0
     assert payload["macro_skill"]["balanced_losses"] == 0
+    assert payload["substructure_planner"]["status"] == "release_candidate_opt_in_substructure_planner"
+    assert payload["substructure_planner"]["fresh_500_gate_passed"] is True
+    assert payload["substructure_planner"]["fresh_generated_cases"] == 507
+    assert payload["substructure_planner"]["fresh_generated_losses"] == 0
+    assert payload["substructure_planner"]["fresh_generated_exact_attempt_reduction"] > 0.0
+    assert payload["substructure_planner"]["fresh_generated_top3_delta_vs_portfolio"] > 0.0
+    assert payload["substructure_planner"]["stage_source_gate_passed"] is True
+    assert payload["substructure_planner"]["stage_source_latest"]["refine"]["accepted"] == 456
+    assert payload["substructure_planner"]["stage_source_latest"]["mcts"]["accepted"] == 456
+    assert payload["mcts_replacement_agent"]["status"] == "research_only_not_default_ready"
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 76
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["losses"] == 0
 
     assert smart_main(["learned-release-readiness"]) == 0
     text = capsys.readouterr().out
@@ -414,6 +513,17 @@ def test_public_api_exposes_learned_release_readiness() -> None:
     assert payload["can_be_default"] is False
     assert payload["router"]["status"] == "release_candidate_opt_in"
     assert payload["macro_skill"]["status"] == "release_candidate_opt_in_post_refine"
+    assert payload["substructure_planner"]["status"] == "release_candidate_opt_in_substructure_planner"
+    assert payload["substructure_planner"]["fresh_500_gate_passed"] is True
+    assert payload["substructure_planner"]["fresh_generated_cases"] == 507
+    assert payload["mcts_replacement_agent"]["experimental_use"] == "refine_output_to_macro_planner_without_mcts"
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
+    assert callable(smart.run_macro_skill_controller)
+    assert callable(smart.run_macro_skill_controller_from_files)
+    assert callable(smart.run_macro_skill_planner)
+    assert callable(smart.run_macro_skill_planner_from_files)
+    assert callable(smart.run_builtin_macro_skill_planner)
+    assert callable(smart.run_builtin_macro_skill_planner_from_files)
 
 
 def test_macro_skill_assets_load_and_rank() -> None:
@@ -494,6 +604,21 @@ def test_macro_skill_assets_load_and_rank() -> None:
     )
     assert ranked
     assert ranked[0][0] in skills
+    pure_program_ranked = macro_skills.rank_builtin_macro_skills(
+        "table",
+        skills_by_id=skills,
+        memory_policy=memory,
+        macro_memory_pool_size=-1,
+    )
+    expected_program_order = sorted(
+        skills,
+        key=lambda macro_id: macro_skills.program_gate_score(
+            category="table",
+            skill=skills[macro_id],
+        ),
+        reverse=True,
+    )
+    assert [macro_id for macro_id, _score in pure_program_ranked] == expected_program_order
 
     profile = smart.macro_skill_profile_summary()
     assert profile["packaged_profile"] == "geometry_top5_exact_guarded_variable_repeat_v2_balanced"
@@ -1597,6 +1722,107 @@ def test_macro_skill_stage_dry_run_uses_package_cli(tmp_path) -> None:
     assert record.metadata["exact_validator"] == "native_smart_manifold"
 
 
+def test_macro_skill_stage_dry_run_passes_program_gate_options(tmp_path) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path)
+    cfg["macro_skill"].update(
+        {
+            "quality_preset": "custom",
+            "top_k": 3,
+            "macro_memory_pool_size": -1,
+            "exact_budget": 3,
+        }
+    )
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", dry_run=True, force=True)
+
+    assert record.status == "dry_run"
+    assert record.command[record.command.index("--quality-preset") + 1] == "custom"
+    assert record.command[record.command.index("--top-k") + 1] == "3"
+    assert record.command[record.command.index("--macro-memory-pool-size") + 1] == "-1"
+    assert record.command[record.command.index("--exact-budget") + 1] == "3"
+    assert "_mempool-1" in str(record.output_path)
+
+
+def test_macro_skill_stage_can_use_native_pipeline_mcts_bbox(tmp_path) -> None:
+    mesh_root = tmp_path / "meshes" / "table"
+    cfg = {
+        "workspace": str(tmp_path),
+        "tetra": {"epsilon": 0.004, "edge_length": 0.2},
+        "normalization": {"enabled": False},
+        "stages": {"normalize": False},
+        "macro_skill": {
+            "input_stage": "mcts",
+            "quality_preset": "custom",
+            "repeat_mode": "guarded_variable",
+            "top_k": 3,
+            "macro_memory_pool_size": -1,
+            "candidate_count": 32,
+            "max_steps": 4,
+            "exact_budget": 3,
+            "cover_penalty": 100,
+            "pen_rate": 1.0,
+            "num_action_scale": 2,
+            "action_unit": 0.01,
+            "volume_method": "mesh",
+            "stateful_union_cache": True,
+            "stateful_cache_capacity": 128,
+            "native_executor": True,
+            "target_aware_execution": False,
+        },
+        "categories": [],
+    }
+    category = {"name": "table", "mesh_root": str(mesh_root)}
+    msh = mesh_tetra_dir(cfg, category, "mesh-a") / "tetra.msh"
+    msh.parent.mkdir(parents=True)
+    msh.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    native_bbox = tmp_path / "native_pipeline" / "table" / "mesh-a" / "mcts_bboxs_steps0"
+    native_bbox.mkdir(parents=True)
+    (native_bbox / "bbox0.obj").write_text("v 0 0 0\nf 1 1 1\n", encoding="utf-8")
+    (native_bbox / "bbox_params.json").write_text(
+        json.dumps(
+            {
+                "boxes": [
+                    {
+                        "index": 0,
+                        "bounds": [-0.3, -0.3, -0.3, 0.7, 0.7, 0.7],
+                        "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", dry_run=True, force=True)
+
+    assert record.status == "dry_run"
+    assert record.metadata["bbox_metadata_path"] == str(native_bbox / "bbox_params.json")
+    assert record.command[record.command.index("--bbox-metadata") + 1] == str(native_bbox / "bbox_params.json")
+    assert bbox_dir_for_render(cfg, category, "mesh-a", "mcts") == native_bbox
+
+
+def test_macro_skill_stage_dry_run_can_use_substructure_planner(tmp_path) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path)
+    cfg["macro_skill"]["planner"] = {
+        "enabled": True,
+        "max_rounds": 2,
+        "profile_schedule": ["balanced", "learned_efficient"],
+        "min_round_delta": 1.0e-12,
+        "stop_after_noop": True,
+    }
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", dry_run=True, force=True)
+
+    assert record.status == "dry_run"
+    assert record.command[:2] == ["smart", "macro-skill"]
+    assert "--planner" in record.command
+    assert record.command[record.command.index("--planner-max-rounds") + 1] == "2"
+    schedule_index = record.command.index("--planner-profile-schedule")
+    assert record.command[schedule_index + 1 : schedule_index + 3] == ["balanced", "learned_efficient"]
+    assert record.metadata["planner_enabled"] is True
+    assert record.metadata["planner_max_rounds"] == 2
+
+
 def test_macro_skill_stage_exports_noop_fallback(tmp_path, monkeypatch) -> None:
     cfg, category = _write_macro_skill_stage_inputs(tmp_path)
 
@@ -1634,6 +1860,50 @@ def test_macro_skill_stage_exports_noop_fallback(tmp_path, monkeypatch) -> None:
     assert record.metadata["exported_bbox_count"] == 1
     result_path = Path(record.metadata["result_json"])
     assert json.loads(result_path.read_text(encoding="utf-8"))["accepted"] is False
+
+
+def test_macro_skill_stage_uses_planner_api_when_enabled(tmp_path, monkeypatch) -> None:
+    cfg, category = _write_macro_skill_stage_inputs(tmp_path)
+    cfg["macro_skill"]["planner"] = {
+        "enabled": True,
+        "max_rounds": 2,
+        "profile_schedule": ["balanced"],
+        "min_round_delta": 1.0e-12,
+        "stop_after_noop": True,
+    }
+
+    class FakeEngine:
+        def export_bbox_dir(self, output: str) -> int:
+            out = Path(output)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "bbox0.obj").write_text("v 0 0 0\nf 1 1 1\n", encoding="utf-8")
+            (out / "bbox_params.json").write_text('{"boxes":[]}', encoding="utf-8")
+            return 1
+
+    def fake_planner(**kwargs):
+        assert kwargs["max_rounds"] == 2
+        assert kwargs["profile_schedule"] == ("balanced",)
+        return {
+            "engine": FakeEngine(),
+            "accepted": True,
+            "accepted_rounds": 1,
+            "round_count": 1,
+            "accepted_non_worse": True,
+            "score_delta": 0.25,
+            "attempt_count": 3,
+            "exact_budget": 1,
+            "deployment_status": "release_candidate_opt_in_substructure_planner",
+        }
+
+    monkeypatch.setattr("smart.api.run_macro_skill_planner_from_files", fake_planner)
+
+    record = run_macro_skill_mesh(cfg, category, "mesh-a", force=True)
+
+    assert record.status == "success"
+    assert record.metadata["planner_enabled"] is True
+    assert record.metadata["accepted_rounds"] == 1
+    assert record.metadata["round_count"] == 1
+    assert record.metadata["deployment_status"] == "release_candidate_opt_in_substructure_planner"
 
 
 def test_render_can_use_macro_skill_stage_output(tmp_path) -> None:

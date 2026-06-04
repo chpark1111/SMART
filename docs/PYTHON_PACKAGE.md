@@ -192,6 +192,17 @@ This runs the learned MCTS-prior profile, then the exact-validated macro-skill
 stage, and renders from `render.input_stage=macro_skill`. If no skill improves
 the score, the stage restores and exports the original bbox state.
 
+When used as a pipeline stage, `macro_skill` can consume either the legacy
+`mcts`/`refine` stage layout or the C++ native one-shot layout:
+
+```text
+runs/<profile>/native_pipeline/<category>/<mesh>/mcts_bboxs_steps0/bbox_params.json
+runs/<profile>/native_pipeline/<category>/<mesh>/refine_bboxs_steps0/bbox_params.json
+```
+
+That fallback lets users run the faster native pipeline first and then attach
+the exact-validated learned macro polish without moving files by hand.
+
 Use it after you already have prepared SMART tetra data and bbox metadata from
 merge/refine/MCTS:
 
@@ -227,6 +238,57 @@ The default uses the compact C++ macro-skill executor. Add
 `--no-native-executor` only when comparing against the Python skill loop for
 debugging or research ablation.
 
+For the current generalized 3D substructure planner, enable the multi-round
+planner wrapper. It re-ranks the packaged reusable skill families after every
+accepted update, tries a small exact-validated profile portfolio, commits only
+the best non-worse state for that round, and rolls back everything else:
+
+```python
+import smart
+
+result = smart.run_macro_skill_planner_from_files(
+    msh_path="runs/example/tetra/airplane/0001/tetra.msh",
+    bbox_metadata_path="runs/example/mcts/airplane/0001/bbox_params.json",
+    category="airplane",
+    max_rounds=3,
+    profile_schedule=("balanced", "learned_efficient", "quality"),
+    top_k=5,
+    candidate_count=256,
+)
+```
+
+The matching CLI form is:
+
+```bash
+smart macro-skill \
+  --planner \
+  --planner-max-rounds 3 \
+  --planner-profile-schedule balanced learned_efficient quality \
+  --msh runs/example/tetra/airplane/0001/tetra.msh \
+  --bbox-metadata runs/example/mcts/airplane/0001/bbox_params.json \
+  --category airplane \
+  --output runs/example/macro_skill/airplane/0001/planner_result.json \
+  --output-bbox-dir runs/example/macro_skill/airplane/0001/bboxs
+```
+
+`configs/learned_macro_safe.yaml` uses this planner in the normal pipeline.
+That profile is the release-candidate path for the substructure-planner idea:
+Python performs orchestration, while candidate scoring and variable-length
+skill execution run through the native exact SMART engine.
+
+The same planner can be used as an **MCTS replacement experiment** by feeding it
+the refine output directly and disabling MCTS:
+
+```bash
+smart --config configs/learned_macro_refine_only.yaml run
+```
+
+That path uses the same exact validation and rollback contract, but it is not
+yet the recommended release default. The post-MCTS macro-skill planner has
+passed a 507-case fresh strict replay gate with zero regressions, but the
+refine-only MCTS-replacement claim still needs a matched refine-only versus
+MCTS+macro benchmark at the same scale.
+
 Check the packaged benchmark/profile metadata with:
 
 ```bash
@@ -243,6 +305,10 @@ rollback_on_failure=true
 deployment_status=release_candidate_opt_in_post_refine
 default_smart_path_changed=false
 ```
+
+For planner results, `deployment_status` is
+`release_candidate_opt_in_substructure_planner`; the same exact-validator and
+rollback contract applies.
 
 `quality_preset="balanced"` is the current practical setting. Use
 `quality_preset="efficient"` to spend the higher exact budget only on the
@@ -263,6 +329,39 @@ the gain per extra second from `0.093` to `0.150`. The learned-fast and
 learned-quality variants use the same gate with stricter or looser thresholds.
 This is still opt-in research code, but it is packaged so benchmarks can be
 reproduced without depending on ignored experiment files.
+
+The default paper path remains exact native SMART. The learned macro planner is
+now packaged as an opt-in release-candidate path after a 507-case fresh strict
+replay benchmark:
+
+```text
+cases=507, losses=0
+exact attempts: 16 portfolio -> 1 learned top-1, 3 learned top-3
+mean exact delta: 1.4057 portfolio -> 1.6807 learned top-1 -> 1.8175 learned top-3
+attempt reduction: 93.75% top-1, 81.25% top-3
+```
+
+For the deployable stage-source setting, use:
+
+```bash
+smart --config configs/learned_macro_program_gate_top3.yaml run
+```
+
+This evaluates the actual post-MCTS bbox artifact with a pure
+program-gate macro selector:
+
+```text
+top_k=3, exact_budget=3, macro_memory_pool_size=-1
+refine-source gate: 456/456 accepted, 1.2881 mean delta, 81.25% fewer exact skill attempts
+mcts-source gate:   456/456 accepted, 1.2876 mean delta, 81.25% fewer exact skill attempts
+```
+
+Global default promotion remains blocked only because the paper reproduction
+default is intentionally unchanged and the learned router plus macro planner
+still need full-pipeline mesh-level validation together before replacing that
+default behavior.
+
+## Opt-In Learned MCTS Prior Details
 
 This is also opt-in research code. In local probes, top6 was safe for hard
 airplane multibox states, while one-box states needed top15/top20 to avoid
