@@ -23,6 +23,21 @@ FUNCTIONAL_SMOKE_COMMANDS = [
         "argv": ["smart", "configs", "--json"],
         "required_name": "smoke_5.yaml",
     },
+    {
+        "label": "smart configs --json",
+        "argv": ["smart", "configs", "--json"],
+        "required_name": "learned_default.yaml",
+    },
+    {
+        "label": "smart assets --kind policies --json",
+        "argv": ["smart", "assets", "--kind", "policies", "--json"],
+        "required_name": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    },
+    {
+        "label": "smart assets --kind skills --json",
+        "argv": ["smart", "assets", "--kind", "skills", "--json"],
+        "required_name": "macro_skill_retriever_macrohash_v1.json",
+    },
 ]
 
 

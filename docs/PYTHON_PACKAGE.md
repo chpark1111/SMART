@@ -28,10 +28,11 @@ python -m pip install "smart-bbox[pipeline]"
 ```
 
 The wheel includes the Python package, public configs, the native SMART C++
-extension, and `smart-cpp-native`. The `[pipeline]` extra installs Python
-dependencies such as CoACD, trimesh, scipy/sklearn, and torch. Full raw-mesh
-reproduction still needs Mesh2Tet/fTetWild/ManifoldPlus runtime tools and
-data. Prepare those external C++ tools in a writable location:
+extension, `smart-cpp-native`, packaged learned DeepSets policies, and
+macro-skill runtime assets. The `[pipeline]` extra installs Python dependencies
+such as CoACD, trimesh, scipy/sklearn, and torch. Full raw-mesh reproduction
+still needs Mesh2Tet/fTetWild/ManifoldPlus runtime tools and data. Prepare
+those external C++ tools in a writable location:
 
 ```bash
 export SMART_TOOLS_ROOT="$PWD/.smart-tools"
@@ -46,6 +47,11 @@ Users do not need to manually clone ManifoldPlus, fTetWild, CoACD, or the fixed
 Manifold runtime. `smart build-tools` owns that setup, and existing binaries can
 still be supplied through `SMART_MANIFOLDPLUS_BIN`, `SMART_FTETWILD_BIN`,
 `SMART_COACD_BIN`, and `SMART_MANIFOLD_PYTHON`.
+
+The learned default-agent path is documented in
+[`LEARNED_ROUTER_RELEASE.md`](LEARNED_ROUTER_RELEASE.md).  In short, the package
+ships C++ DeepSets/macrohash selectors plus exact SMART/Manifold validation and
+fallback; research Transformer checkpoints are not required for normal runtime.
 
 ## CLI
 
@@ -174,10 +180,33 @@ node is created.  It is currently research-only: on the 114-state local check,
 dynamic top6/top15 was safe but slower than the tuned static-root prior, and
 dynamic top4/top15 introduced quality-loss cases.
 
-## Opt-In Macro-Skill Polishing
+## Learned Default-Agent And Macro-Skill Polishing
 
-The package also includes a release-candidate opt-in variable-length
-macro-skill controller. This is different from the one-step learned router
+The default `smart run` and `smart.run()` path now uses the guarded learned
+MCTS-replacement agent when no explicit config is supplied:
+
+```bash
+smart run
+smart agent-run
+smart run --agent
+```
+
+```python
+import smart
+
+records = smart.run()
+records = smart.run_agent()
+records = smart.run("configs/smoke_5.yaml", agent=True)
+```
+
+This path skips MCTS, runs exact native refine, then applies the macrohash
+skill selector.  Every accepted update is still exact SMART/Manifold validated;
+uncertain cases fall back to the exact 16-skill portfolio.  Use explicit
+paper-reproduction configs such as `configs/paper_like.yaml` when you need the
+original exact MCTS baseline.
+
+The package also includes a variable-length macro-skill controller. This is
+different from the one-step learned router
 above: it tries reusable multi-step fitting programs such as "shrink, recenter,
 then shrink again" and accepts only an exact SMART/Manifold non-worse final
 state.
@@ -327,12 +356,10 @@ The learned-efficient ridge gate keeps the same 31/133 high-budget rate but
 improves the held-out mean gain over balanced from `+0.0301` to `+0.0437` and
 the gain per extra second from `0.093` to `0.150`. The learned-fast and
 learned-quality variants use the same gate with stricter or looser thresholds.
-This is still opt-in research code, but it is packaged so benchmarks can be
-reproduced without depending on ignored experiment files.
-
-The default paper path remains exact native SMART. The learned macro planner is
-now packaged as an opt-in release-candidate path after a 507-case fresh strict
-replay benchmark:
+The learned default-agent path is packaged so benchmarks can be reproduced
+without depending on ignored experiment files. The original paper path remains
+available through explicit paper configs. The learned macro planner passed a
+507-case fresh strict replay benchmark:
 
 ```text
 cases=507, losses=0

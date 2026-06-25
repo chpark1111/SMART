@@ -28,3 +28,4 @@ smart/vendor/manifold/build/
 smart/legacy/**/logs/
 data/*
 !data/README.md
+paper/learned_router_cvpr/

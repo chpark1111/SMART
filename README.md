@@ -77,6 +77,8 @@ Maintainer and research docs:
   and PyPI publishing.
 - [Release Notes 0.1.0](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE_NOTES_0.1.0.md): current release scope and
   verification notes.
+- [Learned Router Release Snapshot](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER_RELEASE.md): current
+  packaged learned SMART+Agent path, accuracy/speed gates, and Transformer comparison.
 - [Learned Geometry Router](https://github.com/chpark1111/SMART/blob/main/docs/LEARNED_ROUTER.md): packaged DeepSets
   refine router, hard-state gates, exact-call reduction, and quality reinvestment experiments.
 - [Research Plan](https://github.com/chpark1111/SMART/blob/main/docs/RESEARCH_PLAN.md): RL/deep learning priors, MCTS upgrade,
@@ -189,6 +191,7 @@ also classifies failures and queues targeted repair retries automatically:
 | `surface is not watertight` | holes or open mesh boundaries | retry with a temporary `fill_holes=true` repaired input |
 | fTetWild/ManifoldPlus timeout or crash | self-intersection, very thin parts, degenerate faces, non-manifold edges | retry with conservative repaired input and robust/coarser parameter attempts |
 | `tetra element count below minimum` | tetra parameters too fine/coarse or damaged repair output | keep fine/coarse retry schedule and record the failed parameters |
+| ManifoldPlus repaired surface is too large | repair exploded the face count and fTetWild is likely to hit the timeout | opt-in `tetra.max_manifold_faces_for_ftetwild` guard skips that repaired surface before fTetWild |
 | disconnected components | true multi-part shape or small detached fragments | only use `keep_largest_component=true` if explicitly enabled, because it can delete real parts |
 
 Repaired inputs are written under `runs/<profile>/logs/tetra/...`; SMART never
@@ -320,13 +323,76 @@ result = sc.run_builtin_deepset_policy_refine(
 )
 ```
 
+For the current fallback-free MCTS/portfolio replacement research profile, use
+the packaged v13 DAgger policy and one of the explicit v13 profiles:
+
+```python
+import smart.cpp as sc
+
+engine = sc.NativeSmartEngine(...)
+
+# Quality-safe: 2000/2000 strict replay-ready states matched the exact
+# candidate portfolio, with fewer exact checks but roughly neutral wall time.
+result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    policy="mcts_replacement_v13",
+    profile="mcts_replacement_v13_quality_safe",
+)
+
+# Faster held-out profile: val/test zero-regret with stronger runtime gain,
+# but not yet all-split zero-regret.
+fast_result = sc.run_builtin_deepset_policy_refine(
+    engine,
+    max_steps=4,
+    policy="mcts_replacement_v13",
+    profile="mcts_replacement_v13_heldout_fast",
+)
+```
+
 Local validation for this profile:
 
 ```text
 full token split 1015 states: 0 losses, 30.5% fewer exact calls, 1.204x vs exact oracle
 1000 replay states:        0 losses, 30.7% fewer exact calls, 1.203x vs exact oracle
 held-out test 264 states:  0 losses, 38.7% fewer exact calls, 1.361x vs exact oracle
+target50 v11 runtime:      300 states, 0 losses, 30.5% fewer exact calls, 1.115x vs exact oracle
 ```
+
+Large GPU Transformer teacher status:
+
+```text
+d512/l8/e16 MPS teacher: 2298 audited candidate-set steps
+guide regret -> transformer regret: 3.1165 -> 0.0121
+positive top-1: 2273/2298, exact-best top-1: 2004/2298
+live C++ path: native proxy/top-K remains faster than per-state PyTorch/MPS inference
+C++ DeepSets runtime candidate: 300 states, 0 losses, 30.5% fewer exact calls, 1.115x wall-time speedup
+```
+
+The Transformer path is therefore used for teacher scoring, hard-state mining,
+and distillation research. The release runtime keeps C++ native routing plus
+exact SMART/Manifold validation.
+
+Current learned replacement status:
+
+```text
+mcts_replacement_v13_quality_safe:
+  strict replay-ready split: 2000/2000 zero-regret against the exact candidate portfolio
+  exact-call reduction:      13.6%
+  wall-time effect:          roughly neutral on the local benchmark
+  runtime:                   C++ DeepSets scorer + exact SMART/Manifold validator
+
+mcts_replacement_v13_heldout_fast:
+  val/test:                  zero-regret
+  exact-call reduction:      26.5%
+  wall-time effect:          about 1.07x over all splits
+  caveat:                    4 train losses, so not the quality-safe profile
+```
+
+This is a learned candidate-ranking replacement for MCTS/exhaustive candidate
+portfolio search, not a replacement for exact geometry scoring.  The stronger
+research goal, `geometry_model_only` without exact top-K selection, remains a
+research gate and is not the public default.
 
 The portfolio and MCTS-prior helpers remain available for research sweeps:
 `smart.cpp.run_builtin_deepset_portfolio_refine(...)` and
@@ -370,15 +436,57 @@ programs.  The current release gate passes both post-refine and post-MCTS
 stage-source replay (`456/456` accepted for each) while reducing exact
 macro-skill attempts by `81.25%` versus the 16-skill portfolio.
 
-MCTS-replacement research profile:
+Learned MCTS-replacement default-agent profile:
 
 ```bash
-smart --config configs/learned_macro_refine_only.yaml run
+smart run
+smart agent-run
+smart run --agent
 ```
 
-This second profile skips MCTS and feeds refine output into the same
-exact-validated multi-round substructure planner. It is packaged for research
-and benchmarking, not enabled as the default paper reproduction path.
+Equivalent explicit config:
+
+```bash
+smart --config configs/learned_default.yaml run
+smart --config learned_default run
+```
+
+With no explicit `--config`, `smart run` now uses this learned default-agent
+profile. It skips MCTS, feeds refine output into the packaged macrohash skill
+bank, ranks a 16-skill exact portfolio with the learned JSON MLP selector,
+tries the learned top-3 first, and falls back to the full exact portfolio when
+the learned attempts are not confidently separated. The guarded candidate has
+passed the current 510-state MCTS-replacement gate with zero losses versus the
+exact fallback portfolio and `26.3%` fewer exact skill attempts. The paper
+reproduction profiles remain available by passing an explicit config such as
+`--config configs/paper_like.yaml`.
+
+Use `smart run --category chair --mesh <mesh_id>` or
+`smart agent-run --category chair --mesh <mesh_id>` to run the learned
+default-agent path on a subset. If `--config` is provided, `run` respects that
+config; `agent-run` additionally applies the learned agent overlay.
+Use `smart --config <your_config.yaml> run --agent` to keep your data/config but
+replace the MCTS stage with the guarded learned agent overlay.
+
+Python API:
+
+```python
+import smart
+
+records = smart.run_agent(
+    category="chair",
+    meshes=["11b7c86fc42306ec7e7e25239e7b8f85"],
+)
+
+records = smart.run()
+records = smart.run("configs/smoke_5.yaml", agent=True)
+```
+
+The underlying explicit guarded profile is also available:
+
+```bash
+smart --config configs/learned_macro_mcts_replacement_guarded.yaml run
+```
 
 Pipeline stage usage:
 
@@ -495,9 +603,10 @@ smart-release-preflight \
   --run-asan-smoke
 ```
 
-The preflight also checks the opt-in learned-router and macro-skill release
-contract with `smart learned-release-readiness --fail-if-not-ready`, both from
-the source checkout and from the installed wheel.
+The preflight also checks the learned-router, macro-skill, and learned
+default-agent release contract with
+`smart learned-release-readiness --fail-if-not-ready --require-default-ready`,
+both from the source checkout and from the installed wheel.
 
 Release notes and publishing steps are in [`docs/RELEASE.md`](https://github.com/chpark1111/SMART/blob/main/docs/RELEASE.md).
 

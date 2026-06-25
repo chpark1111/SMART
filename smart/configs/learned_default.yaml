@@ -1,0 +1,147 @@
+{
+  "run_name": "learned_default",
+  "workspace": "examples/runs/learned_default",
+  "data_root": "examples/sample_shapes",
+  "engine": "cpp_native",
+  "normalization": {
+    "enabled": true,
+    "mode": "bbox_diagonal",
+    "target": 1.0,
+    "center": "bbox"
+  },
+  "categories": [
+    {
+      "name": "airplane",
+      "mesh_root": "examples/sample_shapes/shapenet_airplane",
+      "meshes": [
+        "1f5537f4747ec847622c69c3abc6f80",
+        "260305219d81f745623cba1f26a8e885",
+        "172764bea108bbcceae5a783c313eb36"
+      ],
+      "tetra": {
+        "epsilon": 0.002,
+        "edge_length": 0.1
+      }
+    },
+    {
+      "name": "chair",
+      "mesh_root": "examples/sample_shapes/shapenet_chair",
+      "meshes": [
+        "11b7c86fc42306ec7e7e25239e7b8f85",
+        "17883ea5a837f5731250f48219951972",
+        "23acbdfee13b407ce42d6c2ea750090e"
+      ],
+      "tetra": {
+        "epsilon": 0.004,
+        "edge_length": 0.2
+      }
+    },
+    {
+      "name": "table",
+      "mesh_root": "examples/sample_shapes/shapenet_table",
+      "meshes": [
+        "1692563658149377630047043c6a0c50",
+        "1804dd6f5c827c1a4bf8d5f43e57b138",
+        "2e2894138df855b26f88aa1b7f7cc6c6"
+      ],
+      "tetra": {
+        "epsilon": 0.004,
+        "edge_length": 0.2
+      }
+    }
+  ],
+  "stages": {
+    "normalize": true,
+    "tetra": true,
+    "preseg": true,
+    "merge": true,
+    "refine": true,
+    "mcts": false,
+    "macro_skill": true,
+    "render": true
+  },
+  "tetra": {
+    "manifold_timeout_sec": 600,
+    "ftetwild_timeout_sec": 1200,
+    "ftetwild_threads": 8
+  },
+  "preseg": {
+    "coacd": {
+      "threshold": 0.05,
+      "max_convex_hull": 32,
+      "resolution": 1000,
+      "mcts_nodes": 10,
+      "mcts_iterations": 40,
+      "mcts_max_depth": 3,
+      "seed": 7777
+    }
+  },
+  "refine": {
+    "max_step": 50,
+    "cover_penalty": 100,
+    "action_unit": 0.01,
+    "score_cache_size": 4096,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false
+  },
+  "mcts": {
+    "backend": "cpp_native",
+    "direct_file_runner": true,
+    "mcts_iter": 25,
+    "max_step": 4,
+    "cover_penalty": 100,
+    "action_unit": 0.02,
+    "num_action_scale": 2,
+    "exp_w": 0.001,
+    "grdexp": true,
+    "pns": true,
+    "skip_rate": 0.9,
+    "score_cache_size": 4096,
+    "transposition_table": true,
+    "render_initial": false,
+    "render_partition": false,
+    "summary_metrics": false,
+    "learned_prior": {
+      "enabled": true,
+      "policy": "default",
+      "mode": "auto_safe",
+      "transposition_table": true
+    }
+  },
+  "macro_skill": {
+    "input_stage": "refine",
+    "quality_preset": "mcts_replacement_guarded",
+    "repeat_mode": "guarded_variable",
+    "top_k": 3,
+    "candidate_count": 256,
+    "max_steps": 16,
+    "exact_budget": null,
+    "cover_penalty": 100,
+    "pen_rate": 1.0,
+    "num_action_scale": 2,
+    "action_unit": 0.01,
+    "volume_method": "mesh",
+    "stateful_union_cache": true,
+    "stateful_cache_capacity": 65536,
+    "native_executor": true,
+    "target_aware_execution": false,
+    "planner": {
+      "enabled": false,
+      "max_rounds": 1,
+      "profile_schedule": [
+        "mcts_replacement_guarded"
+      ],
+      "min_round_delta": 1e-12,
+      "stop_after_noop": true
+    },
+    "macro_memory_pool_size": -1
+  },
+  "render": {
+    "backend": "fallback",
+    "input_stage": "macro_skill",
+    "joint_mesh": false,
+    "fallback": true,
+    "transparent": true
+  }
+}

@@ -65,6 +65,17 @@ def _minimal_release_names() -> list[str]:
         "smart/configs/learned_macro_safe.yaml",
         "smart/configs/learned_macro_program_gate_top3.yaml",
         "smart/configs/learned_macro_refine_only.yaml",
+        "smart/configs/learned_default.yaml",
+        "smart/configs/learned_macro_mcts_replacement_guarded.yaml",
+        "smart/configs/learned_macro_mcts_replacement_learned_only.yaml",
+        "smart/assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+        "smart/assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "smart/assets/skills/macro_skill_knowledge_base_v1.json",
+        "smart/assets/skills/macro_memory_policy_v1.json",
+        "smart/assets/skills/macro_budget_quality_rule_v1.json",
+        "smart/assets/skills/macro_quality_gate_ridge_v1.json",
+        "smart/assets/skills/macro_skill_candidates_4k_v1.jsonl",
+        "smart/assets/skills/macro_skill_retriever_macrohash_v1.json",
         "smart/legacy/renderer/boxes.blend",
         "smart/legacy/renderer/semantic_colors.txt",
         "pymesh.py",
@@ -99,6 +110,12 @@ def _content_for_name(name: str) -> str:
         )
     if name.startswith("smart/assets/priors/") and name.endswith(".json"):
         return '{"policy_type":"coord_scale_mlp_prior","schema_version":1,"metadata":{"model_type":"test"}}'
+    if name.startswith("smart/assets/skills/") and name.endswith(".json"):
+        return '{"schema_version":1,"metadata":{"model_type":"macro_skill_test_asset"}}'
+    if name.startswith("smart/assets/skills/") and name.endswith(".jsonl"):
+        return '{"schema_version":1,"skill":"test_macro_skill"}\n'
+    if name.startswith("smart/assets/policies/") and name.endswith(".smartmlp"):
+        return "# smartmlp test asset\nmetadata.model_type=deepset_h128\nfeature_set=setaware_v2\n"
     return "placeholder"
 
 
@@ -136,6 +153,13 @@ def test_audit_release_wheel_accepts_required_runtime_artifacts(tmp_path: Path) 
     assert result["checks"]["entry_point:smart"] is True
     assert result["checks"]["entry_point:smart-audit-wheel"] is True
     assert result["checks"]["asset_json_count"] == 0
+    assert result["checks"]["learned_default_config"] == ["smart/configs/learned_default.yaml"]
+    assert result["checks"]["learned_router_policy_v13"] == [
+        "smart/assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp"
+    ]
+    assert result["checks"]["macro_skill_retriever"] == [
+        "smart/assets/skills/macro_skill_retriever_macrohash_v1.json"
+    ]
     assert audit_artifact(wheel)["ok"] is True
 
 
@@ -160,7 +184,12 @@ def test_smoke_console_script_includes_packaged_asset_checks() -> None:
     required_names = {str(item["required_name"]) for item in FUNCTIONAL_SMOKE_COMMANDS}
 
     assert "smart configs --json" in labels
+    assert "smart assets --kind policies --json" in labels
+    assert "smart assets --kind skills --json" in labels
     assert "smoke_5.yaml" in required_names
+    assert "learned_default.yaml" in required_names
+    assert "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp" in required_names
+    assert "macro_skill_retriever_macrohash_v1.json" in required_names
 
 
 def test_smoke_console_script_reports_missing_entry_points(tmp_path: Path) -> None:

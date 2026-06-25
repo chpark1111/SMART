@@ -2,6 +2,8 @@
 
 This page is the operational checklist for publishing `smart-bbox`. For package
 usage details, see [`PYTHON_PACKAGE.md`](PYTHON_PACKAGE.md).
+For the current learned SMART+Agent release boundary and benchmark snapshot,
+see [`LEARNED_ROUTER_RELEASE.md`](LEARNED_ROUTER_RELEASE.md).
 For the first package release notes, see
 [`RELEASE_NOTES_0.1.0.md`](RELEASE_NOTES_0.1.0.md).
 
@@ -12,7 +14,8 @@ For the first package release notes, see
 - Main CLI: `smart`
 - Official wheel contents: Python package, `smart._cpp`, packaged
   `smart/bin/smart-cpp-native`, bundled `smart/pymanifold_runtime/pymanifold*`,
-  configs and renderer assets,
+  public configs, renderer assets, packaged learned DeepSets policies,
+  packaged macro-skill JSON/JSONL assets,
   release helper scripts, `smart.pymesh_compat`, and the legacy
   `pymesh.py` alias.
 - Official package architecture: Python is the CLI/API/package wrapper. Native
@@ -27,8 +30,9 @@ For the first package release notes, see
   `smart/vendor/manifold` source, native C++ sources, `setup.py`,
   `setup_cpp.py`, `pyproject.toml`, `CITATION.cff`, configs, docs, and tests,
   without compiled binaries or generated outputs.
-- Experimental RL/gate assets are local-only under `experiments/` and are not
-  part of the public reproduction wheel.
+- Experimental RL/Transformer/gate training runs are local-only under
+  `experiments/` and are not part of the public reproduction wheel.  Only
+  deterministic release assets under `smart/assets/` are shipped.
 - Console smoke: installed wheels should pass `smart-smoke-console-scripts`.
 
 ## Local Preflight
@@ -68,14 +72,17 @@ The preflight command audits wheel/sdist contents, runs `twine check`, installs
 the wheel into a temporary venv, runs installed console-script smoke, and checks
 that `smart.native`, `smart.cpp`, the packaged `smart-cpp-native` executable,
 and the bundled `pymanifold` runtime are available.  It also runs
-`smart learned-release-readiness --fail-if-not-ready` from the source checkout
-and again from the installed wheel, so packaged learned-router policies,
-macro-skill assets, and opt-in configs cannot silently disappear from a release.
+`smart learned-release-readiness --fail-if-not-ready --require-default-ready`
+from the source checkout and again from the installed wheel, so packaged
+learned-router policies, macro-skill assets, learned default-agent configs, and
+the default-agent gate cannot silently disappear from a release.
 On Apple Silicon, local setuptools builds and `smart-release-preflight` force
 `-arch arm64` and default `MACOSX_DEPLOYMENT_TARGET=11.0` so `smart._cpp`,
 `smart-cpp-native`, and `pymanifold` match the `macosx_11_0_arm64` wheel tag.
 The release audit also inspects real native binaries with `file`, rejects
 architecture/tag mismatches, and rejects old macOS arm64 deployment tags.
+It also rejects wheels missing the learned default-agent configs,
+`deepset_setaware_v2_h128*.smartmlp` policies, or macro-skill runtime assets.
 
 ## Native Memory Smoke
 
@@ -101,10 +108,25 @@ smart-release-preflight \
 
 ## Latest Local Verification
 
+The learned SMART+Agent release boundary was refreshed on June 25, 2026:
+
+- packaged default-agent gate:
+  `smart learned-release-readiness --json --require-default-ready`;
+- guarded macrohash MCTS-replacement: 510 refine-source replay states, 0 losses
+  against the exact 16-skill fallback portfolio, 26.3% fewer exact skill
+  attempts;
+- substructure planner top-3: 507 fresh generated states, 0 losses, 81.25%
+  fewer skill attempts than the 16-skill portfolio;
+- C++ DeepSets held-out refine router: 264 held-out states, 0 losses, 38.7%
+  fewer exact checks, 1.36x candidate-loop speedup versus the oracle pool;
+- Transformer model-only remains rejected for release default because it has
+  nonzero held-out regret; see
+  [`LEARNED_ROUTER_RELEASE.md`](LEARNED_ROUTER_RELEASE.md).
+
 The current Apple Silicon release candidate was checked on June 4, 2026 with:
 
 - `python3 -m pytest -q tests`: `185 passed`;
-- `smart learned-release-readiness --fail-if-not-ready`: passed;
+- `smart learned-release-readiness --fail-if-not-ready --require-default-ready`: passed;
 - local wheel build: `python3 setup.py bdist_wheel --dist-dir wheelhouse-local-check`;
 - release artifact audit: `python3 scripts/audit_release_wheel.py wheelhouse-local-check/*.whl`: passed;
 - smoke native-to-learned-macro handoff: 5/5 `smoke_5` C++ native MCTS outputs

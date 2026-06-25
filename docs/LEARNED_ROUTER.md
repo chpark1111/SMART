@@ -1,9 +1,275 @@
 # Learned Geometry Router
 
 This document summarizes the learned routing work for SMART native refinement.
-The full SMART pipeline still keeps exact native SMART as the conservative
-baseline, but the learned refine helper's `profile="auto"` now points to the
-validated v9 production-candidate router.
+For the short release-facing summary, current packaged assets, and final
+accuracy/speed comparison, start with
+[`LEARNED_ROUTER_RELEASE.md`](LEARNED_ROUTER_RELEASE.md).
+
+The current package path is a guarded learned SMART+Agent controller: learned
+models rank or select candidate actions/programs, while exact native
+SMART/Manifold scoring still validates every accepted update.  The release
+runtime uses native C++ DeepSets/macrohash assets.  Larger Transformer, LLM, and
+RL experiments remain teacher/proposer research until exported into a
+deterministic C++/ONNX/Torch-optional path and passed through the same
+zero-regression exact-reward gate.
+
+Claim boundary:
+
+```text
+ship now:       C++ DeepSets/macrohash + exact validation + rollback/fallback
+document now:   Transformer top-K exact as a stronger teacher/proposer
+do not default: Transformer model-only or learned reward replacement
+```
+
+## Current SMART+Agent Default Status
+
+The learned path has grown from a one-step router into a guarded
+SMART+Agent profile:
+
+```text
+native exact refine
+  -> learned macrohash program selector
+  -> exact SMART/Manifold validation + rollback
+  -> exact fallback when confidence is low
+```
+
+The explicit learned default-agent profile is:
+
+```bash
+smart run
+smart agent-run
+smart run --agent
+smart --config configs/learned_default.yaml run
+smart --config <your_config.yaml> run --agent
+```
+
+Python API:
+
+```python
+import smart
+records = smart.run()
+records = smart.run_agent(category="airplane", meshes=["<mesh_id>"])
+records = smart.run("configs/smoke_5.yaml", agent=True)
+```
+
+With no explicit config, `smart run` and `smart.run()` use this profile.  It
+skips the MCTS stage and uses the guarded macro-skill controller.  The current
+package gate reports:
+
+- 510 refine-source replay cases;
+- 0 losses versus the exact 16-skill portfolio after rollback;
+- learned top-3 opened on 165/510 states;
+- exact fallback used on 345/510 states;
+- exact skill attempts reduced from 16.0 to 11.79 on average, a 26.3%
+  reduction;
+- substructure planner fresh gate: 507 cases, 0 losses.
+
+Run the gate:
+
+```bash
+smart learned-release-readiness --json --require-default-ready
+python experiments/macro_search/run_agent_default_campaign.py
+python experiments/macro_search/run_agent_default_campaign.py \
+  --train-transformer-probe
+python experiments/macro_search/run_agent_default_campaign.py \
+  --distill-transformer-teacher --distill-max-steps 200
+```
+
+Interpretation: `configs/learned_default.yaml` is usable as the guarded learned
+MCTS-replacement profile.  Paper-reproduction configs remain exact native SMART
+unless this learned profile is explicitly selected.  Larger Transformer, LLM, or
+RL policies are promoted only if they pass the same exact-validator gate and can
+be exported as deterministic package assets or C++-portable selectors.
+
+## Learned-Only MCTS-Replacement Candidate
+
+The stricter research profile is:
+
+```bash
+smart --config configs/learned_macro_mcts_replacement_learned_only.yaml run
+```
+
+This profile disables MCTS and also disables the 16-skill exact portfolio
+fallback.  The runtime controller ranks reusable macrohash geometry programs
+with the packaged cross-model retriever and exact-validates only the learned
+top-4 programs.  Safety is still enforced by exact SMART/Manifold scoring and
+rollback; the difference is that the controller no longer scans the full exact
+portfolio.
+
+Current evidence:
+
+- 401 cross-model held-out replay targets;
+- same-model source skills excluded;
+- 401/401 positive accepted transferred skills;
+- learned-only top-1: 63 losses versus the tried oracle, mean regret 0.00235;
+- learned-only top-2/top-3: 35 losses, mean regret 0.000917;
+- learned-only top-4: 0 losses versus the 8-skill tried oracle, mean regret 0;
+- learned-only top-4 uses 4 exact skill attempts, a 75% reduction versus the
+  16-skill exact portfolio.
+
+This is the strongest current evidence that reusable 3D programs can replace
+MCTS-style local search on held-out states.  It is not yet a fully conservative
+default claim because the evidence is still replay/portfolio based.  The next
+promotion gate is a fresh end-to-end mesh benchmark that proves non-worse final
+metrics and lower wall time against the historical MCTS path.
+
+The Transformer path is currently used as a teacher/proposal policy, not as the
+runtime default.  A 2026-06-04 MPS probe over SMART trace sequences used
+axis/face action tokens and reached:
+
+- device: `mps`;
+- examples: 1504 valid positive-gain sequences from the local trace pool;
+- validation top-1 next-token accuracy: 60.1%;
+- validation top-3 next-token accuracy: 86.6%.
+
+This is useful for mining or proposing reusable geometry programs, but it is not
+itself a deployment contract.  A Transformer/LLM/RL policy becomes package
+default only after it is distilled into a deterministic selector or C++-portable
+asset and passes the same zero-regression exact-reward gate.
+
+The candidate-set Transformer teacher can also be distilled into the current
+C++-portable scalar policy format:
+
+```bash
+python experiments/macro_search/run_agent_default_campaign.py \
+  --distill-transformer-teacher --distill-max-steps 200
+```
+
+The short 2026-06-04 probe reports:
+
+- teacher mean regret: 0.00423;
+- teacher top-3 contains the oracle action in 196/200 steps;
+- teacher top-10 contains the oracle action in 200/200 steps;
+- guide mean regret: 0.742;
+- distilled student+guide blend mean regret: 0.103.
+
+This supports the current research direction: use the larger Transformer as a
+strong teacher/proposer, distill into a small deterministic selector for C++ or
+package runtime, and then allow deployment only through exact top-K scoring plus
+rollback/fallback.
+
+The larger 2026-06-05 candidate-set Transformer probe uses MPS with
+`d_model=512`, 8 encoder layers, 8 heads, and 12 epochs on the same
+category-held-out audit groups.  It improves the prior large-transformer
+evidence:
+
+```text
+groups: airplane 1368, chair 554, table 376 candidate-set steps
+held-out regret: airplane 0.1323, chair 2.1978, table 0.2209
+mean held-out regret: 0.8504
+```
+
+This is better than the previous `d_model=384`, 6-layer, 8-epoch teacher
+(`mean held-out regret 1.1670`), but it is still a teacher/proposal result.  It
+does not become a runtime default until distilled or exported into a
+C++-portable selector and passed through the same exact top-K gate.
+
+I also trained a larger all-category MPS teacher checkpoint with
+`d_model=512`, 8 layers, 8 heads, 16 epochs, and `relative_v3` candidate
+features:
+
+```text
+checkpoint:
+  experiments/macro_search/runs/full_replacement_scaleup_latest/
+  big_transformer_d512_l8_e16_allcategory.pt
+
+audit candidate steps: airplane 1368, chair 554, table 376, total 2298
+guide mean regret:       3.1165
+Transformer mean regret: 0.0121
+Transformer positive top-1: 2273 / 2298
+Transformer exact-best top-1: 2004 / 2298
+MPS checkpoint evaluation time: 24.9s for 2298 candidate-set steps
+```
+
+This confirms that a larger Transformer is useful as a high-capacity teacher.
+However, the same checkpoint is not automatically faster in the live SMART
+loop.  On the current 28-airplane multibox live C++ benchmark, all tested
+policies matched the oracle reward, but the per-state PyTorch/MPS Transformer
+call remained slower than the native C++ proxy/top-K path:
+
+```text
+oracle_exact:                    0.1879s / case
+proxy_top4_exact:                0.1215s / case
+proxy_top8_exact:                0.1274s / case
+Transformer + proxy_top4_exact:  0.1517s / case
+Transformer + proxy_top8_exact:  0.1494s / case
+```
+
+So the deployment interpretation is precise: GPU Transformer training/inference
+is valuable for batched teacher scoring, hard-state mining, and distillation,
+but the release default should stay C++ native unless the Transformer is
+batched deeply enough or exported/distilled into a C++-portable scorer.
+
+## MCTS-Replacement Candidate v11
+
+The current strongest MCTS-replacement candidate is **not** a larger runtime
+Transformer.  The strongest deployable path is:
+
+```text
+C++ DeepSets h128 candidate ranker
+  -> adaptive exact budget gate
+  -> small-pool exact fallback
+  -> proxy-order rescue for low-tet/model-rank misses
+  -> repeat-positive macro rescue
+  -> table/airplane repeat-block structural guards
+  -> table aspect two-stage exact guard
+  -> exact SMART/Manifold action selection
+```
+
+The repeat-positive macro rescue is the first variable-length program signal in
+the C++ runtime path.  If an exact-validated action improved the state on the
+previous turn, the router can re-check the same primitive on the next turn even
+when the learned ranker drops it.  This captures common learned geometry
+programs such as "keep tightening the same face while exact reward remains
+positive" without trusting the model blindly.
+
+The repeat-block rules are the first conservative failure-pattern rules in this
+runtime profile.  They were mined from fresh replay failures where a previously
+positive edit was repeated too aggressively and overshot the exact oracle.  The
+current v11 profile blocks repeat continuation for three observed unsafe
+families:
+
+```text
+table:0:999:1000000:inf     # extreme table aspect degeneracy
+table:0:6:-inf:14           # small compact table boxes
+airplane:8:8:10:12          # one 8-box airplane overshoot family
+```
+
+The table aspect guard remains active as a hard-state structural rule.  It was
+mined from fresh replay failures where table boxes become nearly degenerate and
+the learned ranker is overconfident.  Moderate table aspect states open budget
+16; extreme degenerate table states open the full 64-candidate pool.  The guard
+is narrow enough to keep the call reduction, but restores zero-regret behavior
+on the current held-out token snapshot.
+
+Opt-in profile:
+
+```python
+import smart.cpp as sc
+
+defaults = sc.native_deepset_refine_defaults("mcts_replacement_v11_candidate")
+```
+
+Current 2026-06-05 scale-up snapshot:
+
+| gate | cases | quality | exact-call change | measured candidate-loop time |
+| --- | ---: | --- | ---: | ---: |
+| fresh replay target50, v11 budget2/adaptive54 | 300 token states / 150 successful meshes | zero regret, max regret `4.44e-16` | 30.55% fewer exact checks | 1.115x vs oracle pool |
+
+The v11 profile is a **runtime acceleration candidate**, not a learned reward.
+It only changes which candidates are sent to exact SMART/Manifold scoring.  The
+accepted action is still the exact-best action among the checked set, and the
+profile is accepted only because the checked set contained the full-pool oracle
+action on all 300 target50 replay states.
+
+This profile remains opt-in until the full mesh-level gate passes:
+
+- at least 500 fresh held-out mesh-level states with zero regression for a
+  release candidate;
+- target 2k-5k replay-ready states for paper-level evidence;
+- mesh-level split, not state-level leakage;
+- quality non-worse than exact guarded MCTS/portfolio;
+- real wall-time decrease with C++ inference enabled.
 
 ## Idea
 
@@ -345,14 +611,13 @@ loose experiment.  Its contract is:
 - learned/knowledge rules propose reusable variable-length programs;
 - exact native SMART/Manifold score chooses what is accepted;
 - every failed or worsening round rolls back;
-- the default exact SMART path is unchanged.
+- explicit paper configs still run the paper-style exact baseline.
 
-It becomes default-ready only when the learned router and macro planner pass
-fresh mesh-level validation together with non-worse quality.  The macro planner
-itself has now passed the strict replay gate at `507` fresh replay-ready states
-with zero exact-score regressions, so it is release-ready as an opt-in
-post-MCTS planner while the unchanged exact C++ SMART path remains the global
-default.
+The macro planner has now passed the strict replay gate at `507` fresh
+replay-ready states with zero exact-score regressions.  The guarded
+MCTS-replacement profile also passed a 510-state default-agent gate with zero
+losses against the exact fallback portfolio, so `smart run` uses the learned
+default-agent path when no explicit config is supplied.
 
 This strengthens the quality claim but also clarifies the runtime claim:
 multibox and case41-style states show large speedups, while the unseen probe
@@ -4687,38 +4952,341 @@ PYTHONPATH=. python3 -m smart --config configs/learned_macro_safe.yaml learned-r
 PYTHONPATH=. python3 -m smart --config configs/learned_macro_safe.yaml run --dry-run
 ```
 
-Result: `182 passed`; readiness reports `can_ship_opt_in=true` and
-`can_be_default=false`; dry-run resolves the full learned macro profile without
-changing the exact SMART default path.
+Result: readiness reports `can_ship_opt_in=true`, `can_be_default=true`, and
+`default_agent_enabled=true`; dry-run resolves the learned default-agent profile
+without requiring experiment files.
 
-This means the current research contribution is deployable as an opt-in
-release-candidate planner, not yet as a default MCTS replacement.  The remaining
-production-default requirement is still the same: at least 500 fresh strict
-replay-ready mesh states with zero exact-score regressions and non-worse
-end-to-end quality.
+This means the current research contribution is deployable as the normal
+learned default-agent path.  The refine-only MCTS-replacement track has a
+510-case strict replay result and a guarded zero-loss fallback result.  Paper
+reproduction remains explicit through `configs/paper_like.yaml`.
 
-For MCTS replacement experiments, use the packaged refine-only profile. It uses
-the same exact-validated planner on the refine output and skips MCTS:
+For MCTS replacement experiments, use the packaged guarded macrohash profile.
+It uses the mined 762-skill bank, ranks a 16-skill exact portfolio with the
+JSON MLP selector, tries learned top-3 first, and falls back to the full exact
+portfolio when the learned attempts are not confidently separated:
 
 ```bash
-smart --config configs/learned_macro_refine_only.yaml run
+smart --config configs/learned_default.yaml run
+```
+
+The underlying explicit guarded profile is:
+
+```bash
+smart --config configs/learned_macro_mcts_replacement_guarded.yaml run
 ```
 
 This is the correct experimental path for the stronger claim.  It should be
 benchmarked against `learned_macro_safe.yaml` without those overrides, measuring
 final exact score, wall time, exact skill attempts, and render/evaluation
 artifacts.  The current package reports this path as
-`research_only_not_default_ready` because category-balanced 500+ fresh evidence
-is still missing.
+`guarded_default_candidate_gate_passed`: it is strong enough to keep as an
+explicit config-backed MCTS replacement candidate, while the paper default stays
+unchanged unless a release deliberately promotes that profile.
 
-The current refine-only fresh smoke on generated 3-category cases is:
+The current refine-only fresh benchmark on generated 3-category cases is:
 
 ```text
-cases=76, category_counts={airplane:26, chair:24, table:26}, losses=0
-exact attempts: 16 portfolio -> 3 learned top-3
-mean exact delta: 1.4949 portfolio -> 2.1103 learned top-3
-report=experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_refine_only_replacement_seed76_3cat_20260604/fresh_matched_report.json
+cases=510, category_counts={airplane:177, chair:165, table:168}
+learned top-3 vs input: 457 wins, 53 ties, 0 losses
+exact attempts: 16 exact portfolio -> 3 learned top-3
+mean exact delta: 0.7165 portfolio -> 1.1187 learned top-3
+top-3 exact-attempt reduction: 81.25%
+report=experiments/macro_search/runs/parameterized_skills_4k/fresh_matched_refine_only_replacement_500plus_20260604/fresh_matched_report.json
 ```
 
-This supports keeping the profile packaged for research use, but it is not yet
-category-balanced enough to replace MCTS by default.
+The learned-only top-3 controller is non-worse than the input state, but it is
+not always as good as the 16-skill exact portfolio.  The default-candidate
+deployment therefore uses a conservative fallback gate:
+
+```text
+gate: category-specific threshold over score_spread and attempt_delta_spread
+open learned top-3: 165 / 510 cases
+fallback exact portfolio: 345 / 510 cases
+losses vs 16-skill exact portfolio: 0
+mean exact delta: 0.9655
+mean exact attempts: 11.79
+exact-attempt reduction vs portfolio: 26.3%
+```
+
+This is the current production-oriented direction: learned macro skills replace
+MCTS only when the exact top-3 attempts are well separated; otherwise the
+controller falls back to the exact portfolio.  The promotion gate now passes for
+the guarded replacement candidate; the remaining release decision is whether to
+make this explicit profile the package's recommended default for non-paper
+reproduction runs.
+
+## Fallback-Free MCTS Replacement Scale-Up Gate
+
+The guarded default above is not the same as a fully fallback-free MCTS
+replacement.  For the stronger claim, use:
+
+```bash
+python experiments/macro_search/run_full_replacement_scaleup.py \
+  --out-dir experiments/macro_search/runs/full_replacement_scaleup_latest \
+  --target-states 2000 \
+  --prepare-dataset
+
+python experiments/macro_search/run_full_replacement_scaleup.py \
+  --out-dir experiments/macro_search/runs/full_replacement_scaleup_latest \
+  --target-states 2000 \
+  --train-big-transformer \
+  --transformer-group airplane=experiments/macro_search/runs/sweep_mcts_exact10_all204_i50_rescue_v5_seq_axisstate_direct_portfolio_gate_v3/airplane \
+  --transformer-group chair=experiments/macro_search/runs/sweep_mcts_exact10_all204_i50_rescue_v5_seq_axisstate_direct_portfolio_gate_v3/chair \
+  --transformer-group table=experiments/macro_search/runs/sweep_mcts_exact10_all204_i50_rescue_v5_seq_axisstate_direct_portfolio_gate_v3/table \
+  --transformer-epochs 8 \
+  --transformer-d-model 384 \
+  --transformer-layers 6 \
+  --transformer-heads 8 \
+  --transformer-batch-size 16 \
+  --transformer-device mps
+```
+
+Current 2026-06-05 result:
+
+```text
+full replacement status: not_full_replacement_ready
+guarded default: can ship
+raw mesh pool: airplane=4045, chair=6778, table=8436
+2k selection: airplane=667, chair=667, table=666
+2k replay generation progress: airplane=64, chair=62, table=61, total=187, failed chunks=4
+large Transformer folds: airplane=1368, chair=554, table=376 steps
+large Transformer d512/l8/e16 all-category teacher mean regret: 0.0121
+C++ DeepSets runtime candidate: 300 states, zero regret, 30.55% fewer exact calls, 1.115x wall-time speedup
+```
+
+The newest all-category MPS Transformer almost saturates the audited
+candidate-ranking task used for teacher scoring:
+
+```text
+guide regret       3.1165 -> Transformer regret 0.0121
+positive top-1     2273 / 2298
+exact-best top-1   2004 / 2298
+MPS eval time      24.9s / 2298 candidate-set steps
+```
+
+Live C++ timing still favors native proxy/top-K for per-state inference on the
+current small benchmark (`proxy_top4_exact` 0.1215s/case vs
+`Transformer+proxy_top4_exact` 0.1517s/case on 28 airplane cases).  Therefore
+the Transformer is now a strong teacher, not yet the package default.
+
+The blocker list is still meaningful:
+
+```text
+replay_ready_state_count: 510 < 2000
+category_balance: 177/165/168 < 666 per category
+fallback_free: 345 fallback cases, required 0
+zero_losses_vs_exact_portfolio: 104 learned top-3 losses, required 0
+wall_time_reference_available: missing matched wall-time reference
+```
+
+Interpretation: larger models help as teachers and proposal policies, but they
+do not by themselves justify a fallback-free default.  The next required step
+is to run the generated 2k replay dataset through the full SMART pipeline,
+evaluate the exact 16-skill portfolio and learned controller on the same states,
+then distill/export only a zero-regression policy into the package runtime.
+
+The practical promotion path is therefore:
+
+1. Continue `dataset_2000/chunk_run_log.jsonl` until each category has at least
+   `666` successful replay-ready states.
+2. Train the large Transformer/option policy on the expanded mesh-level split
+   and use it as a teacher, not as the direct package runtime.
+3. Distill the teacher into the C++ DeepSets/scalar policy or an ONNX/Torch
+   optional backend, then rerun the C++ runtime report.
+4. Promote only if the strict gate reaches zero portfolio losses, no fallback
+   requirement, at least `30%` exact-call reduction, and real wall-time speedup.
+
+## 2026-06-06 Fallback-Free DeepSets Candidate
+
+The first fallback-free learned-only candidate that matches the exact native
+oracle portfolio on the strict mesh-level split is:
+
+```text
+policy asset: smart/assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp
+policy alias: mcts_replacement_v12
+profile:      mcts_replacement_v12_candidate
+base pool:    64 C++ proxy-ranked axis actions
+base exact:   top32 exact SMART/Manifold checks
+uncertain:    top48 when DeepSets rank margin to rank8 <= 2.32
+table risk:   top64 for table states with runtime aspect_mean >= 5.5
+fallback:     none
+```
+
+Training used the strict mesh-level train split plus on-policy DAgger hard
+states collected from the previous h128 policy.  The DAgger data targets states
+where the learned policy's exact top-K choice diverged from the oracle pool.
+The final h128 model was exported to the C++ scalar DeepSets runtime; the h256
+larger model was also tested, but it overfit more and was slower in native
+inference.
+
+Strict split evidence:
+
+| split | cases | regret | exact checks | wall time | speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| val | 302 | 0.0 | 238.52 -> 166.93 | 0.0997s -> 0.0914s | 1.09x |
+| test | 401 | 0.0 | 244.93 -> 170.22 | 0.1069s -> 0.0966s | 1.11x |
+
+This is stronger than the earlier guarded macro-skill result because no MCTS
+fallback and no exact 16-skill portfolio fallback is used.  It is still a
+candidate rather than the global package default: the speedup is modest, and
+the validation set is a strict mesh-level split from the current replay pool,
+not a fresh external benchmark.  The next promotion gate is a larger fresh
+mesh-level benchmark with the same zero-regret requirement.
+
+The learned model is not replacing the exact reward.  It replaces exhaustive
+candidate enumeration by ordering the candidate pool and opening a calibrated
+subset.  Every candidate that survives the router is still evaluated by exact
+SMART/Manifold before applying the action.
+
+## 2026-06-06 v13 Replacement Gate
+
+The 2k replay-ready strict mesh split is now complete and balanced:
+
+```text
+train: 1297 states / 929 meshes
+val:    302 states / 214 meshes
+test:   401 states / 286 meshes
+total: 2000 replay-ready states
+categories: airplane/chair/table balanced at collection time
+split rule: mesh-level disjoint train/val/test
+```
+
+The deployed model remains the compact C++ DeepSets candidate ranker:
+
+```text
+asset:  smart/assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp
+alias:  mcts_replacement_v13
+input:  geometry-state token + bbox/action token set
+output: candidate ordering
+final:  exact SMART/Manifold chooses among opened top-K candidates
+```
+
+Two v13 runtime profiles are exposed:
+
+| profile | purpose | gate result |
+| --- | --- | --- |
+| `mcts_replacement_v13_quality_safe` | quality-safe MCTS/portfolio replacement | 2000/2000 zero-regret, 13.6% fewer exact checks, 0.99x wall speed |
+| `mcts_replacement_v13_heldout_fast` | faster held-out profile | val/test zero-regret, 26.5% fewer exact checks, 1.07x wall speed over all splits, but 4 train losses |
+
+`mcts_replacement_v13_quality_safe` is the first profile that fully removes
+MCTS and the exact 16-skill portfolio from the native refine controller while
+matching the oracle exact candidate portfolio on all 2k replay-ready states.
+It is a **quality replacement**, not yet a strong acceleration default: the
+wider top64 rescue for airplane/table ambiguity makes wall time roughly neutral
+on the current benchmark.
+
+The important claim boundary is:
+
+```text
+yes: learned model replaces MCTS / exact full candidate portfolio search
+yes: exact SMART reward still validates the final opened candidates
+no:  learned model does not replace exact reward or geometry correctness
+no:  quality-safe v13 is not yet a large speedup profile
+```
+
+The next default-promotion target is not more training loss reduction on the
+same split.  It is a fresh mesh-level benchmark where the faster profile also
+achieves zero regression:
+
+```text
+fresh held-out mesh states: >= 500
+quality: zero loss vs exact portfolio
+runtime: >= 30% fewer exact checks and real wall-time speedup
+fallback/corruption: 0
+```
+
+## 2026-06-22 Candidate-Set Transformer Research Update
+
+A larger candidate-set Transformer was tested as a research follow-up to the
+C++ DeepSets router:
+
+```text
+model: d_model=384, heads=8, layers=8
+training signal: exact-best action cross entropy + expected regret
+input: shape token + bbox summary + candidate action tokens
+validator: exact SMART/Manifold on the opened top-K candidates
+```
+
+The raw Transformer top16 improved average held-out behavior but introduced one
+larger worst-case regression on degenerate/sliver-box states.  A conservative
+numeric guard was therefore added to the research evaluator:
+
+```text
+--candidate-transformer-fallback-aspect-max 1000000
+```
+
+When a token reports `bbox_aspect_max` above this threshold, the Transformer
+policy falls back to the geometry order for that case.  On the current 404-case
+unseen mesh-level test split:
+
+| policy | zero regret | mean regret | max regret | exact checks |
+| --- | ---: | ---: | ---: | ---: |
+| geometry top16 | 0.9307 | 0.000790 | 0.060176 | 80.74 |
+| guarded Transformer top16 | 0.9406 | 0.000602 | 0.060176 | 66.23 |
+
+This is a stronger exact-call pruning candidate than the raw Transformer:
+quality is non-worse than geometry top16 on zero/mean/max regret and exact
+checks are reduced by 17.97%.  It is still not the package default because
+Transformer inference currently runs through PyTorch and `transformer_model_only`
+is not safe.  The production path is to lower the guarded scorer to C++ or an
+optional ONNX/Torch backend, then rerun the same gate on a larger fresh
+mesh-level benchmark.
+
+## 2026-06-24 Live Stepwise Native MLP Candidate
+
+The strongest current learned-only direction is no longer static sequence
+prediction. Static 4-step predictors overfit the initial state and failed on
+unseen meshes. The effective formulation is **live stepwise control**:
+
+```text
+current bbox state
+  -> generate cheap candidate pool
+  -> learned model ranks current candidates
+  -> apply selected action
+  -> regenerate candidates from the updated state
+```
+
+A 2,015-mesh replay split was converted into live updated-state supervision:
+
+```text
+train: 1,310 meshes, 4,810 steps, 76,794 exact-labeled candidate rows
+val:     302 meshes, 1,086 steps, 17,360 exact-labeled candidate rows
+test:    403 meshes, 1,474 steps, 23,496 exact-labeled candidate rows
+split: mesh-disjoint
+```
+
+The large teacher Transformer reached very low held-out step regret:
+
+```text
+model: d_model=384, heads=8, layers=5
+test step regret: 0.000265
+test live rollout regret vs top16 exact: 0.000671
+```
+
+For deployment, the teacher was distilled into a one-hidden-layer MLP and
+exported as a plain TSV policy. The package now has a native
+`NativeStepMlpTsvPolicy` scorer in `smart._cpp`, so this model can run without
+PyTorch at inference time.
+
+Held-out 403-mesh live rollout with native TSV inference:
+
+| policy | mean reward | regret vs top16 exact | positive rate | mean time |
+| --- | ---: | ---: | ---: | ---: |
+| top16 exact selector | 0.177750 | 0.000000 | 93.80% | 0.1988s |
+| cheap proxy | 0.112319 | 0.065432 | 84.37% | 0.1489s |
+| native MLP TSV | 0.176255 | 0.001496 | 93.80% | 0.1692s |
+
+Claim boundary:
+
+```text
+yes: learned native MLP nearly replaces top16 exact action selection
+yes: exact SMART/Manifold remains the final geometry evaluator when needed
+yes: this path is C++ deployable as a compact TSV policy
+no: this is not yet the package default
+no: this does not yet prove full historical MCTS/exact-portfolio replacement
+```
+
+The next promotion gate is to move candidate feature construction into the C++
+live engine, then compare the native MLP controller directly against the
+historical MCTS/exact portfolio on a fresh mesh-level benchmark.

@@ -12,6 +12,7 @@ recursive-include scripts *.md
 recursive-include smart/configs *.yaml
 recursive-include smart/assets/policies *.smartmlp
 recursive-include smart/assets/skills *.json
+recursive-include smart/assets/skills *.jsonl
 recursive-include cmake *.cmake
 recursive-include cpp *.cpp *.hpp
 recursive-include docs *.md *.png
@@ -47,6 +48,7 @@ prune past_codes
 prune runs
 prune external
 prune experiments
+prune paper
 prune build
 prune dist
 global-exclude *.so *.pyd *.dylib
