@@ -12,6 +12,7 @@ smart/bin/smart-cpp-native.exe
 .mypy_cache/
 .ruff_cache/
 .venv/
+.vscode/
 build/
 dist/
 dist_local_test/

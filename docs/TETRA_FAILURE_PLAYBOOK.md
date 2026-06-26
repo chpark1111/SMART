@@ -33,8 +33,13 @@ SMART records a `failure_class` in the tetra attempt metadata:
   `fill_holes=true`.
 - `command_crash` or `command_timeout`: fTetWild/ManifoldPlus crashed or timed
   out; queues the conservative repaired-input fallback.
-- `validation_low_tetra_count`: output has too few tetrahedra; handled by the
-  fine/coarse parameter retry schedule.
+- `validation_low_tetra_count`: output has too few tetrahedra; first handled by
+  the fine/coarse parameter retry schedule, and also queues the non-destructive
+  `fill_holes=true` temporary-input fallback when parameter retries are not
+  enough.
+- `repair_surface_too_large`: ManifoldPlus repaired the input, but the repaired
+  OBJ exceeds `tetra.max_manifold_faces_for_ftetwild`; this avoids spending the
+  full fTetWild timeout on known long-tail surfaces.
 - `validation_disconnected`: output has multiple connected components; can
   queue `keep_largest_component=true` only if you opt in.
 
@@ -48,7 +53,8 @@ mutates the original `data/` OBJ.
 | `validation_open_surface` | `surface is not watertight` from validation | queue `fill_holes` fallback | fills holes in a temporary copy only |
 | `command_timeout` | external command timeout or rc `124` | queue repaired-input retry and continue parameter retries | does not change original mesh or force success |
 | `command_crash` | negative return code such as `SIGSEGV` | queue repaired-input retry and continue parameter retries | isolates bad mesh cases without stopping the dataset |
-| `validation_low_tetra_count` | `tetra element count below minimum` | rely on fine/coarse/robust retry schedule | avoids deleting geometry to inflate element count |
+| `validation_low_tetra_count` | `tetra element count below minimum` | rely on fine/coarse/robust retry schedule, then try `fill_holes` temporary input | keeps original data untouched and avoids component deletion |
+| `repair_surface_too_large` | ManifoldPlus repaired OBJ face count is above `tetra.max_manifold_faces_for_ftetwild` | skip fTetWild for that repaired surface and queue matching repair fallback | avoids burning the whole fTetWild timeout on repair explosions |
 | `validation_disconnected` | `surface has multiple connected components` | no destructive default; opt-in largest-component fallback | avoids silently removing real disconnected parts |
 
 If all retries fail, SMART records the failure and skips downstream stages for
@@ -76,6 +82,9 @@ Use less destructive knobs first:
 tetra:
   min_tetra_count: 20
   min_surface_faces: 20
+  # 0 disables the guard. Large dataset collection may set this to e.g. 90000
+  # to avoid fTetWild timeout loops after ManifoldPlus repair explosions.
+  max_manifold_faces_for_ftetwild: 0
   input_repair:
     enabled: true
     auto_retry_by_failure: true
@@ -91,6 +100,8 @@ tetra:
       - name: fill_holes
         triggers:
           - validation_open_surface
+          - validation_low_tetra_count
+          - repair_surface_too_large
           - command_crash
           - command_timeout
           - command_failure

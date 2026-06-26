@@ -80,3 +80,22 @@ class ManifestWriter:
         path = self.root / "summary.json"
         path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
         return path
+
+    def write_summary_from_files(self) -> Path:
+        summary: dict[str, dict[str, int]] = {}
+        for manifest in sorted(self.root.glob("*.jsonl")):
+            stage = manifest.stem
+            stage_summary = summary.setdefault(stage, {})
+            with manifest.open("r", encoding="utf-8") as file:
+                for line in file:
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    status = str(row.get("status", "unknown"))
+                    stage_summary[status] = stage_summary.get(status, 0) + 1
+        path = self.root / "summary.json"
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        return path

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -49,6 +50,29 @@ NATIVE_SEARCH_BACKENDS = {
     "native_stateful",
 }
 NATIVE_SEARCH_BACKEND_LABEL = "cpp/cpp_stateful/cpp_native/native/native_stateful"
+
+_NATIVE_PREPROCESSING_CACHE_REQUIRED = (
+    "normalized/model.obj",
+    "tetra/model_manifold.obj",
+    "tetra/tetra.msh",
+    "tetra/tetra.msh__sf.obj",
+    "tetra/coacd_partitions.json",
+)
+_NATIVE_PREPROCESSING_CACHE_OPTIONAL_FILES = (
+    "tetra/log.txt",
+    "tetra/log.txt_.csv",
+    "tetra/tetra.msh__cutting.stl",
+    "tetra/tetra.msh__simplify.off",
+    "native_pipeline_stats.json",
+)
+_NATIVE_PREPROCESSING_CACHE_OPTIONAL_DIRS = ("coacd",)
+
+
+def _manifest_mode(cfg: dict[str, Any]) -> str:
+    manifest_cfg = cfg.get("manifest", {})
+    if isinstance(manifest_cfg, dict):
+        return str(manifest_cfg.get("mode", "latest")).lower()
+    return str(manifest_cfg or "latest").lower()
 
 
 def _resolve_action_prior_device(device: Any) -> str:
@@ -149,8 +173,11 @@ def run_pipeline(
                 writer.append(record)
                 records.append(record)
 
-    writer.write_stage_records(records)
-    writer.write_summary(records)
+    if _manifest_mode(cfg) in {"append", "cumulative"}:
+        writer.write_summary_from_files()
+    else:
+        writer.write_stage_records(records)
+        writer.write_summary(records)
     return records
 
 
@@ -188,8 +215,11 @@ def run_native_pipelines(
             writer.append(record)
             records.append(record)
 
-    writer.write_stage_records(records)
-    writer.write_summary(records)
+    if _manifest_mode(cfg) in {"append", "cumulative"}:
+        writer.write_summary_from_files()
+    else:
+        writer.write_stage_records(records)
+        writer.write_summary(records)
     return records
 
 
@@ -250,10 +280,11 @@ def run_native_pipeline_mesh(
         "FloatTetwild_bin",
     )
     coacd_bin = _resolve_coacd_cli(cfg, preseg_cfg)
+    skip_manifoldplus = bool(tetra_cfg.get("skip_manifoldplus", False))
     missing = [
         name
         for name, value in [
-            ("ManifoldPlus", manifold_bin),
+            ("ManifoldPlus", manifold_bin if not skip_manifoldplus else "skipped"),
             ("fTetWild", ftetwild_bin),
             ("CoACD", coacd_bin),
         ]
@@ -316,9 +347,35 @@ def run_native_pipeline_mesh(
         mcts_cfg=mcts_cfg,
         norm_cfg=norm_cfg,
     )
+    manifold_depth_attempts = _native_manifold_depth_attempts(
+        str(category["name"]), tetra_cfg
+    )
+    if manifold_depth_attempts:
+        kwargs["manifold_depth"] = manifold_depth_attempts[0]
+    preprocessing_cache = (
+        {"enabled": False, "hit": False, "reason": "disabled_for_manifold_depth_attempts"}
+        if manifold_depth_attempts
+        else _native_preprocessing_cache_prepare(
+        cfg,
+        source_mesh=source_mesh,
+        work_dir=work_dir,
+        kwargs=kwargs,
+        manifoldplus_bin=manifold_bin or "$SMART_MANIFOLDPLUS_BIN",
+        ftetwild_bin=ftetwild_bin or "$SMART_FTETWILD_BIN",
+        coacd_bin=coacd_bin or "$SMART_COACD_BIN",
+        dry_run=dry_run,
+        )
+    )
+    if preprocessing_cache.get("hit"):
+        kwargs["reuse_preprocessing"] = True
     args = native_runner.pipeline_args_from_files(**kwargs)
     command = [str(native_bin or "smart-cpp-native"), *args]
     if dry_run:
+        metadata: dict[str, Any] = {"backend": "smart-cpp-native", "combined": True}
+        if manifold_depth_attempts:
+            metadata["manifold_depth_attempts"] = manifold_depth_attempts
+        if preprocessing_cache.get("enabled"):
+            metadata["preprocessing_cache"] = preprocessing_cache
         return _base_record(
             cfg,
             category,
@@ -328,16 +385,48 @@ def run_native_pipeline_mesh(
             status="dry_run",
             output_path=work_dir,
             command=command,
-            metadata={"backend": "smart-cpp-native", "combined": True},
+            metadata=metadata,
         )
 
-    try:
-        result = native_runner.run_pipeline_from_files(
-            **kwargs,
-            timeout=float(cfg.get("native_pipeline", {}).get("timeout_sec", 0.0) or 0.0)
-            or None,
-        )
-    except Exception as exc:  # noqa: BLE001
+    timeout = float(cfg.get("native_pipeline", {}).get("timeout_sec", 0.0) or 0.0) or None
+    attempts_metadata: list[dict[str, Any]] = []
+    result: dict[str, Any] | None = None
+    last_error: str | None = None
+    attempt_depths = manifold_depth_attempts or [int(kwargs.get("manifold_depth", 0) or 0)]
+    for attempt_index, depth in enumerate(attempt_depths):
+        attempt_kwargs = dict(kwargs)
+        attempt_kwargs["manifold_depth"] = int(depth)
+        if attempt_index > 0 or manifold_depth_attempts:
+            _clear_native_pipeline_attempt_outputs(work_dir)
+        attempt_started = time.time()
+        try:
+            result = native_runner.run_pipeline_from_files(
+                **attempt_kwargs,
+                timeout=timeout,
+            )
+            attempts_metadata.append(
+                {
+                    "manifold_depth": int(depth),
+                    "status": str(result.get("status", "success")),
+                    "elapsed_sec_wall": time.time() - attempt_started,
+                }
+            )
+            kwargs = attempt_kwargs
+            command = list(result.get("command") or command)
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            attempts_metadata.append(
+                {
+                    "manifold_depth": int(depth),
+                    "status": "failed",
+                    "elapsed_sec_wall": time.time() - attempt_started,
+                    "error": last_error,
+                }
+            )
+            result = None
+
+    if result is None:
         return _base_record(
             cfg,
             category,
@@ -347,9 +436,25 @@ def run_native_pipeline_mesh(
             status="failed",
             output_path=work_dir,
             command=command,
-            error=str(exc),
-            metadata={"backend": "smart-cpp-native", "combined": True},
+            error=last_error or "native pipeline failed",
+            metadata={
+                "backend": "smart-cpp-native",
+                "combined": True,
+                "manifold_depth_attempts": attempts_metadata,
+            },
         )
+
+    metadata = dict(result.get("metadata") or {})
+    if attempts_metadata:
+        metadata["manifold_depth_attempts"] = attempts_metadata
+    if preprocessing_cache.get("enabled"):
+        saved = _native_preprocessing_cache_save(
+            cache_dir=Path(str(preprocessing_cache["path"])),
+            work_dir=work_dir,
+            metadata=preprocessing_cache,
+        )
+        preprocessing_cache["saved"] = saved
+        metadata["preprocessing_cache"] = preprocessing_cache
 
     return _base_record(
         cfg,
@@ -360,7 +465,7 @@ def run_native_pipeline_mesh(
         status=str(result.get("status", "success")),
         output_path=result.get("output_path"),
         command=list(result.get("command") or command),
-        metadata=dict(result.get("metadata") or {}),
+        metadata=metadata,
     )
 
 
@@ -409,6 +514,8 @@ def _native_pipeline_kwargs(
         "mcts_action_unit": float(mcts_cfg.get("action_unit", 0.02)),
         "num_action_scale": max(1, int(refine_cfg.get("num_action_scale", 1))) * 2,
         "manifold_timeout_sec": float(tetra_cfg.get("manifold_timeout_sec", 600)),
+        "manifold_depth": int(tetra_cfg.get("manifold_depth", 0) or 0),
+        "skip_manifoldplus": bool(tetra_cfg.get("skip_manifoldplus", False)),
         "ftetwild_timeout_sec": float(tetra_cfg.get("ftetwild_timeout_sec", 1200)),
         "ftetwild_threads": ftetwild_threads,
         "ftetwild_level": int(tetra_cfg.get("ftetwild_level", 2)),
@@ -438,8 +545,256 @@ def _native_pipeline_kwargs(
         "volume_method": str(mcts_cfg.get("manifold_volume_method", "mesh")),
         "stateful_union_cache": bool(mcts_cfg.get("stateful_union_cache", True)),
         "transposition_table": bool(mcts_cfg.get("transposition_table", False)),
+        "reuse_existing": bool(cfg.get("native_pipeline", {}).get("reuse_existing", False)),
+        "reuse_preprocessing": bool(cfg.get("native_pipeline", {}).get("reuse_preprocessing", False)),
         "seed": int(mcts_cfg.get("seed", 0)),
     }
+
+
+def _native_manifold_depth_attempts(
+    category_name: str, tetra_cfg: dict[str, Any]
+) -> list[int]:
+    if bool(tetra_cfg.get("skip_manifoldplus", False)):
+        return []
+    raw_by_category = tetra_cfg.get("manifold_depth_candidates_by_category", {})
+    raw: Any = None
+    if isinstance(raw_by_category, dict):
+        raw = raw_by_category.get(category_name)
+    if raw is None:
+        raw = tetra_cfg.get("manifold_depth_candidates", [])
+    attempts = _parse_depth_attempts(raw)
+    if not attempts:
+        return []
+    fallback = int(tetra_cfg.get("manifold_depth_fallback", 8) or 8)
+    if fallback > 0 and fallback not in attempts:
+        attempts.append(fallback)
+    return attempts
+
+
+def _parse_depth_attempts(raw: Any) -> list[int]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        values = list(raw)
+    else:
+        values = [raw]
+    attempts: list[int] = []
+    for value in values:
+        if value is None or value == "":
+            continue
+        depth = int(value)
+        if depth <= 0:
+            continue
+        if depth not in attempts:
+            attempts.append(depth)
+    return attempts
+
+
+def _clear_native_pipeline_attempt_outputs(work_dir: Path) -> None:
+    for rel in (
+        "tetra",
+        "coacd",
+        "bsp_parts",
+        "merge",
+        "refine_bboxs_steps0",
+        "mcts_bboxs_steps0",
+    ):
+        path = work_dir / rel
+        if path.exists():
+            shutil.rmtree(path)
+
+
+def _native_preprocessing_cache_prepare(
+    cfg: dict[str, Any],
+    *,
+    source_mesh: Path,
+    work_dir: Path,
+    kwargs: dict[str, Any],
+    manifoldplus_bin: str | Path,
+    ftetwild_bin: str | Path,
+    coacd_bin: str | Path,
+    dry_run: bool,
+) -> dict[str, Any]:
+    native_cfg = cfg.get("native_pipeline", {})
+    if not isinstance(native_cfg, dict) or not native_cfg.get("preprocessing_cache", False):
+        return {"enabled": False}
+    cache_root_value = native_cfg.get("preprocessing_cache_root", "runs/.smart_preprocessing_cache")
+    cache_root = repo_path(cache_root_value)
+    if cache_root is None:
+        cache_root = Path("runs/.smart_preprocessing_cache")
+    key = _native_preprocessing_cache_key(
+        source_mesh=source_mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=manifoldplus_bin,
+        ftetwild_bin=ftetwild_bin,
+        coacd_bin=coacd_bin,
+    )
+    cache_dir = cache_root / key
+    status: dict[str, Any] = {
+        "enabled": True,
+        "hit": False,
+        "saved": False,
+        "key": key,
+        "path": str(cache_dir),
+    }
+    if dry_run:
+        return status
+    try:
+        status["hit"] = _native_preprocessing_cache_restore(cache_dir, work_dir)
+    except Exception as exc:  # noqa: BLE001
+        status["error"] = f"restore failed: {exc}"
+        status["hit"] = False
+    return status
+
+
+def _native_preprocessing_cache_key(
+    *,
+    source_mesh: Path,
+    kwargs: dict[str, Any],
+    manifoldplus_bin: str | Path,
+    ftetwild_bin: str | Path,
+    coacd_bin: str | Path,
+) -> str:
+    preproc_keys = (
+        "epsilon",
+        "edge_length",
+        "normalize_mode",
+        "normalize_target",
+        "normalize_center",
+        "manifold_depth",
+        "skip_manifoldplus",
+        "ftetwild_level",
+        "retry_epsilon_scale",
+        "retry_edge_length_scale",
+        "coacd_threshold",
+        "coacd_max_convex_hull",
+        "coacd_preprocess_mode",
+        "coacd_preprocess_resolution",
+        "coacd_resolution",
+        "coacd_mcts_nodes",
+        "coacd_mcts_iterations",
+        "coacd_mcts_max_depth",
+        "coacd_seed",
+        "coacd_pca",
+        "coacd_merge",
+        "coacd_decimate",
+    )
+    payload = {
+        "version": 1,
+        "source_mesh_sha256": _file_digest(source_mesh),
+        "preprocessing": {key: kwargs.get(key) for key in preproc_keys},
+        "tools": {
+            "manifoldplus": None
+            if bool(kwargs.get("skip_manifoldplus", False))
+            else _tool_signature(manifoldplus_bin),
+            "ftetwild": _tool_signature(ftetwild_bin),
+            "coacd": _tool_signature(coacd_bin),
+        },
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+
+
+def _file_digest(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _tool_signature(path: str | Path) -> dict[str, Any]:
+    candidate = repo_path(path)
+    if candidate is None:
+        candidate = Path(str(path)).expanduser()
+    try:
+        stat = candidate.stat()
+    except OSError:
+        return {"path": str(path), "exists": False}
+    return {
+        "path": str(candidate),
+        "exists": True,
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _native_preprocessing_cache_restore(cache_dir: Path, work_dir: Path) -> bool:
+    manifest = cache_dir / "manifest.json"
+    if not manifest.exists():
+        return False
+    if not all((cache_dir / rel).exists() for rel in _NATIVE_PREPROCESSING_CACHE_REQUIRED):
+        return False
+    for rel in _NATIVE_PREPROCESSING_CACHE_REQUIRED:
+        _copy_cache_file(cache_dir / rel, work_dir / rel)
+    for rel in _NATIVE_PREPROCESSING_CACHE_OPTIONAL_FILES:
+        src = cache_dir / rel
+        if src.exists():
+            _copy_cache_file(src, work_dir / rel)
+    for rel in _NATIVE_PREPROCESSING_CACHE_OPTIONAL_DIRS:
+        src = cache_dir / rel
+        if src.exists():
+            shutil.copytree(src, work_dir / rel, dirs_exist_ok=True)
+    return True
+
+
+def _native_preprocessing_cache_save(
+    *,
+    cache_dir: Path,
+    work_dir: Path,
+    metadata: dict[str, Any],
+) -> bool:
+    if cache_dir.exists():
+        return False
+    missing = [
+        rel
+        for rel in _NATIVE_PREPROCESSING_CACHE_REQUIRED
+        if not (work_dir / rel).exists()
+    ]
+    if missing:
+        metadata["save_error"] = "missing required preprocessing outputs: " + ", ".join(missing)
+        return False
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = cache_dir.with_name(f"{cache_dir.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    try:
+        for rel in _NATIVE_PREPROCESSING_CACHE_REQUIRED:
+            _copy_cache_file(work_dir / rel, tmp_dir / rel)
+        for rel in _NATIVE_PREPROCESSING_CACHE_OPTIONAL_FILES:
+            src = work_dir / rel
+            if src.exists():
+                _copy_cache_file(src, tmp_dir / rel)
+        for rel in _NATIVE_PREPROCESSING_CACHE_OPTIONAL_DIRS:
+            src = work_dir / rel
+            if src.exists():
+                shutil.copytree(src, tmp_dir / rel, dirs_exist_ok=True)
+        (tmp_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "metadata": metadata,
+                    "required": list(_NATIVE_PREPROCESSING_CACHE_REQUIRED),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        try:
+            tmp_dir.rename(cache_dir)
+        except FileExistsError:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        metadata["save_error"] = str(exc)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return False
+
+
+def _copy_cache_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
 
 
 def run_stage(
@@ -946,6 +1301,20 @@ def _split_mesh_components(trimesh_module: Any, mesh: Any) -> list[Any]:
         return []
 
 
+def _quick_obj_counts(path: Path) -> dict[str, int]:
+    vertices = 0
+    faces = 0
+    if not path.exists():
+        return {"vertices": 0, "faces": 0, "size_bytes": 0}
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if line.startswith("v "):
+                vertices += 1
+            elif line.startswith("f "):
+                faces += 1
+    return {"vertices": vertices, "faces": faces, "size_bytes": int(path.stat().st_size)}
+
+
 def _read_obj_vertices(path: Path) -> tuple[list[str], list[tuple[float, float, float]]]:
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
     vertices: list[tuple[float, float, float]] = []
@@ -1260,6 +1629,49 @@ def run_tetra_mesh(
                 if added_repair_variants and failure_class in immediate_repair_failures:
                     break
                 continue
+
+            manifold_counts: dict[str, int] = {}
+            max_manifold_faces = int(stage_cfg.get("max_manifold_faces_for_ftetwild", 0) or 0)
+            if max_manifold_faces > 0 and not bool(attempt.get("allow_large_manifold_surface", False)):
+                manifold_counts = _quick_obj_counts(manmesh)
+                if int(manifold_counts.get("faces", 0)) > max_manifold_faces:
+                    failure_class = "repair_surface_too_large"
+                    observed_failure_classes.add(failure_class)
+                    added_repair_variants = (
+                        _append_tetra_repair_candidates(
+                            input_candidates,
+                            input_repair_metadata,
+                            source_mesh,
+                            log_dir,
+                            stage_cfg,
+                            observed_failure_classes,
+                            queued_input_variants,
+                        )
+                        if auto_repair
+                        else []
+                    )
+                    failure = (
+                        "ManifoldPlus repaired surface too large for fTetWild: "
+                        f"{manifold_counts.get('faces', 0)} > {max_manifold_faces}"
+                    )
+                    errors.append(f"{attempt_name}: {failure}")
+                    attempt_metadata.append(
+                        {
+                            "attempt": attempt_name,
+                            "input_variant": input_variant,
+                            "input_mesh": str(prepared_source_mesh),
+                            "tool": "ManifoldPlus",
+                            "epsilon": eps,
+                            "edge_length": length,
+                            "coarsen": coarsen,
+                            "failure": failure,
+                            "failure_class": failure_class,
+                            "manifold_counts": manifold_counts,
+                            "max_manifold_faces_for_ftetwild": max_manifold_faces,
+                            "queued_repair_variants": added_repair_variants,
+                        }
+                    )
+                    break
 
             ftetwild_cmd = [
                 ftetwild_bin,
@@ -2062,7 +2474,7 @@ def run_merge_mesh(
         "--final_k",
         str(stage_cfg.get("final_k", 0)),
         "--merge_backend",
-        str(stage_cfg.get("backend", "legacy_python")),
+        _legacy_merge_backend_name(stage_cfg.get("backend", "legacy_python")),
         "--worker",
         str(stage_cfg.get("worker", 0)),
         "--data_batch_size",
@@ -2114,9 +2526,16 @@ def greedy_segment_path(tet_dir: Path, stage_cfg: dict[str, Any]) -> Path:
 
 
 def _cpp_native_search_direct_enabled(stage_cfg: dict[str, Any]) -> bool:
-    return str(stage_cfg.get("backend", "auto")) == "cpp_native" and bool(
+    return str(stage_cfg.get("backend", "auto")) in {"cpp_native", "cpp_native_executable"} and bool(
         stage_cfg.get("direct_file_runner", True)
     )
+
+
+def _legacy_merge_backend_name(backend: Any) -> str:
+    backend_name = str(backend)
+    if backend_name == "cpp_native_executable":
+        return "cpp_native"
+    return backend_name
 
 
 def _run_cpp_native_merge_file_runner(

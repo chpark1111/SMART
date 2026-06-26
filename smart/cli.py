@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from .pipeline.config import REPO_ROOT, load_config, workspace_path
+from .pipeline.config import REPO_ROOT, apply_agent_profile_defaults, load_config, workspace_path
 from .pipeline.stages import (
     STAGE_ORDER,
     data_status,
@@ -23,7 +24,14 @@ def _build_messages_failed(messages: list[str]) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="smart", description="SMART official pipeline")
-    parser.add_argument("--config", default="configs/demo.yaml", help="Pipeline config path")
+    parser.add_argument(
+        "--config",
+        default="configs/demo.yaml",
+        help=(
+            "Pipeline config path. For `smart run`, omitting --config uses "
+            "configs/learned_default.yaml; explicit configs are respected."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print and manifest work without executing external tools")
     parser.add_argument(
         "--set",
@@ -34,15 +42,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Override a config value, e.g. --set mcts.mcts_iter=100 --set render.joint_mesh=true",
     )
     public_commands = (
-        "{run,native-run,normalize,tetra,preseg,merge,refine,mcts,macro_skill,local_refine,"
+        "{run,agent-run,native-run,normalize,tetra,preseg,merge,refine,mcts,macro_skill,local_refine,"
         "render,build-tools,build-cpp,audit-wheel,check-data,configs,assets,"
         "summary,doctor,evaluate,macro-skill,macro-skill-summary,learned-router-summary,"
         "learned-release-readiness}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
-    run = sub.add_parser("run", help="Run enabled stages in pipeline order")
+    run = sub.add_parser("run", help="Run enabled stages; defaults to the learned MCTS-replacement agent")
     _stage_options(run)
+    run.add_argument(
+        "--agent",
+        action="store_true",
+        help="Use the learned MCTS-replacement default agent profile for this run",
+    )
+
+    agent_run = sub.add_parser(
+        "agent-run",
+        help=(
+            "Run the learned default-agent profile: exact native refine, no MCTS, "
+            "guarded macro-skill MCTS replacement, exact fallback"
+        ),
+    )
+    _stage_options(agent_run)
 
     native_run = sub.add_parser(
         "native-run",
@@ -526,8 +548,17 @@ def main(argv: list[str] | None = None) -> int:
         action for action in sub._choices_actions if action.help != argparse.SUPPRESS  # type: ignore[attr-defined]
     ]
 
-    args = parser.parse_args(argv)
+    argv_list = sys.argv[1:] if argv is None else list(argv)
+    explicit_config = any(item == "--config" or item.startswith("--config=") for item in argv_list)
+    args = parser.parse_args(argv_list)
+    if args.command in {"run", "agent-run"} and not explicit_config:
+        args.config = "configs/learned_default.yaml"
     cfg = load_config(args.config)
+    if (
+        args.command == "agent-run"
+        or (args.command == "run" and (not explicit_config or getattr(args, "agent", False)))
+    ):
+        apply_agent_profile_defaults(cfg)
     for override in args.overrides:
         _apply_override(cfg, override)
 
@@ -797,10 +828,11 @@ def main(argv: list[str] | None = None) -> int:
             router = summary_payload["router"]
             macro = summary_payload["macro_skill"]
             print(
-                "status={status} opt_in={opt_in} can_be_default={can_default} "
+                "status={status} default_agent={default_agent} opt_in={opt_in} can_be_default={can_default} "
                 "profiles={profiles} router_losses={router_losses} macro_losses={macro_losses} "
                 "router_exact_call_reduction={router_reduction:.3f} macro_balanced_delta={macro_delta:.4f}".format(
                     status=summary_payload["status"],
+                    default_agent=summary_payload.get("default_agent_enabled", False),
                     opt_in=summary_payload["can_ship_opt_in"],
                     can_default=summary_payload["can_be_default"],
                     profiles=",".join(summary_payload["opt_in_profiles"]),
@@ -1155,7 +1187,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
         )
     else:
-        only_stage = None if args.command == "run" else args.command
+        only_stage = None if args.command in {"run", "agent-run"} else args.command
         records = run_pipeline(
             cfg,
             only_stage=only_stage,

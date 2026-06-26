@@ -81,6 +81,51 @@ Python users can call the same profile with `smart.run_agent(...)` or overlay it
 on an existing config with `smart.run("configs/smoke_5.yaml", agent=True)`.
 Calling `smart.run()` with no config uses the learned default-agent profile.
 
+## Native Pipeline Reuse Controls
+
+For repeated profiling or learned-search experiments on the same mesh, use:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set native_pipeline.reuse_preprocessing=true \
+  native-run --category table --mesh <mesh_id> --force
+```
+
+`native_pipeline.reuse_preprocessing=true` keeps normalized, ManifoldPlus,
+fTetWild, and presegmentation outputs, then reruns merge/refine/MCTS.  This is
+the preferred knob when comparing learned router/MCTS settings because
+preprocessing can dominate end-to-end time.  `native_pipeline.reuse_existing`
+reuses all stage outputs, including search outputs.
+
+For cross-workspace reuse, enable the persistent preprocessing cache:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set native_pipeline.preprocessing_cache=true \
+  native-run --category table --mesh <mesh_id> --force
+```
+
+The cache is keyed by source mesh content, normalization, tetra, CoACD, and
+tool signatures.  Search settings are excluded, so changing learned router or
+MCTS parameters reuses the same preprocessing artifacts while rerunning the
+actual optimization stage.
+
+For known-clean meshes, `--set tetra.skip_manifoldplus=true` bypasses the
+ManifoldPlus repair step and lets fTetWild consume the normalized OBJ directly.
+Leave this off for arbitrary web meshes unless validation shows the input is
+stable.
+
+`tetra.manifold_depth` keeps ManifoldPlus enabled but changes its repair
+resolution.  The upstream default is `8`; lower values such as `7` can reduce
+the repaired mesh face count and downstream tetra time, but they can also alter
+the fitted box decomposition.  Treat it as a quality-gated speed knob, not as a
+bit-identical optimization.
+
+`configs/preprocess_fast.yaml` enables a guarded version of this idea with
+category-specific depth candidates.  SMART tries the first candidate and falls
+back to depth 8 if the native run fails, so this accelerates first-run
+preprocessing rather than reusing previous outputs.
+
 ## Wheel Copy
 
 The source configs in this directory are mirrored under `smart/configs/` so an

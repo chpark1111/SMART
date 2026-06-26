@@ -1,18 +1,47 @@
-"""Release-candidate opt-in variable-length macro-skill controller for SMART.
+"""Release-candidate variable-length macro-skill controller for SMART.
 
-This module packages the current research controller behind a small opt-in API
-and pipeline stage.  It does not replace the default exact C++ SMART path.  A
-caller passes an active ``NativeSmartEngine`` instance, and every accepted
-update is still validated by the engine's exact reward backend.
+This module packages the current research controller behind a small public API
+and pipeline stage.  The release path now includes a guarded learned-default
+profile that disables MCTS and uses exact-validated macrohash skills after
+native refine.  A caller passes an active ``NativeSmartEngine`` instance, and
+every accepted update is still validated by the engine's exact reward backend.
 """
 
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+_MACROHASH_SKILL_FAMILIES = [
+    "escape_local_minimum_expand_then_refine",
+    "coverage_rescue_then_tighten",
+    "expand_to_recover_coverage",
+    "generic_refine_sequence",
+    "major_axis_extend_then_trim",
+    "recenter_then_shrink",
+    "shrink_slack_face",
+]
+_MACROHASH_CATEGORIES = ["airplane", "chair", "table", "unknown"]
+_MACROHASH_BUCKETS = 64
+_MACROHASH_GUARD_RULES = {
+    "airplane": {
+        "score_spread_min": 0.0703982397783589,
+        "attempt_delta_spread_min": 0.08720711282144156,
+    },
+    "chair": {
+        "score_spread_min": 0.01155854290368806,
+        "attempt_delta_spread_min": 0.008038927948109675,
+    },
+    "table": {
+        "score_spread_min": 0.02378416988898721,
+        "attempt_delta_spread_min": 0.27794660613448274,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -23,6 +52,8 @@ class MacroSkillAssets:
     memory_policy: Path
     budget_rule: Path
     quality_gate: Path
+    macrohash_candidates: Path
+    macrohash_retriever: Path
 
 
 def builtin_macro_skill_assets() -> MacroSkillAssets:
@@ -35,6 +66,8 @@ def builtin_macro_skill_assets() -> MacroSkillAssets:
         memory_policy=asset_path("skills", "macro_memory_v1"),
         budget_rule=asset_path("skills", "macro_budget_quality_v1"),
         quality_gate=asset_path("skills", "macro_quality_gate_ridge_v1"),
+        macrohash_candidates=asset_path("skills", "macro_skill_candidates_4k_v1"),
+        macrohash_retriever=asset_path("skills", "macrohash_retriever_v1"),
     )
 
 
@@ -48,6 +81,16 @@ def load_builtin_macro_skill_policy() -> dict[str, Any]:
         "memory_policy": load_macro_memory_policy(assets.memory_policy),
         "budget_rules": load_budget_rules(assets.budget_rule),
         "quality_gate": load_macro_quality_gate(assets.quality_gate),
+    }
+
+
+def load_builtin_macrohash_policy() -> dict[str, Any]:
+    """Load the larger opt-in MCTS-replacement skill bank and selector."""
+
+    assets = builtin_macro_skill_assets()
+    return {
+        "macrohash_skills_by_id": load_macrohash_skill_candidates(assets.macrohash_candidates),
+        "macrohash_retriever": load_macrohash_retriever(assets.macrohash_retriever),
     }
 
 
@@ -68,8 +111,8 @@ def macro_skill_profile_summary() -> dict[str, Any]:
             "can_be_default": False,
             "default_blockers": [
                 "paper reproduction default must remain unchanged unless the learned controller is explicitly selected",
-                "full-pipeline learned-router plus macro-skill default promotion still needs mesh-level validation together",
-                "MCTS replacement claim still needs larger full-pipeline validation beyond the current stage-source replay gates",
+                "post-refine macro-skill is an optional quality/speed controller, not the paper reproduction baseline",
+                "the guarded MCTS-replacement agent has a separate default-candidate gate and should be promoted explicitly",
             ],
             "promotion_requirements": {
                 "min_replay_states": 500,
@@ -89,6 +132,8 @@ def macro_skill_profile_summary() -> dict[str, Any]:
                 "fresh_replay_500_cases": 507,
                 "refine_stage_program_gate_456_zero_regression": True,
                 "mcts_stage_program_gate_456_zero_regression": True,
+                "mcts_replacement_guarded_510_zero_regression": True,
+                "mcts_replacement_guarded_attempt_reduction": 0.2628676470588235,
             },
         },
         "exact_reward_contract": [
@@ -106,15 +151,23 @@ def macro_skill_profile_summary() -> dict[str, Any]:
             "planner_enabled_in_learned_macro_safe": True,
         },
         "recommended_configs": [
+            "configs/learned_default.yaml",
             "configs/learned_macro_safe.yaml",
             "configs/learned_macro_program_gate_top3.yaml",
             "configs/learned_macro_refine_only.yaml",
+            "configs/learned_macro_mcts_replacement_guarded.yaml",
         ],
         "recommended_commands": [
             "smart macro-skill-summary --json",
+            "smart run",
+            "smart agent-run",
+            "smart run --agent",
+            "smart --config configs/learned_default.yaml run",
+            "smart --config <your_config.yaml> run --agent",
             "smart --config configs/learned_macro_safe.yaml run",
             "smart --config configs/learned_macro_program_gate_top3.yaml run",
             "smart --config configs/learned_macro_refine_only.yaml run",
+            "smart --config configs/learned_macro_mcts_replacement_guarded.yaml run",
             "smart macro-skill --planner --planner-max-rounds 3 --planner-profile-schedule balanced learned_efficient quality ...",
             "smart --config configs/smoke_5.yaml --set stages.macro_skill=true --set render.input_stage=macro_skill run",
         ],
@@ -225,36 +278,100 @@ def macro_skill_profile_summary() -> dict[str, Any]:
             ),
         },
         "mcts_replacement_agent": {
-            "status": "research_only_not_default_ready",
-            "current_safe_use": "post_mcts_polishing",
-            "experimental_use": "refine_output_to_macro_planner_without_mcts",
-            "packaged_config": "configs/learned_macro_refine_only.yaml",
-            "command": "smart --config configs/learned_macro_refine_only.yaml run",
+            "status": "guarded_default_candidate_gate_passed",
+            "can_be_default_candidate": True,
+            "default_candidate_gate_passed": True,
+            "current_safe_use": "refine_output_to_macro_planner_without_mcts",
+            "fallback_safe_use": "post_mcts_polishing",
+            "experimental_use": "full_mcts_replacement_when_config_explicitly_selected",
+            "default_config": "configs/learned_default.yaml",
+            "packaged_config": "configs/learned_macro_mcts_replacement_guarded.yaml",
+            "command": "smart agent-run",
+            "commands": [
+                "smart run",
+                "smart agent-run",
+                "smart run --agent",
+                "smart --config configs/learned_default.yaml run",
+                "smart --config <your_config.yaml> run --agent",
+                "smart.run_agent(...)",
+                "smart.run('configs/smoke_5.yaml', agent=True)",
+            ],
+            "underlying_profile_command": "smart --config configs/learned_macro_mcts_replacement_guarded.yaml run",
+            "runtime_preset": "quality_preset=mcts_replacement_guarded",
             "fresh_refine_only_latest": {
-                "source": "runs/learned_macro_500_20260603/refine",
+                "source": (
+                    "runs/learned_macro_500_20260603/refine + "
+                    "runs/learned_macro_extra_180_20260604/refine"
+                ),
                 "report": (
                     "experiments/macro_search/runs/parameterized_skills_4k/"
-                    "fresh_matched_refine_only_replacement_seed76_3cat_20260604/fresh_matched_report.json"
+                    "fresh_matched_refine_only_replacement_500plus_20260604/fresh_matched_report.json"
                 ),
-                "cases": 76,
-                "category_counts": {"airplane": 26, "chair": 24, "table": 26},
+                "cases": 510,
+                "category_counts": {"airplane": 177, "chair": 165, "table": 168},
                 "losses": 0,
+                "wins": 457,
+                "ties": 53,
                 "portfolio_exact_attempts": 16,
                 "learned_top1_exact_attempts": 1,
                 "learned_top3_exact_attempts": 3,
                 "top1_exact_attempt_reduction": 0.9375,
                 "top3_exact_attempt_reduction": 0.8125,
-                "portfolio_mean_delta": 1.494923735774852,
-                "learned_top1_mean_delta": 1.9534924644994305,
-                "learned_top3_mean_delta": 2.110346960672846,
-                "top3_portfolio_ratio": 1.4116753317713606,
+                "portfolio_mean_delta": 0.7164852678320034,
+                "learned_top1_mean_delta": 1.0009196051198488,
+                "learned_top3_mean_delta": 1.1187214570390072,
+                "top3_delta_vs_initial": 1.1187214570390072,
+                "top3_positive_rate": 0.8960784313725491,
+                "top3_portfolio_ratio": 1.5614018979400934,
+                "top3_losses_vs_initial": 0,
+                "top3_losses_vs_budgeted_portfolio": 104,
                 "top3_oracle_regret": 0.0,
             },
-            "default_blockers": [
-                "456-case refine-source and MCTS-source replay gates pass with zero rejected positive states using program-gate top3",
-                "still needs 500+ mesh-level full-pipeline validation before replacing MCTS by default",
-                "needs direct wall-time and final metric comparison against full historical MCTS, not only post-stage replay",
+            "guarded_fallback_default_candidate": {
+                "policy": "category_threshold(score_spread, attempt_delta_spread)",
+                "learned_attempts": 3,
+                "fallback_attempts": 16,
+                "source_report": (
+                    "experiments/macro_search/runs/parameterized_skills_4k/"
+                    "fresh_matched_refine_only_replacement_500plus_20260604/fresh_matched_report.json"
+                ),
+                "cases": 510,
+                "learned_open_cases": 165,
+                "fallback_cases": 345,
+                "learned_open_rate": 0.3235294117647059,
+                "losses_vs_budgeted_portfolio": 0,
+                "mean_delta": 0.9655215918537186,
+                "mean_delta_vs_budgeted_portfolio": 0.2490363240217152,
+                "mean_exact_attempts": 11.794117647058824,
+                "exact_attempt_reduction_vs_budgeted_portfolio": 0.2628676470588235,
+                "category_rules": {
+                    "airplane": {
+                        "score_spread_min": 0.0703982397783589,
+                        "attempt_delta_spread_min": 0.08720711282144156,
+                    },
+                    "chair": {
+                        "score_spread_min": 0.01155854290368806,
+                        "attempt_delta_spread_min": 0.008038927948109675,
+                    },
+                    "table": {
+                        "score_spread_min": 0.02378416988898721,
+                        "attempt_delta_spread_min": 0.27794660613448274,
+                    },
+                },
+                "interpretation": (
+                    "safe default-candidate policy: use the learned macro controller "
+                    "only when the first exact top3 attempts have enough separation; "
+                    "otherwise fall back to the exact 16-skill portfolio"
+                ),
+            },
+            "default_evidence": [
+                "510-case refine-source MCTS-replacement replay passes with zero loss against the input state",
+                "guarded fallback reaches zero loss against the 16-skill exact portfolio",
+                "guarded fallback reduces exact skill attempts by 26.3% versus the 16-skill exact portfolio",
             ],
+            "package_default_policy": (
+                "available as an explicit config-backed MCTS replacement; not silently enabled for paper reproduction configs"
+            ),
             "acceptance_rule": "same exact SMART/Manifold non-worse validation as post-MCTS planner",
         },
         "heldout_cases": 173,
@@ -525,6 +642,53 @@ def load_macro_quality_gate(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def load_macrohash_skill_candidates(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Load the larger mined skill bank used by the guarded MCTS-replacement preset."""
+
+    rows: list[dict[str, Any]] = []
+    text = Path(path).read_text(encoding="utf-8")
+    if str(path).endswith(".jsonl"):
+        rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    else:
+        payload = json.loads(text)
+        raw_rows = payload.get("skills", payload if isinstance(payload, list) else [])
+        rows = [row for row in raw_rows if isinstance(row, dict)]
+    out: dict[str, dict[str, Any]] = {}
+    for idx, row in enumerate(rows):
+        macro_id = str(row.get("macro_id") or row.get("skill_id") or f"macrohash_{idx:04d}")
+        item = dict(row)
+        item["macro_id"] = macro_id
+        item.setdefault("skill", str(item.get("family", "generic_refine_sequence")))
+        out[macro_id] = item
+    if not out:
+        raise ValueError(f"no macrohash skill candidates found in {path}")
+    return out
+
+
+def load_macrohash_retriever(path: str | Path) -> dict[str, Any]:
+    """Load the packaged macro-skill retriever.
+
+    The original release artifact was a scalar MLP.  The current safer
+    cross-model gate can also use a compact category/macro memory table.  Both
+    artifacts expose the same runtime contract: given the 16-skill exact
+    portfolio head, produce a cheaper learned ordering before the exact
+    rollback validator decides what to accept.
+    """
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    model_type = payload.get("model_type")
+    if model_type == "parameterized_skill_scalar_mlp_v1_json":
+        required = ("layers", "mean", "std", "feature_dim")
+    elif model_type == "parameterized_skill_category_macro_mean_v1_json":
+        required = ("global_mean", "macro_means", "category_macro_means")
+    else:
+        raise ValueError(f"unsupported macrohash retriever type: {model_type}")
+    missing = [name for name in required if name not in payload]
+    if missing:
+        raise ValueError(f"macrohash retriever is missing fields {missing}: {path}")
+    return payload
+
+
 def rank_builtin_macro_skills(
     category: str,
     *,
@@ -580,6 +744,286 @@ def rank_macro_skills(
     head.sort(key=lambda item: item[2], reverse=True)
     ranked = [(macro_id, memory) for macro_id, _base, memory in head]
     ranked.extend((macro_id, base) for macro_id, base, _memory in tail)
+    return ranked
+
+
+def _one_hot(value: str, values: list[str]) -> list[float]:
+    return [1.0 if value == item else 0.0 for item in values]
+
+
+def _bucket_one_hot(value: str, prefix: str) -> list[float]:
+    buckets = {
+        "coverage": ["cov<25", "cov25-50", "cov50-75", "cov75-90", "cov90-98", "cov>=98"],
+        "bvs": ["bvs<1", "bvs1-1.2", "bvs1.2-2", "bvs2-4", "bvs4-10", "bvs10-30", "bvs>=30"],
+        "aspect": ["ar<1.2", "ar1.2-2", "ar2-4", "ar4-8", "ar>=8"],
+    }[prefix]
+    return _one_hot(value, buckets)
+
+
+def _stable_hash_bucket(value: str, buckets: int) -> int:
+    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "little") % buckets
+
+
+def _macro_id_features(macro_id: str) -> list[float]:
+    out = [0.0 for _ in range(_MACROHASH_BUCKETS)]
+    out[_stable_hash_bucket(macro_id, _MACROHASH_BUCKETS)] = 1.0
+    return out
+
+
+def _macrohash_skill_feature_vector(skill: dict[str, Any]) -> list[float]:
+    metrics = skill.get("metrics", {}) or {}
+    aggregate = skill.get("aggregate", {}) or {}
+    pre = skill.get("precondition", {}) or {}
+    return [
+        safe_float(skill.get("length")),
+        safe_float(skill.get("support")),
+        safe_float(metrics.get("score_delta")),
+        safe_float(metrics.get("coverage_delta")),
+        safe_float(metrics.get("bvs_delta")),
+        safe_float(aggregate.get("mean_score_delta")),
+        safe_float(aggregate.get("mean_coverage_delta")),
+        safe_float(aggregate.get("mean_bvs_delta")),
+        safe_float(pre.get("nbox")),
+        1.0 if pre.get("coverage_lt") is not None else 0.0,
+        1.0 if pre.get("bvs_gt") is not None else 0.0,
+    ]
+
+
+def _macrohash_policy_features(skill: dict[str, Any]) -> list[float]:
+    counts: dict[str, int] = {}
+    repeats: list[float] = []
+    for item in skill.get("policy", []) or []:
+        op = str(item.get("op", ""))
+        counts[op] = counts.get(op, 0) + 1
+        repeats.append(safe_float(item.get("observed_repeat"), 1.0))
+    term = skill.get("termination", {}) or {}
+    pre = skill.get("precondition", {}) or {}
+    return [
+        float(counts.get("expand_face", 0)),
+        float(counts.get("shrink_face", 0)),
+        float(counts.get("recenter_box", 0)),
+        float(counts.get("apply_axis_edit", 0)),
+        float(sum(repeats)),
+        float(max(repeats) if repeats else 0.0),
+        safe_float(term.get("max_steps")),
+        safe_float(pre.get("nbox")),
+        1.0 if pre.get("coverage_lt") is not None else 0.0,
+        1.0 if pre.get("bvs_gt") is not None else 0.0,
+    ]
+
+
+def _macrohash_candidate_features(skill: dict[str, Any], category: str) -> list[float]:
+    pre = skill.get("precondition", {}) or {}
+    macro_id = str(skill.get("macro_id", ""))
+    return (
+        _macrohash_skill_feature_vector(skill)
+        + _one_hot(str(skill.get("skill", "")), _MACROHASH_SKILL_FAMILIES)
+        + _one_hot(category, _MACROHASH_CATEGORIES)
+        + _bucket_one_hot(str(pre.get("coverage_bucket", "")), "coverage")
+        + _bucket_one_hot(str(pre.get("bvs_bucket", "")), "bvs")
+        + _bucket_one_hot(str(pre.get("aspect_bucket", "")), "aspect")
+        + _macrohash_policy_features(skill)
+        + _macro_id_features(macro_id)
+    )
+
+
+def _macrohash_case_features(initial_score: float, stats: dict[str, float]) -> list[float]:
+    num_boxes = safe_float(stats.get("num_boxes"))
+    volume_sum = safe_float(stats.get("volume_sum"))
+    return [
+        safe_float(initial_score),
+        abs(safe_float(initial_score)),
+        num_boxes,
+        math.log1p(max(0.0, num_boxes)),
+        volume_sum,
+        math.log1p(max(0.0, volume_sum)),
+        safe_float(stats.get("native_recenter_enabled")),
+        safe_float(stats.get("proxy_count")),
+        safe_float(stats.get("proxy_top1_delta")),
+        safe_float(stats.get("proxy_top3_mean_delta")),
+        safe_float(stats.get("proxy_mean_delta")),
+        safe_float(stats.get("proxy_positive_fraction")),
+        safe_float(stats.get("proxy_delta_spread")),
+        safe_float(stats.get("proxy_top1_score")),
+        safe_float(stats.get("proxy_expand_fraction")),
+        safe_float(stats.get("proxy_shrink_fraction")),
+    ]
+
+
+def _json_linear(rows: list[list[float]], layer: dict[str, Any]) -> list[list[float]]:
+    weights = layer.get("weight") or []
+    bias = layer.get("bias") or [0.0 for _ in weights]
+    out: list[list[float]] = []
+    for row in rows:
+        out_row: list[float] = []
+        for unit, weight_row in enumerate(weights):
+            total = safe_float(bias[unit] if unit < len(bias) else 0.0)
+            total += sum(safe_float(w) * safe_float(x) for w, x in zip(weight_row, row))
+            out_row.append(total)
+        out.append(out_row)
+    return out
+
+
+def _json_gelu_erf(rows: list[list[float]]) -> list[list[float]]:
+    scale = math.sqrt(2.0)
+    return [
+        [0.5 * x * (1.0 + math.erf(x / scale)) for x in row]
+        for row in rows
+    ]
+
+
+def _json_layer_norm(rows: list[list[float]], layer: dict[str, Any], eps: float) -> list[list[float]]:
+    weights = layer.get("weight") or []
+    bias = layer.get("bias") or []
+    out: list[list[float]] = []
+    for row in rows:
+        mean = sum(row) / max(1, len(row))
+        var = sum((x - mean) * (x - mean) for x in row) / max(1, len(row))
+        denom = math.sqrt(var + eps)
+        out.append(
+            [
+                ((x - mean) / denom) * safe_float(weights[idx] if idx < len(weights) else 1.0)
+                + safe_float(bias[idx] if idx < len(bias) else 0.0)
+                for idx, x in enumerate(row)
+            ]
+        )
+    return out
+
+
+def _predict_macrohash_scores(model: dict[str, Any], features: list[list[float]]) -> list[float]:
+    expected = int(model.get("feature_dim") or len(model.get("mean") or []))
+    mean = [safe_float(value) for value in model.get("mean", [])]
+    std = [safe_float(value, 1.0) or 1.0 for value in model.get("std", [])]
+    normalized: list[list[float]] = []
+    for row in features:
+        padded = list(row[:expected])
+        if len(padded) < expected:
+            padded.extend([0.0] * (expected - len(padded)))
+        normalized.append(
+            [
+                (safe_float(value) - safe_float(mean[idx] if idx < len(mean) else 0.0))
+                / max(1.0e-8, abs(safe_float(std[idx] if idx < len(std) else 1.0)))
+                for idx, value in enumerate(padded)
+            ]
+        )
+    layers = model.get("layers", {}) or {}
+    x = _json_linear(normalized, layers["linear0"])
+    x = _json_gelu_erf(x)
+    x = _json_layer_norm(x, layers["norm0"], safe_float(model.get("layernorm_eps"), 1.0e-5))
+    x = _json_linear(x, layers["linear1"])
+    x = _json_gelu_erf(x)
+    x = _json_layer_norm(x, layers["norm1"], safe_float(model.get("layernorm_eps"), 1.0e-5))
+    x = _json_linear(x, layers["linear_out"])
+    return [safe_float(row[0] if row else 0.0) for row in x]
+
+
+def _macrohash_portfolio_rank(category: str, skills_by_id: dict[str, dict[str, Any]]) -> list[tuple[str, float]]:
+    rows = []
+    for macro_id, skill in skills_by_id.items():
+        if str(skill.get("category", "unknown")) != category:
+            continue
+        metrics = skill.get("metrics", {}) or {}
+        rows.append(
+            (
+                macro_id,
+                safe_float(metrics.get("score_delta")),
+                int(safe_float(metrics.get("exact_labeled_steps"))),
+            )
+        )
+    rows.sort(key=lambda item: (item[1], item[2]), reverse=True)
+    return [(macro_id, score) for macro_id, score, _steps in rows]
+
+
+def _macrohash_initial_stats(
+    engine: Any,
+    *,
+    cover_penalty: float,
+    pen_rate: float,
+    candidate_count: int,
+    num_action_scale: int,
+) -> dict[str, float]:
+    stats = {
+        key: safe_float(value)
+        for key, value in dict(engine.stats()).items()
+        if key in {"num_boxes", "volume_sum", "last_bbox_score", "best_bbox_score", "native_recenter_enabled"}
+    }
+    try:
+        proxy_rows = engine.centroid_proxy_axis_metrics(
+            cover_penalty,
+            pen_rate,
+            max(8, min(64, int(candidate_count))),
+        )
+    except Exception:
+        proxy_rows = []
+    proxy_deltas = [safe_float(row[1]) for row in proxy_rows]
+    proxy_scores = [safe_float(row[3]) for row in proxy_rows]
+    proxy_dirs = [action_direction(int(row[0]), num_action_scale) for row in proxy_rows]
+    if proxy_deltas:
+        sorted_proxy = sorted(proxy_deltas, reverse=True)
+        stats.update(
+            {
+                "proxy_count": float(len(proxy_deltas)),
+                "proxy_top1_delta": sorted_proxy[0],
+                "proxy_top3_mean_delta": sum(sorted_proxy[:3]) / min(3, len(sorted_proxy)),
+                "proxy_mean_delta": sum(proxy_deltas) / len(proxy_deltas),
+                "proxy_positive_fraction": sum(delta > 1.0e-12 for delta in proxy_deltas) / len(proxy_deltas),
+                "proxy_delta_spread": max(proxy_deltas) - min(proxy_deltas),
+                "proxy_top1_score": max(proxy_scores) if proxy_scores else 0.0,
+                "proxy_expand_fraction": proxy_dirs.count("expand") / len(proxy_dirs),
+                "proxy_shrink_fraction": proxy_dirs.count("shrink") / len(proxy_dirs),
+            }
+        )
+    return stats
+
+
+def _rank_macrohash_retriever(
+    *,
+    category: str,
+    portfolio_ranked: list[tuple[str, float]],
+    skills_by_id: dict[str, dict[str, Any]],
+    model: dict[str, Any],
+    initial_score: float,
+    initial_stats: dict[str, float],
+) -> list[tuple[str, float]]:
+    model_type = str(model.get("model_type", ""))
+    if model_type == "parameterized_skill_category_macro_mean_v1_json":
+        global_mean = safe_float(model.get("global_mean"))
+        macro_means = {
+            str(macro_id): safe_float(value)
+            for macro_id, value in (model.get("macro_means") or {}).items()
+        }
+        unknown_macro_mean = safe_float(model.get("unknown_macro_mean"), min(0.0, global_mean))
+        category_table = model.get("category_macro_means") or {}
+        category_means = {
+            str(macro_id): safe_float(value)
+            for macro_id, value in (category_table.get(category) or {}).items()
+        }
+        ranked = []
+        for rank, (macro_id, portfolio_score) in enumerate(portfolio_ranked):
+            learned_score = category_means.get(macro_id, macro_means.get(macro_id, unknown_macro_mean))
+            # Stable tie break keeps the mined exact portfolio prior when the
+            # learned table cannot distinguish two candidate programs.
+            tie_break = 1.0e-9 * safe_float(portfolio_score) + 1.0e-12 / float(rank + 1)
+            ranked.append((macro_id, learned_score + tie_break))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked
+
+    case_features = _macrohash_case_features(initial_score, initial_stats)
+    rows: list[tuple[str, list[float]]] = []
+    for rank, (macro_id, _portfolio_score) in enumerate(portfolio_ranked):
+        skill = skills_by_id[macro_id]
+        rows.append(
+            (
+                macro_id,
+                _macrohash_candidate_features(skill, category)
+                + case_features
+                + [float(rank), 1.0 / float(rank + 1)],
+            )
+        )
+    scores = _predict_macrohash_scores(model, [row[1] for row in rows])
+    ranked = list(zip((row[0] for row in rows), scores))
+    ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked
 
 
@@ -678,6 +1122,26 @@ def run_builtin_macro_skill_controller(
     bounds/rotations/score and reports ``accepted=False``.
     """
 
+    preset = str(quality_preset or "balanced")
+    if preset in {"mcts_replacement_guarded", "mcts_replacement_learned_only"}:
+        return _run_macrohash_guarded_mcts_replacement_controller(
+            engine,
+            category=category,
+            policy=load_builtin_macrohash_policy(),
+            cover_penalty=cover_penalty,
+            pen_rate=pen_rate,
+            num_action_scale=num_action_scale,
+            candidate_count=candidate_count,
+            max_steps=max(max_steps, 16),
+            hist_bins=hist_bins,
+            top_k=max(3, top_k) if preset == "mcts_replacement_guarded" else max(1, top_k),
+            target_aware_execution=target_aware_execution,
+            native_executor=native_executor,
+            restore_best_attempt_state=restore_best_attempt_state,
+            repeat_mode=repeat_mode,
+            allow_portfolio_fallback=preset == "mcts_replacement_guarded",
+            runtime_preset=preset,
+        )
     policy = load_builtin_macro_skill_policy()
     skills_by_id = policy["skills_by_id"]
     ranked = rank_macro_skills(
@@ -688,11 +1152,10 @@ def run_builtin_macro_skill_controller(
     )
     ranked = ranked[: max(1, top_k)]
     native_state_features = _engine_geometry_features(engine, hist_bins=hist_bins)
-    preset = str(quality_preset or "balanced")
     learned_presets = {"learned_fast", "learned_efficient", "learned_quality"}
     if preset not in {"balanced", "quality", "efficient", "custom", *learned_presets}:
         raise ValueError(
-            "quality_preset must be one of: balanced, quality, efficient, learned_fast, learned_efficient, learned_quality, custom"
+            "quality_preset must be one of: balanced, quality, efficient, learned_fast, learned_efficient, learned_quality, custom, mcts_replacement_guarded, mcts_replacement_learned_only"
         )
     effective_exact_budget = exact_budget
     learned_quality_gate_decision: dict[str, Any] = {}
@@ -981,6 +1444,8 @@ def _macro_skill_profile_for_preset(profile_summary: dict[str, Any], preset: str
         return profile_summary["quality_preset"]
     if preset in {"learned_fast", "learned_efficient", "learned_quality"}:
         return profile_summary["learned_quality_gate_preset"]
+    if preset == "mcts_replacement_guarded":
+        return profile_summary["mcts_replacement_agent"]["guarded_fallback_default_candidate"]
     if preset == "efficient":
         return profile_summary["efficient_quality_preset"]
     return profile_summary["best_practical"]
@@ -1551,6 +2016,176 @@ def decode_action(action: int, num_action_scale: int) -> dict[str, int]:
         "scale": local % num_action_scale,
         "recenter": 0,
     }
+
+
+def _run_macrohash_guarded_mcts_replacement_controller(
+    engine: Any,
+    *,
+    category: str,
+    policy: dict[str, Any],
+    cover_penalty: float,
+    pen_rate: float,
+    num_action_scale: int,
+    candidate_count: int,
+    max_steps: int,
+    hist_bins: int,
+    top_k: int,
+    target_aware_execution: bool,
+    native_executor: bool,
+    restore_best_attempt_state: bool,
+    repeat_mode: str,
+    allow_portfolio_fallback: bool = True,
+    runtime_preset: str = "mcts_replacement_guarded",
+) -> dict[str, Any]:
+    """Run the guarded learned-first MCTS-replacement preset."""
+
+    skills_by_id = policy["macrohash_skills_by_id"]
+    retriever = policy["macrohash_retriever"]
+    saved_bounds, saved_rotations, saved_score = engine.boxes()
+    native_state_features = _engine_geometry_features(engine, hist_bins=hist_bins)
+    initial_stats = _macrohash_initial_stats(
+        engine,
+        cover_penalty=cover_penalty,
+        pen_rate=pen_rate,
+        candidate_count=candidate_count,
+        num_action_scale=num_action_scale,
+    )
+    portfolio_ranked = _macrohash_portfolio_rank(category, skills_by_id)[:16]
+    learned_ranked = _rank_macrohash_retriever(
+        category=category,
+        portfolio_ranked=portfolio_ranked,
+        skills_by_id=skills_by_id,
+        model=retriever,
+        initial_score=safe_float(saved_score),
+        initial_stats=initial_stats,
+    )
+    learned_candidate_limit = 3 if allow_portfolio_fallback else max(1, top_k)
+    learned_top = learned_ranked[: min(learned_candidate_limit, len(learned_ranked), max(1, top_k))]
+    attempts: list[dict[str, Any]] = []
+    attempted_ids: set[str] = set()
+
+    def attempt_skill(macro_id: str, rank_score: float, source: str) -> dict[str, Any]:
+        engine.reset_to_state(saved_bounds, saved_rotations, saved_score)
+        result = execute_macro_skill(
+            engine,
+            skills_by_id[macro_id],
+            cover_penalty=cover_penalty,
+            pen_rate=pen_rate,
+            num_action_scale=num_action_scale,
+            candidate_count=candidate_count,
+            max_steps=max_steps,
+            target_aware_execution=target_aware_execution,
+            native_executor=native_executor,
+            return_final_state=restore_best_attempt_state,
+            repeat_mode=repeat_mode,
+        )
+        result["rank_score"] = float(rank_score)
+        result["selection_source"] = source
+        attempts.append(result)
+        attempted_ids.add(macro_id)
+        return result
+
+    learned_results = [
+        attempt_skill(macro_id, rank_score, "macrohash_top3")
+        for macro_id, rank_score in learned_top
+    ]
+    learned_scores = [score for _macro_id, score in learned_top]
+    learned_deltas = [safe_float(result.get("score_delta")) for result in learned_results]
+    score_spread = (max(learned_scores) - min(learned_scores)) if learned_scores else 0.0
+    attempt_delta_spread = (max(learned_deltas) - min(learned_deltas)) if learned_deltas else 0.0
+    guard_rule = _MACROHASH_GUARD_RULES.get(category, _MACROHASH_GUARD_RULES["chair"])
+    learned_gate_open = (
+        len(learned_results) >= 3
+        and score_spread >= safe_float(guard_rule.get("score_spread_min"))
+        and attempt_delta_spread >= safe_float(guard_rule.get("attempt_delta_spread_min"))
+    )
+    if allow_portfolio_fallback and not learned_gate_open:
+        portfolio_score_by_id = dict(portfolio_ranked)
+        for macro_id, rank_score in portfolio_ranked:
+            if macro_id in attempted_ids:
+                continue
+            attempt_skill(macro_id, portfolio_score_by_id.get(macro_id, rank_score), "exact_portfolio_fallback")
+
+    best_result: dict[str, Any] | None = None
+    for result in attempts:
+        if result.get("accepted") and safe_float(result.get("score_delta")) > 1.0e-12:
+            if best_result is None or safe_float(result.get("score_delta")) > safe_float(best_result.get("score_delta")):
+                best_result = result
+
+    if best_result is not None:
+        final_state = best_result.get("final_state")
+        if isinstance(final_state, dict):
+            engine.reset_to_state(
+                final_state["bounds"],
+                final_state["rotations"],
+                safe_float(final_state["score"]),
+            )
+            final_result = dict(best_result)
+            final_result["state_restored_from_best_attempt"] = True
+        else:
+            engine.reset_to_state(saved_bounds, saved_rotations, saved_score)
+            final_result = execute_macro_skill(
+                engine,
+                skills_by_id[str(best_result["macro_id"])],
+                cover_penalty=cover_penalty,
+                pen_rate=pen_rate,
+                num_action_scale=num_action_scale,
+                candidate_count=candidate_count,
+                max_steps=max_steps,
+                target_aware_execution=target_aware_execution,
+                native_executor=native_executor,
+                return_final_state=False,
+                repeat_mode=str(best_result.get("repeat_mode", "guarded_variable")),
+            )
+            final_result["rank_score"] = best_result.get("rank_score")
+            final_result["selection_source"] = best_result.get("selection_source")
+            final_result["state_restored_from_best_attempt"] = False
+    else:
+        engine.reset_to_state(saved_bounds, saved_rotations, saved_score)
+        final_result = {
+            "accepted": False,
+            "macro_id": None,
+            "skill": None,
+            "score_delta": 0.0,
+            "final_score": float(saved_score),
+            "executed_steps": 0,
+        }
+
+    profile_summary = macro_skill_profile_summary()
+    profile = _macro_skill_profile_for_preset(profile_summary, "mcts_replacement_guarded")
+    return _macro_skill_controller_payload(
+        accepted=bool(final_result.get("accepted")),
+        macro_id=final_result.get("macro_id"),
+        skill=final_result.get("skill"),
+        score_delta=safe_float(final_result.get("score_delta")),
+        initial_score=float(saved_score),
+        final_score=safe_float(final_result.get("final_score"), float(saved_score)),
+        executed_steps=int(safe_float(final_result.get("executed_steps"))),
+        exact_budget=len(attempts),
+        attempt_count=len(attempts),
+        repeat_mode=repeat_mode,
+        quality_preset=runtime_preset,
+        max_steps=int(max_steps),
+        attempts=attempts,
+        ranked_head=learned_top,
+        native_state_features=native_state_features,
+        learned_quality_gate_decision={},
+        native_selector_cache_stats=_engine_native_selector_cache_stats(engine),
+        profile=profile,
+        selector=str(retriever.get("model_type", "macrohash_retriever")),
+        guard_decision={
+            "learned_gate_open": bool(learned_gate_open),
+            "learned_only": not bool(allow_portfolio_fallback),
+            "score_spread": float(score_spread),
+            "attempt_delta_spread": float(attempt_delta_spread),
+            "category_rule": dict(guard_rule),
+            "fallback_allowed": bool(allow_portfolio_fallback),
+            "fallback_used": bool(allow_portfolio_fallback and not learned_gate_open),
+            "portfolio_candidate_count": len(portfolio_ranked),
+            "learned_candidate_count": len(learned_top),
+        },
+        macrohash_initial_stats=initial_stats,
+    )
 
 
 def action_scale(scale: int, num_action_scale: int) -> float:

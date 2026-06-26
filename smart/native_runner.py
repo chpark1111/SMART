@@ -281,6 +281,8 @@ def run_pipeline_from_files(
     mcts_action_unit: float = 0.02,
     num_action_scale: int = 2,
     manifold_timeout_sec: float = 600.0,
+    manifold_depth: int = 0,
+    skip_manifoldplus: bool = False,
     ftetwild_timeout_sec: float = 1200.0,
     ftetwild_threads: int | None = None,
     ftetwild_level: int = 2,
@@ -308,6 +310,8 @@ def run_pipeline_from_files(
     volume_method: str = "mesh",
     stateful_union_cache: bool = True,
     transposition_table: bool = False,
+    reuse_existing: bool = False,
+    reuse_preprocessing: bool = False,
     seed: int = 0,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -340,6 +344,8 @@ def run_pipeline_from_files(
         mcts_action_unit=mcts_action_unit,
         num_action_scale=num_action_scale,
         manifold_timeout_sec=manifold_timeout_sec,
+        manifold_depth=manifold_depth,
+        skip_manifoldplus=skip_manifoldplus,
         ftetwild_timeout_sec=ftetwild_timeout_sec,
         ftetwild_threads=ftetwild_threads,
         ftetwild_level=ftetwild_level,
@@ -367,6 +373,8 @@ def run_pipeline_from_files(
         volume_method=volume_method,
         stateful_union_cache=stateful_union_cache,
         transposition_table=transposition_table,
+        reuse_existing=reuse_existing,
+        reuse_preprocessing=reuse_preprocessing,
         seed=seed,
     )
     started = time.time()
@@ -415,6 +423,8 @@ def pipeline_args_from_files(
     mcts_action_unit: float = 0.02,
     num_action_scale: int = 2,
     manifold_timeout_sec: float = 600.0,
+    manifold_depth: int = 0,
+    skip_manifoldplus: bool = False,
     ftetwild_timeout_sec: float = 1200.0,
     ftetwild_threads: int | None = None,
     ftetwild_level: int = 2,
@@ -442,6 +452,8 @@ def pipeline_args_from_files(
     volume_method: str = "mesh",
     stateful_union_cache: bool = True,
     transposition_table: bool = False,
+    reuse_existing: bool = False,
+    reuse_preprocessing: bool = False,
     seed: int = 0,
 ) -> list[str]:
     args = [
@@ -527,6 +539,14 @@ def pipeline_args_from_files(
         args.extend(["--mesh_id", str(mesh_id)])
     if ftetwild_threads is not None:
         args.extend(["--ftetwild_threads", str(int(ftetwild_threads))])
+    if int(manifold_depth) > 0:
+        args.extend(["--manifold_depth", str(int(manifold_depth))])
+    if skip_manifoldplus:
+        args.append("--skip_manifoldplus")
+    if reuse_existing:
+        args.append("--reuse_existing")
+    if reuse_preprocessing:
+        args.append("--reuse_preprocessing")
     if coacd_pca:
         args.append("--coacd_pca")
     if not coacd_merge:

@@ -35,7 +35,13 @@ def _require_backend():
 
 _BUILTIN_DEEPSET_POLICIES = {
     "deepset_setaware_v2_h128_v1": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+    "deepset_setaware_v2_h128_dagger_b2_v12": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
     "h128_v1": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
+    "h128_dagger_b2_v12": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    "mcts_replacement_v12": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    "mcts_replacement_v13": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    "mcts_replacement_v13_quality_safe": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    "mcts_replacement_v13_heldout_fast": "assets/policies/deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
     "default": "assets/policies/deepset_setaware_v2_h128_v1.smartmlp",
 }
 _BUILTIN_DEEPSET_POLICY_CACHE: dict[str, Any] = {}
@@ -121,6 +127,7 @@ CandidateBitsetState = _backend.CandidateBitsetState if _backend is not None and
 TetClippingState = _backend.TetClippingState if _backend is not None and hasattr(_backend, "TetClippingState") else None  # type: ignore
 ActionMlpPolicy = _backend.ActionMlpPolicy if _backend is not None and hasattr(_backend, "ActionMlpPolicy") else None  # type: ignore
 NativeFastGeometryMlpPolicy = _backend.NativeFastGeometryMlpPolicy if _backend is not None and hasattr(_backend, "NativeFastGeometryMlpPolicy") else None  # type: ignore
+NativeStepMlpTsvPolicy = _backend.NativeStepMlpTsvPolicy if _backend is not None and hasattr(_backend, "NativeStepMlpTsvPolicy") else None  # type: ignore
 NativeDeepSetCandidateScorer = _backend.NativeDeepSetCandidateScorer if _backend is not None and hasattr(_backend, "NativeDeepSetCandidateScorer") else None  # type: ignore
 NativeScalarMlpScorer = _backend.NativeScalarMlpScorer if _backend is not None and hasattr(_backend, "NativeScalarMlpScorer") else None  # type: ignore
 NativeSmartEngine = _backend.NativeSmartEngine if _backend is not None and hasattr(_backend, "NativeSmartEngine") else None  # type: ignore
@@ -930,6 +937,43 @@ class NativeFastGeometryMlpPolicy:
         ]
 
 
+class NativeStepMlpTsvPolicy:
+    """C++ inference for exported live-step MLP TSV policies.
+
+    This is the deploy-shaped learned-router path: model weights are loaded
+    from a plain TSV file, rows are scored in the native extension, and callers
+    still decide whether exact SMART reward is required for final validation.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._impl = _require_backend().NativeStepMlpTsvPolicy(str(path))
+
+    @property
+    def impl(self):
+        return self._impl
+
+    def score_rows(self, rows: Any, already_normalized: bool = False) -> list[float]:
+        return [
+            float(value)
+            for value in self._impl.score_rows(rows, bool(already_normalized))
+        ]
+
+    def dim(self) -> int:
+        return int(self._impl.dim())
+
+    def hidden(self) -> int:
+        return int(self._impl.hidden())
+
+    def guide_weight(self) -> float:
+        return float(self._impl.guide_weight())
+
+    def activation(self) -> str:
+        return str(self._impl.activation())
+
+    def feature_names(self) -> list[str]:
+        return [str(value) for value in self._impl.feature_names()]
+
+
 def native_partition_summaries(
     vertices: Iterable[Iterable[float]],
     voxels: Iterable[Iterable[int]],
@@ -1454,6 +1498,202 @@ _DEEPSET_REFINE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v10_candidate"] = dict(
+    _DEEPSET_REFINE_PRESETS["hard_risk_v9_candidate"]
+)
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v10_candidate"].update(
+    {
+        # 2026-06-05 MCTS-replacement candidate.  This profile is intentionally
+        # opt-in until the 500+/2k mesh-level gate passes.  It keeps exact
+        # SMART/Manifold validation, but uses the learned C++ DeepSets ranker
+        # to reduce the candidate exact-call set and rescues repeated positive
+        # actions that often form variable-length geometry programs.
+        "candidate_count": 64,
+        "budget": 4,
+        "adaptive_high_budget": 56,
+        "adaptive_margin_threshold": 1.6,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 60,
+        "nonfinite_proxy_rescue_budget": 8,
+        "repeat_positive_rescue_reward": 0.0,
+        # Two-stage table aspect guard from the 2026-06-05 target20 replay.
+        # Moderate table aspect states open only budget16; extreme degenerate
+        # table states open the full candidate pool.  This preserves the
+        # learned-router exact-call reduction while recovering zero regret.
+        "structural_high_budget": 16,
+        "structural_category": "table",
+        "structural_action_unit_min": -float("inf"),
+        "structural_action_unit_max": float("inf"),
+        "structural_min_boxes": 2,
+        "structural_min_turn": 0,
+        "structural_min_coverage": -float("inf"),
+        "structural_max_coverage": float("inf"),
+        "structural_max_bvs": float("inf"),
+        "structural_min_aspect_mean": 16.0,
+        "structural_max_aspect_mean": float("inf"),
+        "structural_min_proxy_gap": -float("inf"),
+        "structural_initial_high_budget": 0,
+        "structural_secondary_high_budget": 64,
+        "structural_secondary_category": "table",
+        "structural_secondary_min_turn": 0,
+        "structural_secondary_max_turn": 2**63 - 1,
+        "structural_secondary_min_coverage": -float("inf"),
+        "structural_secondary_max_coverage": float("inf"),
+        "structural_secondary_min_bvs": -float("inf"),
+        "structural_secondary_max_bvs": float("inf"),
+        "structural_secondary_min_aspect_mean": 1.0e6,
+        "structural_secondary_max_aspect_mean": float("inf"),
+        "structural_secondary_min_proxy_gap": -float("inf"),
+        "structural_secondary_max_proxy_gap": float("inf"),
+        "structural_tertiary_high_budget": 0,
+    }
+)
+
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v11_candidate"] = dict(
+    _DEEPSET_REFINE_PRESETS["mcts_replacement_v10_candidate"]
+)
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v11_candidate"].update(
+    {
+        # 2026-06-05 target50 replay candidate.  Adds proxy-order rescue for
+        # low-tet/model-rank miss cases and blocks unsafe repeat-continuation
+        # patterns observed on small/extreme-aspect tables and one 8-box
+        # airplane family.  Still opt-in until the 500+/2k mesh-level gate.
+        "budget": 2,
+        "adaptive_high_budget": 54,
+        "proxy_rescue_budget": 4,
+        "repeat_positive_block_rules": [
+            "table:0:999:1000000:inf",
+            "table:0:6:-inf:14",
+            "airplane:8:8:10:12",
+        ],
+    }
+)
+
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v12_candidate"] = dict(
+    _DEEPSET_REFINE_PRESETS["mcts_replacement_v11_candidate"]
+)
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v12_candidate"].update(
+    {
+        # 2026-06-06 strict mesh-level train/val/test candidate.  This profile
+        # targets MCTS/exact-portfolio replacement in native refine: the C++
+        # DeepSets model ranks a 64-action pool, exact SMART scoring is opened
+        # for top32, uncertain states open top48, and moderate-aspect table
+        # states open the full 64-pool to remove the remaining table trajectory
+        # loss.  Validation snapshot:
+        #   val 302/302 zero-regret, 238.5 -> 166.9 exact checks, 1.09x wall;
+        #   test 401/401 zero-regret, 244.9 -> 170.2 exact checks, 1.11x wall.
+        # It is still a release-candidate profile until larger fresh mesh-level
+        # gates pass, but it is the strongest learned-only replacement profile
+        # in the current strict split.
+        "candidate_count": 64,
+        "budget": 32,
+        "fallback_budget": 32,
+        "adaptive_high_budget": 48,
+        "adaptive_margin_threshold": 2.32,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 0,
+        "nonfinite_proxy_rescue_budget": 0,
+        "proxy_rescue_budget": 0,
+        "repeat_positive_rescue_reward": float("inf"),
+        "repeat_positive_block_rules": [],
+        "structural_high_budget": 64,
+        "structural_category": "table",
+        "structural_action_unit_min": -float("inf"),
+        "structural_action_unit_max": float("inf"),
+        "structural_min_boxes": 0,
+        "structural_min_turn": 0,
+        "structural_min_coverage": -float("inf"),
+        "structural_max_coverage": float("inf"),
+        "structural_max_bvs": float("inf"),
+        "structural_min_aspect_mean": 5.5,
+        "structural_max_aspect_mean": float("inf"),
+        "structural_min_proxy_gap": -float("inf"),
+        "structural_initial_high_budget": 0,
+        "structural_secondary_high_budget": 0,
+        "structural_secondary_category": "",
+        "structural_tertiary_high_budget": 0,
+        "structural_tertiary_category": "",
+    }
+)
+
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v13_heldout_fast"] = dict(
+    _DEEPSET_REFINE_PRESETS["mcts_replacement_v12_candidate"]
+)
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v13_heldout_fast"].update(
+    {
+        # 2026-06-06 strict mesh-level val/test profile.  This is the best
+        # speed/quality frontier found so far for the C++ DeepSets replacement
+        # path: no MCTS and no exact 16-skill portfolio fallback, but exact
+        # SMART/Manifold still chooses among the learned top-K candidates.
+        #
+        # Gate snapshot, strict mesh split:
+        #   val 302/302 zero-regret, 238.5 -> 168.3 exact checks, 1.09x wall;
+        #   test 401/401 zero-regret, 244.9 -> 173.0 exact checks, 1.10x wall;
+        #   train has 4 old-shape losses, so this is not the quality-safe
+        #   all-split default candidate.
+        "candidate_count": 64,
+        "budget": 32,
+        "fallback_budget": 32,
+        "adaptive_high_budget": 48,
+        "adaptive_margin_threshold": 2.4,
+        "adaptive_margin_rank": 8,
+        "small_pool_exact_threshold": 0,
+        "nonfinite_proxy_rescue_budget": 0,
+        "proxy_rescue_budget": 0,
+        "repeat_positive_rescue_reward": float("inf"),
+        "repeat_positive_block_rules": [],
+        "structural_high_budget": 64,
+        "structural_category": "table",
+        "structural_action_unit_min": -float("inf"),
+        "structural_action_unit_max": float("inf"),
+        "structural_min_boxes": 0,
+        "structural_min_turn": 0,
+        "structural_min_coverage": -float("inf"),
+        "structural_max_coverage": float("inf"),
+        "structural_max_bvs": float("inf"),
+        "structural_min_aspect_mean": -float("inf"),
+        "structural_max_aspect_mean": float("inf"),
+        "structural_min_proxy_gap": -float("inf"),
+        "structural_initial_high_budget": 0,
+        "structural_secondary_high_budget": 0,
+        "structural_secondary_category": "",
+        "structural_tertiary_high_budget": 0,
+        "structural_tertiary_category": "",
+    }
+)
+
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v13_quality_safe"] = dict(
+    _DEEPSET_REFINE_PRESETS["mcts_replacement_v13_heldout_fast"]
+)
+_DEEPSET_REFINE_PRESETS["mcts_replacement_v13_quality_safe"].update(
+    {
+        # 2026-06-06 strict 2k replay-ready replacement profile.  This is the
+        # first learned-only native profile that reaches zero regret over the
+        # full 1297/302/401 train/val/test replay benchmark without MCTS or the
+        # exact 16-skill portfolio.  It intentionally opens a wider exact set
+        # for airplane/table ambiguity, so it is quality-safe but only roughly
+        # wall-time neutral on the current local benchmark:
+        #   2000/2000 zero-regret, 242.4 -> 209.4 exact checks,
+        #   13.6% exact-call reduction, 0.99x wall speedup.
+        "adaptive_high_budget": 64,
+        "adaptive_margin_threshold": 2.4,
+        "structural_high_budget": 64,
+        "structural_category": "table",
+        "structural_secondary_high_budget": 64,
+        "structural_secondary_category": "airplane",
+        "structural_secondary_min_turn": 0,
+        "structural_secondary_max_turn": 2**63 - 1,
+        "structural_secondary_min_coverage": -float("inf"),
+        "structural_secondary_max_coverage": float("inf"),
+        "structural_secondary_min_bvs": -float("inf"),
+        "structural_secondary_max_bvs": float("inf"),
+        "structural_secondary_min_aspect_mean": -float("inf"),
+        "structural_secondary_max_aspect_mean": float("inf"),
+        "structural_secondary_min_proxy_gap": -float("inf"),
+        "structural_secondary_max_proxy_gap": float("inf"),
+    }
+)
+
 _DEEPSET_REFINE_PRESETS["auto_safe"] = dict(
     _DEEPSET_REFINE_PRESETS["hard_risk_v9_candidate"]
 )
@@ -1521,6 +1761,8 @@ def run_native_deepset_policy_refine(
             out.setdefault("small_pool_exact_uses", 0)
             out.setdefault("nonfinite_proxy_rescue_checks", 0)
             out.setdefault("proxy_rescue_checks", 0)
+            out.setdefault("repeat_positive_rescue_checks", 0)
+            out.setdefault("repeat_positive_blocked_checks", 0)
             out.setdefault("structural_high_budget_uses", 0)
             out.setdefault("structural_initial_high_budget_uses", 0)
             out.setdefault("structural_secondary_high_budget_uses", 0)
@@ -1557,6 +1799,8 @@ def run_native_deepset_policy_refine(
             int(settings["small_pool_exact_threshold"]),
             int(settings["nonfinite_proxy_rescue_budget"]),
             int(settings["proxy_rescue_budget"]),
+            float(settings.get("repeat_positive_rescue_reward", float("inf"))),
+            list(settings.get("repeat_positive_block_rules", [])),
             int(settings.get("structural_high_budget", 0)),
             str(settings.get("structural_category", "")),
             float(settings.get("structural_action_unit_min", float("-inf"))),

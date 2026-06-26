@@ -1,0 +1,12 @@
+{
+  "extends": "smoke_5.yaml",
+  "run_name": "preprocess_fast",
+  "workspace": "runs/preprocess_fast",
+  "tetra": {
+    "manifold_depth_candidates_by_category": {
+      "airplane": [6, 8],
+      "chair": [6, 8],
+      "table": [7, 8]
+    }
+  }
+}

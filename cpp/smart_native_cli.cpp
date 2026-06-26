@@ -140,6 +140,7 @@ void usage() {
          "[--init_type coacd|bsp] [--coacd_bin coacd] [--bsp_obj bsp_seg.obj] "
          "[--epsilon 0.002] [--edge_length 0.1] "
          "[--partition_threads N|auto] [--reuse_existing] "
+         "[--manifold_depth N] [--skip_manifoldplus] "
          "[--refine_max_step 2000] [--mcts_iter 3000] "
          "[--ftetwild_threads_supported true|false|auto]\n"
       << "  discover-meshes --data_root data --output meshes.tsv "
@@ -297,6 +298,25 @@ std::string basename_path(const std::string& path) {
 bool file_exists(const std::string& path) {
   struct stat st;
   return !path.empty() && ::stat(path.c_str(), &st) == 0;
+}
+
+void copy_file_binary(const std::string& src, const std::string& dst) {
+  const std::string dst_parent = parent_path(dst);
+  if (!dst_parent.empty()) {
+    ensure_directories(dst_parent);
+  }
+  std::ifstream input(src, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("failed to open source file for copy: " + src);
+  }
+  std::ofstream output(dst, std::ios::binary | std::ios::trunc);
+  if (!output) {
+    throw std::runtime_error("failed to open destination file for copy: " + dst);
+  }
+  output << input.rdbuf();
+  if (!output) {
+    throw std::runtime_error("failed while copying file: " + src + " -> " + dst);
+  }
 }
 
 bool directory_exists(const std::string& path) {
@@ -1789,14 +1809,17 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
   const std::string ftetwild_bin = arg_value(argc, argv, "--ftetwild_bin");
   const std::string coacd_bin = arg_value(argc, argv, "--coacd_bin");
   const std::string init_type = arg_value(argc, argv, "--init_type", "coacd");
+  const bool skip_manifoldplus = has_flag(argc, argv, "--skip_manifoldplus");
   if (init_type != "coacd" && init_type != "bsp") {
     throw std::runtime_error("run-pipeline --init_type must be coacd or bsp");
   }
-  if (input.empty() || work_dir.empty() || manifoldplus_bin.empty() ||
+  if (input.empty() || work_dir.empty() ||
+      (!skip_manifoldplus && manifoldplus_bin.empty()) ||
       ftetwild_bin.empty() || (init_type == "coacd" && coacd_bin.empty())) {
     throw std::runtime_error(
-        "run-pipeline requires --input, --work_dir, --manifoldplus_bin, "
-        "--ftetwild_bin, and --coacd_bin when --init_type coacd");
+        "run-pipeline requires --input, --work_dir, --ftetwild_bin, and "
+        "--coacd_bin when --init_type coacd; --manifoldplus_bin is required "
+        "unless --skip_manifoldplus is set");
   }
 
   const auto started = std::chrono::steady_clock::now();
@@ -1839,6 +1862,7 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
   const std::string ftetwild_level = arg_value(argc, argv, "--ftetwild_level", "2");
   const std::string manifold_timeout =
       arg_value(argc, argv, "--manifold_timeout_sec", "600");
+  const std::string manifold_depth = arg_value(argc, argv, "--manifold_depth", "0");
   const std::string ftetwild_timeout =
       arg_value(argc, argv, "--ftetwild_timeout_sec", "1200");
   const std::string coacd_timeout =
@@ -1870,6 +1894,8 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
     }
   }
   const bool reuse_existing = has_flag(argc, argv, "--reuse_existing");
+  const bool reuse_preprocessing =
+      reuse_existing || has_flag(argc, argv, "--reuse_preprocessing");
   std::vector<std::pair<std::string, double>> stage_timings;
   auto time_stage = [&](const std::string& name, auto&& fn) {
     const auto stage_started = std::chrono::steady_clock::now();
@@ -1880,7 +1906,7 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
   };
 
   (void)self_bin;
-  if (reuse_existing && file_exists(normalized_obj)) {
+  if (reuse_preprocessing && file_exists(normalized_obj)) {
     stage_timings.push_back({"normalize_reuse", 0.0});
   } else {
     time_stage("normalize", [&]() {
@@ -1894,12 +1920,22 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
     throw std::runtime_error("normalization did not create: " + normalized_obj);
   }
 
-  if (reuse_existing && file_exists(manifold_obj)) {
+  if (reuse_preprocessing && file_exists(manifold_obj)) {
     stage_timings.push_back({"manifoldplus_reuse", 0.0});
+  } else if (skip_manifoldplus) {
+    time_stage("manifoldplus_skip", [&]() {
+      copy_file_binary(normalized_obj, manifold_obj);
+    });
   } else {
     time_stage("manifoldplus", [&]() {
+      std::vector<std::string> manifold_args = {
+          manifoldplus_bin, "--input", normalized_obj, "--output", manifold_obj};
+      if (std::stoi(manifold_depth) > 0) {
+        manifold_args.push_back("--depth");
+        manifold_args.push_back(manifold_depth);
+      }
       run_checked_process(
-          {manifoldplus_bin, "--input", normalized_obj, "--output", manifold_obj},
+          manifold_args,
           path_join(logs_dir, "manifoldplus.log"), std::stod(manifold_timeout),
           "ManifoldPlus");
     });
@@ -1941,7 +1977,7 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
   };
   const double ft_timeout = std::stod(ftetwild_timeout);
   bool ftetwild_retried = false;
-  if (reuse_existing && file_exists(tetra_msh) && file_exists(tetra_surface)) {
+  if (reuse_preprocessing && file_exists(tetra_msh) && file_exists(tetra_surface)) {
     stage_timings.push_back({"ftetwild_reuse", 0.0});
   } else {
     time_stage("ftetwild", [&]() {
@@ -1974,7 +2010,7 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
     throw std::runtime_error("fTetWild did not create tetra.msh and tetra.msh__sf.obj");
   }
 
-  if (reuse_existing && file_exists(partitions_json)) {
+  if (reuse_preprocessing && file_exists(partitions_json)) {
     stage_timings.push_back({"preseg_reuse", 0.0});
   } else if (init_type == "coacd") {
     std::vector<std::string> coacd_args;
@@ -2182,6 +2218,9 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
     stats << "  \"init_type\": \"" << json_escape(init_type) << "\",\n";
     stats << "  \"elapsed_sec\": " << std::setprecision(17) << elapsed << ",\n";
     stats << "  \"reuse_existing\": " << (reuse_existing ? "true" : "false") << ",\n";
+    stats << "  \"reuse_preprocessing\": " << (reuse_preprocessing ? "true" : "false") << ",\n";
+    stats << "  \"skip_manifoldplus\": " << (skip_manifoldplus ? "true" : "false") << ",\n";
+    stats << "  \"manifold_depth\": " << std::stoi(manifold_depth) << ",\n";
     stats << "  \"ftetwild_retried\": " << (ftetwild_retried ? "true" : "false") << ",\n";
     stats << "  \"partition_threads\": \"" << json_escape(partition_threads) << "\",\n";
     stats << "  \"stages\": [\n";
@@ -2204,6 +2243,8 @@ void run_pipeline_command(int argc, char** argv, const std::string& self_bin) {
             << "\"core\":\"smart_native_pipeline\","
             << "\"init_type\":\"" << json_escape(init_type) << "\","
             << "\"elapsed_sec\":" << std::setprecision(17) << elapsed << ","
+            << "\"skip_manifoldplus\":" << (skip_manifoldplus ? "true" : "false") << ","
+            << "\"manifold_depth\":" << std::stoi(manifold_depth) << ","
             << "\"stats_path\":\"" << json_escape(pipeline_stats_path) << "\","
             << "\"input\":\"" << json_escape(input) << "\","
             << "\"work_dir\":\"" << json_escape(work_dir) << "\","

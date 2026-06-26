@@ -33,10 +33,150 @@ Recommended public profiles:
 - `configs/smoke_5.yaml`: quick smoke profile.
 - `configs/demo.yaml`: 50-per-category demo profile.
 - `configs/paper_like.yaml`: paper-style search settings.
+- `configs/preprocess_fast.yaml`: opt-in first-run preprocessing speed preset.
 - `configs/expanded_full.yaml`: larger local ShapeNet layout.
 
 Research-only RL and acceleration configs live under ignored
 `experiments/configs/`.
+
+## Native Performance Profiling
+
+`smart native-run` writes one `native_pipeline_stats.json` file per mesh under
+`runs/<profile>/native_pipeline/<category>/<mesh>/`.  The file records
+`normalize`, `manifoldplus`, `ftetwild`, `coacd`, partition, merge, and
+`refine_mcts` wall time.
+
+A June 25, 2026 local Apple Silicon smoke measurement with
+`mcts.mcts_iter=3000`, `refine.max_step=200`, and rendering disabled showed:
+
+| mesh | total | preprocessing | search |
+| --- | ---: | ---: | ---: |
+| airplane sample | 25.29s | 12.38s / 48.9% | 12.92s / 51.1% |
+| chair sample | 18.34s | 17.51s / 95.4% | 0.84s / 4.6% |
+| table sample | 5.71s | 5.62s / 98.4% | 0.09s / 1.6% |
+| combined | 49.35s | 35.49s / 71.9% | 13.82s / 28.0% |
+
+Combined stage totals for those three samples were:
+
+- `ftetwild`: 26.69s / 54.1%;
+- `refine_mcts`: 13.81s / 28.1%;
+- `coacd`: 7.38s / 15.0%;
+- `manifoldplus`: 1.50s / 3.1%.
+
+This means learned routing mainly reduces the search portion.  End-to-end speed
+still depends heavily on Mesh2Tet/CoACD preprocessing, especially fTetWild.
+The current fTetWild build used by SMART does not expose `--max-threads`, so
+`tetra.ftetwild_threads` is passed only when the configured binary supports it.
+
+For repeated experiments on the same mesh, reuse preprocessing instead of
+rerunning Mesh2Tet and CoACD:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set native_pipeline.reuse_preprocessing=true \
+  --set stages.render=false \
+  native-run --category table --mesh 1692563658149377630047043c6a0c50 --force
+```
+
+`native_pipeline.reuse_preprocessing=true` reuses normalized mesh,
+ManifoldPlus output, fTetWild tetra mesh, and presegmentation metadata, then
+reruns merge/refine/MCTS.  `native_pipeline.reuse_existing=true` is stronger:
+it reuses every existing stage output and is useful only when checking or
+summarizing a completed run.
+
+To reuse preprocessing across different workspaces or profile runs, enable the
+persistent hash cache:
+
+```bash
+smart --config configs/smoke_5.yaml \
+  --set native_pipeline.preprocessing_cache=true \
+  --set native_pipeline.preprocessing_cache_root=runs/.smart_preprocessing_cache \
+  --set stages.render=false \
+  native-run --category table --mesh 1692563658149377630047043c6a0c50 --force
+```
+
+The cache key includes the source mesh SHA-256, normalization settings,
+tetrahedralization settings, CoACD settings, and external tool signatures.  It
+intentionally excludes merge/refine/MCTS settings, so learned-router and MCTS
+experiments can change search parameters while reusing the same normalized,
+tetra, and CoACD artifacts.  On a cache hit SMART copies only preprocessing
+artifacts into the run directory and passes `--reuse_preprocessing` to the
+native executable.  Search outputs are never restored from this cache.
+
+The next high-impact preprocessing optimizations are:
+
+1. tune `tetra.manifold_depth` to keep ManifoldPlus repair enabled while
+   reducing repair resolution and downstream fTetWild cost;
+2. add a fast CoACD path that avoids Python CLI startup, ideally by linking
+   CoACD directly or using a persistent worker;
+3. add a quality-gated fast tetra preset that coarsens only when final SMART
+   metrics remain stable;
+4. evaluate alternative tetra backends or a newer fTetWild build with real
+   threading support.
+
+`tetra.skip_manifoldplus=true` is intentionally opt-in.  It can save the
+ManifoldPlus repair step on already clean/watertight meshes, but it is not a
+same-role acceleration: the fTetWild input changes from repaired ManifoldPlus
+output to the normalized source mesh.  In smoke probes it reduced wall time
+substantially but also changed active box counts for chair/table, so it should
+remain a validation-only shortcut.
+
+`tetra.manifold_depth=<N>` is the safer first tuning knob when ManifoldPlus must
+keep doing the repair job.  ManifoldPlus defaults to depth 8; lower depths can
+reduce repaired mesh density and fTetWild runtime.  Because the repaired surface
+still changes, publishable runs should report the depth and compare exact SMART
+metrics against the default depth.
+
+For a guarded first-run speed preset, use:
+
+```bash
+smart --config configs/preprocess_fast.yaml \
+  --set stages.render=false \
+  native-run --category chair --mesh 11b7c86fc42306ec7e7e25239e7b8f85 --force
+```
+
+The preset uses `tetra.manifold_depth_candidates_by_category`; SMART tries the
+first candidate and falls back to depth 8 if the native run fails.  On the smoke
+set this selected depth 6 for airplane/chair and depth 7 for table.
+
+Smoke profiling showed why this knob must be quality-gated:
+
+| mesh | setting | total | repaired faces | bbox count | BVS | vIoU | note |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| airplane | depth 8 | 25.29s | 74,742 | 7 | 2.868 | 0.380 | release baseline |
+| airplane | depth 6 | 15.01s | 8,908 | 7 | 2.378 | 0.460 | faster, non-worse on smoke |
+| airplane | depth 7 | 50.16s | 25,394 | 9 | 2.481 | 0.469 | fTetWild/search got slower |
+| chair | depth 8 | 18.34s | 315,708 | 4 | 1.920 | 0.573 | release baseline |
+| chair | depth 6 | 6.63s | 21,592 | 4 | 1.602 | 0.668 | faster, non-worse on smoke |
+| table | depth 8 | 5.71s | 79,990 | 2 | 1.805 | 0.568 | release baseline |
+| table | depth 7 | 3.69s | 21,266 | 2 | 1.842 | 0.570 | faster, mixed metric change |
+| table | depth 6 | failed | 5,724 | - | - | - | CoACD crashed after tetra |
+
+With the category fast preset, a first three-mesh probe completed in 24.86s
+rather than 49.35s, but a full five-mesh smoke rerun showed why this is not the
+default release path yet.  The default depth-8 path succeeded on 4/5 meshes;
+the fast preset succeeded on 5/5 by rescuing one CoACD failure, but common-case
+quality was mixed:
+
+| metric on common successful cases | fast result |
+| --- | ---: |
+| BVS non-worse than depth 8 | 2/4 |
+| vIoU non-worse than depth 8 | 3/4 |
+| Covered non-worse than depth 8 | 1/4 |
+| box count delta sum | +3 |
+| fast-only rescue cases | 1 |
+
+For example, the first airplane changed from 7 to 9 boxes: vIoU improved
+(`0.483 -> 0.540`) and Chamfer improved, but BVS worsened slightly
+(`2.225 -> 2.263`) and coverage dropped slightly.  The table changed from
+2 boxes to 1 box and degraded more clearly (`BVS 1.592 -> 2.247`,
+`vIoU 0.644 -> 0.445`).  Therefore `configs/preprocess_fast.yaml` remains
+opt-in for speed/rescue experiments rather than a default replacement.
+
+Lower depth is therefore not a universal default.  It is useful as a
+category/dataset-specific fast preset, or as a speculative fast attempt with a
+fallback to depth 8.  For strict reproducibility, leave `tetra.manifold_depth=0`
+and rely on preprocessing cache/reuse instead.
 
 ## Rendering
 
@@ -85,9 +225,9 @@ duplicate/degenerate faces are removed, unreferenced vertices are removed, and
 normals are fixed when `trimesh` is installed. The source OBJ is not modified;
 the repaired input is written under the run logs. SMART classifies failures in
 the manifest and uses that class to queue targeted repair retries. For example,
-`surface is not watertight` queues `fill_holes=true`, while crash/timeout
-failures queue a conservative repaired-input retry. More aggressive repair can
-be enabled per config:
+`surface is not watertight` and low tetra-element validation failures queue
+`fill_holes=true`, while crash/timeout failures queue a conservative
+repaired-input retry. More aggressive repair can be enabled per config:
 
 ```yaml
 tetra:
@@ -96,6 +236,8 @@ tetra:
     fill_holes: true
     keep_largest_component: false
   min_tetra_count: 20
+  # Optional guard for large dataset collection. Default 0 disables it.
+  max_manifold_faces_for_ftetwild: 0
   retry:
     fine_retry:
       enabled: true
@@ -109,6 +251,12 @@ tries `fill_holes=true` only after the normal attempts fail. Stronger variants,
 such as `keep_largest_component=true`, can be enabled for experiments but are
 off by default because they may remove real shape parts. See
 [`TETRA_FAILURE_PLAYBOOK.md`](TETRA_FAILURE_PLAYBOOK.md).
+
+For long-tail datasets, ManifoldPlus can sometimes convert a small OBJ into a
+very large repaired surface. Set `tetra.max_manifold_faces_for_ftetwild` to a
+positive cap to classify those attempts as `repair_surface_too_large` and move
+to the next repair/parameter route before fTetWild consumes the full timeout.
+The release default is `0`, so this guard is opt-in.
 
 Use the failure analyzer for per-stage categories:
 

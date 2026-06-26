@@ -6,7 +6,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .pipeline.config import REPO_ROOT, load_config as _load_config, workspace_path
+from .pipeline.config import (
+    REPO_ROOT,
+    apply_agent_profile_defaults,
+    load_config as _load_config,
+    workspace_path,
+)
 from .pipeline.stages import data_status, run_pipeline as _run_pipeline
 from .pipeline.tools import diagnose_environment
 
@@ -17,6 +22,12 @@ ASSET_ALIASES: dict[str, dict[str, str]] = {
         "deepset": "deepset_setaware_v2_h128_v1.smartmlp",
         "deepset_setaware_v2_h128_v1": "deepset_setaware_v2_h128_v1.smartmlp",
         "h128_v1": "deepset_setaware_v2_h128_v1.smartmlp",
+        "deepset_setaware_v2_h128_dagger_b2_v12": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "h128_dagger_b2_v12": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "mcts_replacement_v12": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "mcts_replacement_v13": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "mcts_replacement_v13_quality_safe": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+        "mcts_replacement_v13_heldout_fast": "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
     },
     "gates": {
         "rich": "local_refine_gate_combined_manifest52_mctsguarded44_rich.json",
@@ -48,6 +59,8 @@ ASSET_ALIASES: dict[str, dict[str, str]] = {
         "macro_memory_v1": "macro_memory_policy_v1.json",
         "macro_budget_quality_v1": "macro_budget_quality_rule_v1.json",
         "macro_quality_gate_ridge_v1": "macro_quality_gate_ridge_v1.json",
+        "macro_skill_candidates_4k_v1": "macro_skill_candidates_4k_v1.jsonl",
+        "macrohash_retriever_v1": "macro_skill_retriever_macrohash_v1.json",
     },
 }
 
@@ -71,21 +84,24 @@ def load(config: str | Path | None = "configs/demo.yaml", *, overrides: dict[str
 
 
 def run_pipeline(
-    config: str | Path | dict[str, Any] | None = "configs/demo.yaml",
+    config: str | Path | dict[str, Any] | None = "configs/learned_default.yaml",
     *,
     stage: str | None = None,
     category: str | None = None,
     meshes: Iterable[str] | None = None,
+    agent: bool = False,
     dry_run: bool = False,
     force: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run SMART pipeline stages and return manifest-style dictionaries.
 
-    `stage=None` runs the enabled stages in paper order. Use `stage="tetra"`,
-    `category="airplane"`, or `meshes=[...]` for narrower runs.
+    `stage=None` runs the enabled stages in the selected config.  With no
+    explicit config, SMART uses the guarded learned MCTS-replacement agent.
+    Pass `config="configs/paper_like.yaml"` or another explicit profile for
+    paper reproduction.
     """
-    cfg = _coerce_config(config, overrides=overrides)
+    cfg = _coerce_config(config, agent=agent, overrides=overrides)
     records = _run_pipeline(
         cfg,
         only_stage=stage,
@@ -98,11 +114,12 @@ def run_pipeline(
 
 
 def run(
-    config: str | Path | dict[str, Any] | None = "configs/demo.yaml",
+    config: str | Path | dict[str, Any] | None = "configs/learned_default.yaml",
     *,
     stage: str | None = None,
     category: str | None = None,
     meshes: Iterable[str] | None = None,
+    agent: bool = False,
     dry_run: bool = False,
     force: bool = False,
     overrides: dict[str, Any] | None = None,
@@ -114,6 +131,37 @@ def run(
         stage=stage,
         category=category,
         meshes=meshes,
+        agent=agent,
+        dry_run=dry_run,
+        force=force,
+        overrides=overrides,
+    )
+
+
+def run_agent(
+    config: str | Path | dict[str, Any] | None = "configs/learned_default.yaml",
+    *,
+    stage: str | None = None,
+    category: str | None = None,
+    meshes: Iterable[str] | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+    overrides: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Run the guarded learned MCTS-replacement SMART+Agent profile.
+
+    This is the Python API equivalent of ``smart agent-run``.  The default
+    config disables MCTS, runs exact native refine, applies the guarded
+    macrohash skill controller, and falls back to the exact skill portfolio
+    when the learned top-3 attempts are not confidently separated.
+    """
+
+    return run_pipeline(
+        config,
+        stage=stage,
+        category=category,
+        meshes=meshes,
+        agent=True,
         dry_run=dry_run,
         force=force,
         overrides=overrides,
@@ -284,17 +332,24 @@ def learned_release_readiness_summary() -> dict[str, Any]:
         "macro_memory_policy_v1.json",
         "macro_budget_quality_rule_v1.json",
         "macro_quality_gate_ridge_v1.json",
+        "macro_skill_candidates_4k_v1.jsonl",
+        "macro_skill_retriever_macrohash_v1.json",
     }
     opt_in_profiles = [
+        "learned_default.yaml",
         "learned_auto_safe.yaml",
         "learned_macro_safe.yaml",
         "learned_macro_program_gate_top3.yaml",
         "learned_macro_refine_only.yaml",
+        "learned_macro_mcts_replacement_guarded.yaml",
         "learned_frontier.yaml",
     ]
     packaged_configs_ready = all(name in profiles for name in opt_in_profiles)
     router_opt_in = bool(router["release_gate"]["can_ship_opt_in"])
     macro_opt_in = bool(macro["release_gate"]["can_ship_opt_in"])
+    mcts_replacement_can_be_default = bool(
+        macro["mcts_replacement_agent"].get("default_candidate_gate_passed", False)
+    )
     planner_latest = macro["substructure_planner"].get(
         "fresh_generated_latest",
         macro["substructure_planner"]["fresh_generated_seed13"],
@@ -306,15 +361,49 @@ def learned_release_readiness_summary() -> dict[str, Any]:
         and required_skills.issubset(packaged_skill_names)
         and packaged_configs_ready
     )
+    can_be_default = bool(can_ship_opt_in and mcts_replacement_can_be_default)
+    default_agent_commands = [
+        "smart run",
+        "smart agent-run",
+        "smart run --agent",
+        "smart --config configs/learned_default.yaml run",
+        "smart --config <your_config.yaml> run --agent",
+        "smart.run_agent(...)",
+        "smart.run('configs/smoke_5.yaml', agent=True)",
+    ]
+    recommended_commands = [
+        "smart learned-release-readiness --json",
+        "smart learned-release-readiness --fail-if-not-ready",
+        *default_agent_commands[:5],
+        "smart --config configs/learned_auto_safe.yaml run",
+        "smart --config configs/learned_macro_safe.yaml run",
+        macro["mcts_replacement_agent"]["command"],
+        "smart learned-router-summary --json",
+        "smart macro-skill-summary --json",
+    ]
+    status = "release_default_agent_enabled" if can_be_default else (
+        "release_candidate_opt_in" if can_ship_opt_in else "blocked"
+    )
     return {
-        "status": "release_candidate_opt_in" if can_ship_opt_in else "blocked",
+        "status": status,
         "default_smart_path": "unchanged_exact_cpp_native",
+        "default_agent_enabled": can_be_default,
+        "default_agent_config": "configs/learned_default.yaml",
+        "paper_reproduction_config": "configs/paper_like.yaml",
+        "default_promotion_scope": (
+            "configs/learned_default.yaml is the learned MCTS-replacement default for `smart run`; "
+            "paper reproduction remains exact when configs/paper_like.yaml or another explicit paper config is selected"
+        ),
         "can_ship_opt_in": can_ship_opt_in,
-        "can_be_default": False,
-        "default_blockers": [
+        "can_be_default": can_be_default,
+        "mcts_replacement_can_be_default_candidate": mcts_replacement_can_be_default,
+        "default_agent_entrypoints": default_agent_commands,
+        "default_blockers": []
+        if can_be_default
+        else [
             "default path must preserve paper reproduction unless explicitly opted into learned controllers",
-            "learned router and macro-skill need fresh full-pipeline held-out mesh-level validation together before default promotion",
-            "MCTS replacement claim still needs full mesh-level wall-time and metric validation beyond stage-source replay",
+            "the MCTS replacement agent needs the default-candidate gate to pass before learned-default promotion",
+            "make learned MCTS replacement the default only in a new release/config profile with an explicit changelog entry",
         ],
         "opt_in_profiles": opt_in_profiles,
         "packaged_assets": {
@@ -367,15 +456,7 @@ def learned_release_readiness_summary() -> dict[str, Any]:
             "default_blocker": macro["substructure_planner"]["default_blocker"],
         },
         "mcts_replacement_agent": macro["mcts_replacement_agent"],
-        "recommended_commands": [
-            "smart learned-release-readiness --json",
-            "smart learned-release-readiness --fail-if-not-ready",
-            "smart --config configs/learned_auto_safe.yaml run",
-            "smart --config configs/learned_macro_safe.yaml run",
-            macro["mcts_replacement_agent"]["command"],
-            "smart learned-router-summary --json",
-            "smart macro-skill-summary --json",
-        ],
+        "recommended_commands": list(dict.fromkeys(recommended_commands)),
     }
 
 
@@ -417,6 +498,8 @@ def asset_profiles(kind: str | None = None) -> list[dict[str, Any]]:
         kind_dir = assets_dir / kind_name
         for path in sorted(kind_dir.glob("*.json")):
             profiles.append(_asset_profile(kind_name, path))
+        for path in sorted(kind_dir.glob("*.jsonl")):
+            profiles.append(_asset_profile(kind_name, path))
         for path in sorted(kind_dir.glob("*.smartmlp")):
             profiles.append(_asset_profile(kind_name, path))
     return profiles
@@ -429,7 +512,7 @@ def asset_path(kind: str, name: str) -> Path:
     filename = aliases.get(name, name)
     if kind_name == "policies" and not filename.endswith((".smartmlp", ".json")):
         filename = f"{filename}.smartmlp"
-    elif kind_name != "policies" and not filename.endswith(".json"):
+    elif kind_name != "policies" and not filename.endswith((".json", ".jsonl")):
         filename = f"{filename}.json"
     path = Path(__file__).resolve().parent / "assets" / kind_name / filename
     if not path.exists():
@@ -441,12 +524,15 @@ def asset_path(kind: str, name: str) -> Path:
 def _coerce_config(
     config: str | Path | dict[str, Any] | None,
     *,
+    agent: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if isinstance(config, dict):
         cfg = copy.deepcopy(config)
     else:
         cfg = load_config(config)
+    if agent:
+        apply_agent_profile_defaults(cfg)
     if overrides:
         _deep_update_in_place(cfg, overrides)
     return cfg

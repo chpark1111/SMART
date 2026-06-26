@@ -16,6 +16,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "engine": "cpp_native",
     "python": None,
     "gpu": "0",
+    "manifest": {
+        "mode": "latest",
+    },
     "categories": [],
     "stages": {
         "normalize": True,
@@ -42,6 +45,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "native_pipeline": {
         "timeout_sec": None,
+        "reuse_existing": False,
+        "reuse_preprocessing": False,
+        "preprocessing_cache": False,
+        "preprocessing_cache_root": "runs/.smart_preprocessing_cache",
     },
     "normalization": {
         "enabled": True,
@@ -55,6 +62,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "tetra": {
         "num_worker": 1,
         "manifold_timeout_sec": 1200,
+        "manifold_depth": 0,
+        "manifold_depth_candidates": [],
+        "manifold_depth_candidates_by_category": {},
+        "skip_manifoldplus": False,
         "ftetwild_timeout_sec": 3600,
         "ftetwild_threads": 8,
         "ftetwild_level": 2,
@@ -62,6 +73,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_single_component": False,
         "min_tetra_count": 20,
         "min_surface_faces": 20,
+        "max_manifold_faces_for_ftetwild": 0,
         "input_repair": {
             "enabled": True,
             "auto_retry_by_failure": True,
@@ -79,6 +91,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
                     "name": "fill_holes",
                     "triggers": [
                         "validation_open_surface",
+                        "validation_low_tetra_count",
+                        "repair_surface_too_large",
                         "command_crash",
                         "command_timeout",
                         "command_failure",
@@ -404,22 +418,58 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     return cfg
 
 
+def apply_agent_profile_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Overlay the guarded learned MCTS-replacement profile on a config."""
+
+    cfg["engine"] = "cpp_native"
+    stages = cfg.setdefault("stages", {})
+    if isinstance(stages, dict):
+        stages["refine"] = True
+        stages["mcts"] = False
+        stages["macro_skill"] = True
+
+    macro_skill = cfg.setdefault("macro_skill", {})
+    if isinstance(macro_skill, dict):
+        macro_skill["input_stage"] = "refine"
+        macro_skill["quality_preset"] = "mcts_replacement_guarded"
+        macro_skill["repeat_mode"] = "guarded_variable"
+        macro_skill["top_k"] = 3
+        macro_skill["macro_memory_pool_size"] = -1
+        macro_skill["candidate_count"] = max(256, int(macro_skill.get("candidate_count", 256) or 256))
+        macro_skill["max_steps"] = max(16, int(macro_skill.get("max_steps", 16) or 16))
+        macro_skill["native_executor"] = True
+        planner = macro_skill.setdefault("planner", {})
+        if isinstance(planner, dict):
+            planner["enabled"] = False
+
+    render = cfg.setdefault("render", {})
+    if isinstance(render, dict):
+        render["input_stage"] = "macro_skill"
+
+    return cfg
+
+
 def _resolve_config_path(path: str | Path, *, current_dir: Path | None = None) -> Path:
     config_path = Path(path).expanduser()
     if config_path.is_absolute():
         return config_path
 
+    config_names = [config_path]
+    if config_path.suffix == "":
+        config_names.append(config_path.with_suffix(".yaml"))
+
     candidates: list[Path] = []
-    if current_dir is not None:
-        candidates.append(current_dir / config_path)
-        candidates.append(current_dir / config_path.name)
-    candidates.extend(
-        [
-            Path.cwd() / config_path,
-            REPO_ROOT / config_path,
-            Path(__file__).resolve().parents[1] / "configs" / config_path.name,
-        ]
-    )
+    for name in config_names:
+        if current_dir is not None:
+            candidates.append(current_dir / name)
+            candidates.append(current_dir / name.name)
+        candidates.extend(
+            [
+                Path.cwd() / name,
+                REPO_ROOT / name,
+                Path(__file__).resolve().parents[1] / "configs" / name.name,
+            ]
+        )
     for candidate in candidates:
         if candidate.exists():
             return candidate

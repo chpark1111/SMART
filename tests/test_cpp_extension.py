@@ -140,6 +140,60 @@ def test_cpp_native_scalar_mlp_scorer_matches_numpy() -> None:
     assert np.allclose(scorer.score_rows(short_rows, False), expected(short_rows), atol=1e-12)
 
 
+def test_cpp_native_step_mlp_tsv_policy_matches_numpy(tmp_path: Path) -> None:
+    assert sc.NativeStepMlpTsvPolicy is not None
+    policy_path = tmp_path / "policy.tsv"
+    policy_path.write_text(
+        "\n".join(
+            [
+                "# smart_macro_mlp_policy_v1",
+                "guide_weight\t0",
+                "activation\tgelu",
+                "hidden\t3",
+                "feature\tf0\t1.0\t2.0",
+                "feature\tf1\t-2.0\t4.0",
+                "w1\t0\t0\t0.3",
+                "w1\t0\t1\t-0.1",
+                "w1\t1\t0\t0.0",
+                "w1\t1\t1\t0.2",
+                "w1\t2\t0\t-0.4",
+                "w1\t2\t1\t0.5",
+                "b1\t0\t0.1",
+                "b1\t1\t-0.2",
+                "b1\t2\t0.3",
+                "w2\t0\t0.7",
+                "w2\t1\t-0.2",
+                "w2\t2\t0.4",
+                "b2\t0.33",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    scorer = sc.NativeStepMlpTsvPolicy(policy_path)
+    rows = np.asarray([[3.0, -1.0], [0.0, 2.0], [1.5, -2.5]], dtype=float)
+
+    def gelu_tanh(x: np.ndarray) -> np.ndarray:
+        return 0.5 * x * (
+            1.0
+            + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x))
+        )
+
+    x = rows.copy()
+    x[:, 0] = (x[:, 0] - 1.0) / 2.0
+    x[:, 1] = (x[:, 1] + 2.0) / 4.0
+    x = np.clip(np.nan_to_num(x, nan=0.0, posinf=20.0, neginf=-20.0), -20.0, 20.0)
+    w1 = np.asarray([[0.3, -0.1], [0.0, 0.2], [-0.4, 0.5]], dtype=float)
+    b1 = np.asarray([0.1, -0.2, 0.3], dtype=float)
+    hidden = gelu_tanh(np.clip(x @ w1.T + b1, -20.0, 20.0))
+    expected = hidden @ np.asarray([0.7, -0.2, 0.4]) + 0.33
+
+    assert scorer.dim() == 2
+    assert scorer.hidden() == 3
+    assert scorer.feature_names() == ["f0", "f1"]
+    assert np.allclose(scorer.score_rows(rows, False), expected, atol=1e-12)
+
+
 def test_cpp_native_normalize_obj_file_keeps_obj_payload(tmp_path) -> None:
     source = tmp_path / "model.obj"
     output = tmp_path / "normalized.obj"
@@ -1877,6 +1931,39 @@ def test_builtin_macro_skill_controller_smoke_on_native_engine() -> None:
         assert preset_result["learned_quality_gate_decision"]["preset"] == preset
         assert preset_result["exact_budget"] in {1, 2}
 
+    guarded_result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="table",
+        top_k=3,
+        candidate_count=32,
+        max_steps=4,
+        quality_preset="mcts_replacement_guarded",
+    )
+    assert guarded_result["quality_preset"] == "mcts_replacement_guarded"
+    assert guarded_result["selector"] in {
+        "parameterized_skill_scalar_mlp_v1_json",
+        "parameterized_skill_category_macro_mean_v1_json",
+    }
+    assert guarded_result["guard_decision"]["learned_candidate_count"] == 3
+    assert guarded_result["guard_decision"]["portfolio_candidate_count"] == 16
+    assert 3 <= guarded_result["attempt_count"] <= 16
+
+    learned_only_result = sc.run_builtin_macro_skill_controller(
+        engine,
+        category="table",
+        top_k=4,
+        candidate_count=32,
+        max_steps=4,
+        quality_preset="mcts_replacement_learned_only",
+    )
+    assert learned_only_result["quality_preset"] == "mcts_replacement_learned_only"
+    assert learned_only_result["guard_decision"]["learned_only"] is True
+    assert learned_only_result["guard_decision"]["fallback_allowed"] is False
+    assert learned_only_result["guard_decision"]["fallback_used"] is False
+    assert learned_only_result["guard_decision"]["learned_candidate_count"] == 4
+    assert learned_only_result["guard_decision"]["portfolio_candidate_count"] == 16
+    assert learned_only_result["attempt_count"] == 4
+
 
 def test_builtin_macro_skill_planner_smoke_on_native_engine() -> None:
     vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
@@ -3421,6 +3508,8 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert "small_pool_exact_uses" in result
     assert "nonfinite_proxy_rescue_checks" in result
     assert "proxy_rescue_checks" in result
+    assert "repeat_positive_rescue_checks" in result
+    assert "repeat_positive_blocked_checks" in result
     assert "structural_high_budget_uses" in result
     assert "structural_initial_high_budget_uses" in result
     assert "structural_secondary_high_budget_uses" in result
@@ -3472,6 +3561,55 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert v9_defaults["budget"] == 24
     assert v9_defaults["structural_tertiary_category"] == "airplane"
     assert v9_defaults["structural_tertiary_min_aspect_mean"] == 1.0e6
+    v10_defaults = sc.native_deepset_refine_defaults("mcts_replacement_v10_candidate")
+    assert v10_defaults["candidate_count"] == 64
+    assert v10_defaults["budget"] == 4
+    assert v10_defaults["adaptive_high_budget"] == 56
+    assert v10_defaults["small_pool_exact_threshold"] == 60
+    assert v10_defaults["nonfinite_proxy_rescue_budget"] == 8
+    assert v10_defaults["repeat_positive_rescue_reward"] == 0.0
+    assert v10_defaults["structural_high_budget"] == 16
+    assert v10_defaults["structural_category"] == "table"
+    assert v10_defaults["structural_secondary_high_budget"] == 64
+    assert v10_defaults["structural_secondary_category"] == "table"
+    v11_defaults = sc.native_deepset_refine_defaults("mcts_replacement_v11_candidate")
+    assert v11_defaults["budget"] == 2
+    assert v11_defaults["adaptive_high_budget"] == 54
+    assert v11_defaults["proxy_rescue_budget"] == 4
+    assert v11_defaults["repeat_positive_block_rules"] == [
+        "table:0:999:1000000:inf",
+        "table:0:6:-inf:14",
+        "airplane:8:8:10:12",
+    ]
+    v12_defaults = sc.native_deepset_refine_defaults("mcts_replacement_v12_candidate")
+    assert v12_defaults["candidate_count"] == 64
+    assert v12_defaults["budget"] == 32
+    assert v12_defaults["adaptive_high_budget"] == 48
+    assert v12_defaults["adaptive_margin_threshold"] == 2.32
+    assert v12_defaults["structural_high_budget"] == 64
+    assert v12_defaults["structural_category"] == "table"
+    assert v12_defaults["structural_min_aspect_mean"] == 5.5
+    v13_fast_defaults = sc.native_deepset_refine_defaults(
+        "mcts_replacement_v13_heldout_fast"
+    )
+    assert v13_fast_defaults["candidate_count"] == 64
+    assert v13_fast_defaults["budget"] == 32
+    assert v13_fast_defaults["adaptive_high_budget"] == 48
+    assert v13_fast_defaults["adaptive_margin_threshold"] == 2.4
+    assert v13_fast_defaults["structural_high_budget"] == 64
+    assert v13_fast_defaults["structural_category"] == "table"
+    assert v13_fast_defaults["structural_secondary_high_budget"] == 0
+    v13_quality_defaults = sc.native_deepset_refine_defaults(
+        "mcts_replacement_v13_quality_safe"
+    )
+    assert v13_quality_defaults["candidate_count"] == 64
+    assert v13_quality_defaults["budget"] == 32
+    assert v13_quality_defaults["adaptive_high_budget"] == 64
+    assert v13_quality_defaults["adaptive_margin_threshold"] == 2.4
+    assert v13_quality_defaults["structural_high_budget"] == 64
+    assert v13_quality_defaults["structural_category"] == "table"
+    assert v13_quality_defaults["structural_secondary_high_budget"] == 64
+    assert v13_quality_defaults["structural_secondary_category"] == "airplane"
     assert sc.native_deepset_refine_defaults("production_candidate") == v9_defaults
     assert sc.native_deepset_refine_defaults("auto_safe") == v9_defaults
     assert sc.native_deepset_refine_defaults("learned_auto_safe") == v9_defaults
@@ -3483,6 +3621,10 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     assert balanced_portfolio["multibox_profile"] == "hard"
     builtin_policy_path = sc.builtin_deepset_policy_path()
     assert builtin_policy_path.endswith("deepset_setaware_v2_h128_v1.smartmlp")
+    v12_policy_path = sc.builtin_deepset_policy_path("mcts_replacement_v12")
+    assert v12_policy_path.endswith("deepset_setaware_v2_h128_dagger_b2_v12.smartmlp")
+    v13_policy_path = sc.builtin_deepset_policy_path("mcts_replacement_v13")
+    assert v13_policy_path.endswith("deepset_setaware_v2_h128_dagger_b2_v12.smartmlp")
     builtin_policy = sc.NativeDeepSetCandidateScorer(builtin_policy_path)
     assert builtin_policy.feature_schema() == "setaware_v2"
     assert builtin_policy.dim() == 58
@@ -3499,6 +3641,8 @@ def test_cpp_native_deepset_refine_accepts_adaptive_rescue_options(tmp_path) -> 
     )
     assert "nonfinite_proxy_rescue_checks" in helper_result
     assert "proxy_rescue_checks" in helper_result
+    assert "repeat_positive_rescue_checks" in helper_result
+    assert "repeat_positive_blocked_checks" in helper_result
     assert "structural_high_budget_uses" in helper_result
     assert "structural_initial_high_budget_uses" in helper_result
     assert "structural_secondary_high_budget_uses" in helper_result

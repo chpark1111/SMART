@@ -11,7 +11,7 @@ by git.
 - `quickstart_reproduce.py`: guided local reproduction helper.
 - `analyze_pipeline_failures.py`: inspect pipeline manifests and failure logs.
 - `audit_release_wheel.py`: audit wheel/sdist contents before release.
-- `release_preflight.py`: build and validate local release artifacts, including installed-wheel smoke and opt-in learned release readiness checks.
+- `release_preflight.py`: build and validate local release artifacts, including installed-wheel smoke and learned default-agent readiness checks.
 - `run_macro_replay_balanced_chunks.py`: resumable, category-balanced runner
   for learned macro-skill release-readiness evidence.  Use
   `--chunk-timeout-sec <seconds>` for long-tail mesh cases that would otherwise

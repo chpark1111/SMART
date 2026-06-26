@@ -87,6 +87,35 @@ Interpretation:
 - Conservative fallback is intentional. It is what keeps the package path
   zero-regression on the current release gates.
 
+## End-to-End Runtime Notes
+
+The learned router mainly reduces candidate-search and exact-check cost.  The
+full mesh-to-box pipeline can still be dominated by preprocessing:
+normalization, ManifoldPlus repair, fTetWild tetrahedralization, and CoACD
+over-segmentation.
+
+Two preprocessing controls are available:
+
+```bash
+smart --config configs/learned_default.yaml \
+  --set native_pipeline.preprocessing_cache=true \
+  run
+
+smart --config configs/smoke_5.yaml \
+  --set tetra.skip_manifoldplus=true \
+  native-run --category airplane --mesh <mesh_id> --force
+```
+
+`native_pipeline.preprocessing_cache=true` is safe for repeated experiments on
+the same mesh/config.  It caches normalized, tetra, and CoACD artifacts by mesh
+hash and preprocessing config, while always rerunning merge/refine/MCTS or the
+learned macro-skill stage.
+
+`tetra.skip_manifoldplus=true` is an opt-in speed knob for known-clean meshes.
+In a three-mesh local smoke probe it reduced first-run wall time strongly, but
+chair/table partition counts changed, so it is **not** a release default.  Keep
+exact validation enabled and use it only after dataset-level validation.
+
 ## Latest Transformer Research Comparison
 
 A larger MPS candidate-set Transformer is useful as a teacher/proposer, but it

@@ -42,6 +42,7 @@ __all__ = [
     "run_builtin_macro_skill_planner",
     "run_builtin_macro_skill_planner_from_files",
     "run",
+    "run_agent",
     "run_pipeline",
     "score_local_refine_gate",
     "score_pruning_gate",
@@ -52,7 +53,7 @@ __all__ = [
     "workspace",
 ]
 
-__version__ = "0.1.19"
+__version__ = "0.1.21"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
     "build_linear_action_prior_from_traces",
@@ -91,6 +92,7 @@ _API_EXPORTS = {
     "run_builtin_macro_skill_planner_from_files",
     "run_native_pipeline",
     "run",
+    "run_agent",
     "run_pipeline",
     "score_local_refine_gate",
     "score_pruning_gate",

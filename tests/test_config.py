@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import os
 import sys
+import inspect
 from pathlib import Path
 
 import pytest
 
 from smart.pipeline.config import load_config
 from smart.pipeline.stages import (
+    _native_preprocessing_cache_key,
+    _native_preprocessing_cache_restore,
+    _native_preprocessing_cache_save,
     _run_coacd_cli_preseg,
     _tetra_input_candidates,
     _write_coacd_partition_metadata,
@@ -23,6 +27,7 @@ from smart.pipeline.stages import (
     run_refine_mesh,
     run_mcts_mesh,
     run_native_pipelines,
+    run_tetra_mesh,
     stage_root,
     validate_tetra_output,
 )
@@ -77,12 +82,102 @@ def test_smart_cli_lists_config_profiles(capsys) -> None:
 
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
+    assert "learned_default.yaml" in names
     assert "learned_frontier.yaml" in names
     assert "learned_auto_safe.yaml" in names
     assert "learned_macro_safe.yaml" in names
     assert "learned_macro_program_gate_top3.yaml" in names
     assert "learned_macro_refine_only.yaml" in names
+    assert "learned_macro_mcts_replacement_guarded.yaml" in names
     assert all("_experimental" not in name for name in names)
+
+
+def test_smart_cli_agent_run_uses_learned_default_config(monkeypatch, capsys) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.cli.run_pipeline", fake_run_pipeline)
+
+    assert smart_main(["agent-run", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == {}
+    assert captured["cfg"]["run_name"] == "learned_default"
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["input_stage"] == "refine"
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["kwargs"]["only_stage"] is None
+
+
+def test_smart_cli_run_agent_flag_uses_learned_default_without_config(monkeypatch, capsys) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.cli.run_pipeline", fake_run_pipeline)
+
+    assert smart_main(["run", "--agent", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == {}
+    assert captured["cfg"]["run_name"] == "learned_default"
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["kwargs"]["only_stage"] is None
+
+
+def test_smart_cli_run_without_config_uses_learned_default_agent(monkeypatch, capsys) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.cli.run_pipeline", fake_run_pipeline)
+
+    assert smart_main(["run", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == {}
+    assert captured["cfg"]["run_name"] == "learned_default"
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["kwargs"]["only_stage"] is None
+
+
+def test_smart_cli_run_agent_flag_overlays_custom_config(monkeypatch, capsys) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.cli.run_pipeline", fake_run_pipeline)
+
+    assert smart_main(["--config", "configs/smoke_5.yaml", "run", "--agent", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == {}
+    assert captured["cfg"]["run_name"] == "smoke_5"
+    assert captured["cfg"]["stages"]["refine"] is True
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["input_stage"] == "refine"
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["cfg"]["render"]["input_stage"] == "macro_skill"
+    assert captured["kwargs"]["only_stage"] is None
 
 
 def test_native_run_dry_run_manifests_monolithic_cpp_pipeline(tmp_path) -> None:
@@ -116,16 +211,297 @@ def test_native_run_dry_run_manifests_monolithic_cpp_pipeline(tmp_path) -> None:
     assert (tmp_path / "runs" / "manifests" / "native_pipeline.jsonl").exists()
 
 
+def test_native_run_dry_run_passes_reuse_existing_flag(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["native_pipeline"] = {"reuse_existing": True}
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    assert "--reuse_existing" in records[0].command
+
+
+def test_native_run_dry_run_passes_reuse_preprocessing_flag(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["native_pipeline"] = {"reuse_preprocessing": True}
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    assert "--reuse_preprocessing" in records[0].command
+    assert "--reuse_existing" not in records[0].command
+
+
+def test_native_run_dry_run_passes_skip_manifoldplus_flag(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["tetra"] = {"skip_manifoldplus": True}
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    assert "--skip_manifoldplus" in records[0].command
+
+
+def test_native_run_dry_run_passes_manifold_depth(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["tetra"] = {"manifold_depth": 7}
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    assert "--manifold_depth" in records[0].command
+    depth_idx = records[0].command.index("--manifold_depth")
+    assert records[0].command[depth_idx + 1] == "7"
+
+
+def test_native_run_dry_run_uses_category_manifold_depth_attempt(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "airplane" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["tetra"] = {
+        "manifold_depth_candidates_by_category": {"airplane": [6, 8]},
+    }
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path / "data" / "airplane"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    assert records[0].metadata["manifold_depth_attempts"] == [6, 8]
+    depth_idx = records[0].command.index("--manifold_depth")
+    assert records[0].command[depth_idx + 1] == "6"
+
+
+def test_native_preprocessing_cache_round_trip(tmp_path) -> None:
+    work_dir = tmp_path / "work"
+    for rel in (
+        "normalized/model.obj",
+        "tetra/model_manifold.obj",
+        "tetra/tetra.msh",
+        "tetra/tetra.msh__sf.obj",
+        "tetra/coacd_partitions.json",
+        "coacd/part_0000.obj",
+    ):
+        path = work_dir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{rel}\n", encoding="utf-8")
+
+    cache_dir = tmp_path / "cache" / "key"
+    metadata = {"enabled": True, "key": "key"}
+
+    assert _native_preprocessing_cache_save(cache_dir=cache_dir, work_dir=work_dir, metadata=metadata)
+    restored_dir = tmp_path / "restored"
+    assert _native_preprocessing_cache_restore(cache_dir, restored_dir)
+
+    assert (restored_dir / "normalized/model.obj").read_text(encoding="utf-8") == "normalized/model.obj\n"
+    assert (restored_dir / "tetra/coacd_partitions.json").exists()
+    assert (restored_dir / "coacd/part_0000.obj").exists()
+    assert not _native_preprocessing_cache_save(cache_dir=cache_dir, work_dir=work_dir, metadata=metadata)
+
+
+def test_native_preprocessing_cache_key_ignores_search_settings(tmp_path) -> None:
+    mesh = tmp_path / "model.obj"
+    mesh.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    tool = tmp_path / "tool"
+    tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    kwargs = {
+        "epsilon": 0.002,
+        "edge_length": 0.1,
+        "normalize_mode": "bbox_diagonal",
+        "normalize_target": 1.0,
+        "normalize_center": "bbox",
+        "manifold_depth": 0,
+        "ftetwild_level": 2,
+        "retry_epsilon_scale": 2.0,
+        "retry_edge_length_scale": 2.0,
+        "coacd_threshold": 0.05,
+        "coacd_max_convex_hull": 64,
+        "coacd_preprocess_mode": "auto",
+        "coacd_preprocess_resolution": 50,
+        "coacd_resolution": 2000,
+        "coacd_mcts_nodes": 20,
+        "coacd_mcts_iterations": 150,
+        "coacd_mcts_max_depth": 3,
+        "coacd_seed": 7777,
+        "coacd_pca": False,
+        "coacd_merge": True,
+        "coacd_decimate": True,
+        "mcts_iter": 3000,
+    }
+
+    key_a = _native_preprocessing_cache_key(
+        source_mesh=mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=tool,
+        ftetwild_bin=tool,
+        coacd_bin=tool,
+    )
+    kwargs["mcts_iter"] = 10
+    key_b = _native_preprocessing_cache_key(
+        source_mesh=mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=tool,
+        ftetwild_bin=tool,
+        coacd_bin=tool,
+    )
+    kwargs["coacd_threshold"] = 0.08
+    key_c = _native_preprocessing_cache_key(
+        source_mesh=mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=tool,
+        ftetwild_bin=tool,
+        coacd_bin=tool,
+    )
+    kwargs["coacd_threshold"] = 0.05
+    kwargs["manifold_depth"] = 7
+    key_d = _native_preprocessing_cache_key(
+        source_mesh=mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=tool,
+        ftetwild_bin=tool,
+        coacd_bin=tool,
+    )
+    kwargs["manifold_depth"] = 0
+    kwargs["skip_manifoldplus"] = True
+    key_e = _native_preprocessing_cache_key(
+        source_mesh=mesh,
+        kwargs=kwargs,
+        manifoldplus_bin=tmp_path / "missing-manifold",
+        ftetwild_bin=tool,
+        coacd_bin=tool,
+    )
+
+    assert key_a == key_b
+    assert key_a != key_c
+    assert key_a != key_d
+    assert key_a != key_e
+
+
+def test_pipeline_append_manifest_mode_preserves_previous_invocations(tmp_path, monkeypatch) -> None:
+    from smart.pipeline.manifest import StageRecord
+    import smart.pipeline.stages as stages_module
+
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["manifest"] = {"mode": "append"}
+    cfg["stages"] = {"normalize": True}
+    for mesh_id in ("mesh_a", "mesh_b"):
+        mesh_dir = tmp_path / mesh_id
+        mesh_dir.mkdir()
+        (mesh_dir / "model.obj").write_text("v 0 0 0\n", encoding="utf-8")
+    cfg["categories"] = [
+        {
+            "name": "airplane",
+            "mesh_root": str(tmp_path),
+            "meshes": ["mesh_a", "mesh_b"],
+        }
+    ]
+
+    def fake_run_stage(cfg, category, mesh_id, *, stage, dry_run=False, force=False):
+        return StageRecord.now(
+            stage=stage,
+            category=category["name"],
+            mesh_id=mesh_id,
+            status="success",
+            output_path=tmp_path / mesh_id,
+        )
+
+    monkeypatch.setattr(stages_module, "run_stage", fake_run_stage)
+
+    stages_module.run_pipeline(cfg, meshes=["mesh_a"])
+    stages_module.run_pipeline(cfg, meshes=["mesh_b"])
+
+    manifest = tmp_path / "runs" / "manifests" / "normalize.jsonl"
+    rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines()]
+    assert [row["mesh_id"] for row in rows] == ["mesh_a", "mesh_b"]
+
+    summary = json.loads((tmp_path / "runs" / "manifests" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["normalize"]["success"] == 2
+
+
 def test_public_api_lists_config_profiles() -> None:
     profiles = smart.config_profiles()
     names = {item["name"] for item in profiles}
 
     assert "smoke_5.yaml" in names
     assert "example_3x3.yaml" in names
+    assert "learned_default.yaml" in names
     assert "learned_frontier.yaml" in names
     assert "learned_auto_safe.yaml" in names
     assert "learned_macro_safe.yaml" in names
     assert "learned_macro_refine_only.yaml" in names
+    assert "learned_macro_mcts_replacement_guarded.yaml" in names
     assert all("_experimental" not in name for name in names)
 
 
@@ -193,6 +569,30 @@ def test_learned_auto_safe_config_is_default_candidate_profile() -> None:
     assert cfg["mcts"]["learned_prior"]["mode"] == "auto_safe"
 
 
+def test_learned_default_config_is_guarded_mcts_replacement_agent() -> None:
+    cfg = load_config("configs/learned_default.yaml")
+
+    assert cfg["run_name"] == "learned_default"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["stages"]["refine"] is True
+    assert cfg["stages"]["mcts"] is False
+    assert cfg["stages"]["macro_skill"] is True
+    assert cfg["macro_skill"]["input_stage"] == "refine"
+    assert cfg["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert cfg["macro_skill"]["top_k"] == 3
+    assert cfg["macro_skill"]["macro_memory_pool_size"] == -1
+    assert cfg["macro_skill"]["planner"]["enabled"] is False
+    assert cfg["render"]["input_stage"] == "macro_skill"
+
+
+def test_config_name_without_yaml_suffix_resolves_packaged_profile() -> None:
+    cfg = load_config("learned_default")
+
+    assert cfg["run_name"] == "learned_default"
+    assert cfg["stages"]["mcts"] is False
+    assert cfg["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+
+
 def test_learned_macro_safe_config_enables_safe_macro_stage() -> None:
     cfg = load_config("configs/learned_macro_safe.yaml")
 
@@ -248,6 +648,22 @@ def test_learned_macro_refine_only_config_enables_mcts_replacement_research_prof
     assert cfg["render"]["input_stage"] == "macro_skill"
 
 
+def test_learned_macro_mcts_replacement_guarded_config_uses_packaged_selector() -> None:
+    cfg = load_config("configs/learned_macro_mcts_replacement_guarded.yaml")
+
+    assert cfg["run_name"] == "learned_macro_mcts_replacement_guarded"
+    assert cfg["engine"] == "cpp_native"
+    assert cfg["stages"]["refine"] is True
+    assert cfg["stages"]["mcts"] is False
+    assert cfg["stages"]["macro_skill"] is True
+    assert cfg["macro_skill"]["input_stage"] == "refine"
+    assert cfg["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert cfg["macro_skill"]["top_k"] == 3
+    assert cfg["macro_skill"]["macro_memory_pool_size"] == -1
+    assert cfg["macro_skill"]["planner"]["enabled"] is False
+    assert cfg["render"]["input_stage"] == "macro_skill"
+
+
 def test_learned_prior_schema_defaults_to_guarded_when_enabled() -> None:
     cfg = smart.load_config(None, overrides={"mcts": {"learned_prior": {"enabled": True}}})
 
@@ -263,6 +679,7 @@ def test_public_api_lists_and_resolves_packaged_assets() -> None:
 
     policy_names = {item["name"] for item in policies}
     assert "deepset_setaware_v2_h128_v1.smartmlp" in policy_names
+    assert "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp" in policy_names
     packaged_policy = next(item for item in policies if item["name"] == "deepset_setaware_v2_h128_v1.smartmlp")
     assert packaged_policy["feature_set"] == "setaware_v2"
     assert packaged_policy["model_type"] == "deepset_h128"
@@ -272,12 +689,20 @@ def test_public_api_lists_and_resolves_packaged_assets() -> None:
         "macro_skill_knowledge_base_v1.json",
         "macro_memory_policy_v1.json",
         "macro_budget_quality_rule_v1.json",
+        "macro_skill_candidates_4k_v1.jsonl",
+        "macro_skill_retriever_macrohash_v1.json",
     }
     assert smart.asset_path("policies", "default").name == "deepset_setaware_v2_h128_v1.smartmlp"
     assert smart.asset_path("policy", "h128_v1").name == "deepset_setaware_v2_h128_v1.smartmlp"
+    assert smart.asset_path("policy", "mcts_replacement_v12").name == "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp"
+    assert smart.asset_path("policy", "mcts_replacement_v13").name == "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp"
+    assert smart.asset_path("policy", "mcts_replacement_v13_quality_safe").name == "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp"
+    assert smart.asset_path("policy", "mcts_replacement_v13_heldout_fast").name == "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp"
     assert smart.asset_path("skills", "macro_v1").name == "macro_skill_knowledge_base_v1.json"
     assert smart.asset_path("skills", "macro_memory_v1").name == "macro_memory_policy_v1.json"
     assert smart.asset_path("skills", "macro_budget_quality_v1").name == "macro_budget_quality_rule_v1.json"
+    assert smart.asset_path("skills", "macro_skill_candidates_4k_v1").name == "macro_skill_candidates_4k_v1.jsonl"
+    assert smart.asset_path("skills", "macrohash_retriever_v1").name == "macro_skill_retriever_macrohash_v1.json"
     with pytest.raises(FileNotFoundError):
         smart.asset_path("gates", "rich")
 
@@ -290,9 +715,12 @@ def test_smart_cli_lists_packaged_assets(capsys) -> None:
 
     assert smart_main(["assets", "--kind", "policies", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert {item["name"] for item in payload} == {"deepset_setaware_v2_h128_v1.smartmlp"}
-    assert payload[0]["feature_set"] == "setaware_v2"
-    assert payload[0]["model_type"] == "deepset_h128"
+    assert {item["name"] for item in payload} == {
+        "deepset_setaware_v2_h128_v1.smartmlp",
+        "deepset_setaware_v2_h128_dagger_b2_v12.smartmlp",
+    }
+    assert {item["feature_set"] for item in payload} == {"setaware_v2"}
+    assert {item["model_type"] for item in payload} == {"deepset_h128"}
 
     assert smart_main(["assets", "--kind", "skills", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -300,6 +728,8 @@ def test_smart_cli_lists_packaged_assets(capsys) -> None:
         "macro_skill_knowledge_base_v1.json",
         "macro_memory_policy_v1.json",
         "macro_budget_quality_rule_v1.json",
+        "macro_skill_candidates_4k_v1.jsonl",
+        "macro_skill_retriever_macrohash_v1.json",
     }
 
 
@@ -405,18 +835,37 @@ def test_smart_cli_macro_skill_summary(capsys) -> None:
     assert stage_latest["refine"]["portfolio_ratio"] > 1.0
     assert stage_latest["mcts"]["portfolio_ratio"] > 1.0
     assert payload["substructure_planner"]["fresh_generated_seed13"]["losses"] == 0
-    assert payload["mcts_replacement_agent"]["status"] == "research_only_not_default_ready"
-    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
-    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 76
+    assert payload["mcts_replacement_agent"]["status"] == "guarded_default_candidate_gate_passed"
+    assert payload["mcts_replacement_agent"]["default_candidate_gate_passed"] is True
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_mcts_replacement_guarded.yaml"
+    assert payload["mcts_replacement_agent"]["runtime_preset"] == "quality_preset=mcts_replacement_guarded"
+    assert payload["mcts_replacement_agent"]["command"] == "smart agent-run"
+    assert "smart run" in payload["mcts_replacement_agent"]["commands"]
+    assert "smart run --agent" in payload["mcts_replacement_agent"]["commands"]
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 510
     assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["category_counts"] == {
-        "airplane": 26,
-        "chair": 24,
-        "table": 26,
+        "airplane": 177,
+        "chair": 165,
+        "table": 168,
     }
     assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["losses"] == 0
+    assert (
+        payload["mcts_replacement_agent"]["guarded_fallback_default_candidate"][
+            "losses_vs_budgeted_portfolio"
+        ]
+        == 0
+    )
+    assert (
+        payload["mcts_replacement_agent"]["guarded_fallback_default_candidate"][
+            "exact_attempt_reduction_vs_budgeted_portfolio"
+        ]
+        > 0.25
+    )
+    assert "configs/learned_default.yaml" in payload["recommended_configs"]
     assert "configs/learned_macro_safe.yaml" in payload["recommended_configs"]
     assert "configs/learned_macro_program_gate_top3.yaml" in payload["recommended_configs"]
     assert "configs/learned_macro_refine_only.yaml" in payload["recommended_configs"]
+    assert "configs/learned_macro_mcts_replacement_guarded.yaml" in payload["recommended_configs"]
     assert payload["best_practical"]["losses_vs_conditional_budget_v1"] == 0
     assert payload["quality_preset"]["losses_vs_conditional_budget_v1"] == 0
 
@@ -444,13 +893,19 @@ def test_smart_cli_learned_release_readiness(capsys) -> None:
     assert smart_main(["learned-release-readiness", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "release_candidate_opt_in"
+    assert payload["status"] == "release_default_agent_enabled"
     assert payload["can_ship_opt_in"] is True
-    assert payload["can_be_default"] is False
+    assert payload["can_be_default"] is True
+    assert payload["default_agent_enabled"] is True
+    assert payload["default_agent_config"] == "configs/learned_default.yaml"
+    assert payload["paper_reproduction_config"] == "configs/paper_like.yaml"
+    assert payload["default_blockers"] == []
     assert payload["default_smart_path"] == "unchanged_exact_cpp_native"
     assert "learned_macro_safe.yaml" in payload["opt_in_profiles"]
+    assert "learned_default.yaml" in payload["opt_in_profiles"]
     assert "learned_macro_program_gate_top3.yaml" in payload["opt_in_profiles"]
     assert "learned_macro_refine_only.yaml" in payload["opt_in_profiles"]
+    assert "learned_macro_mcts_replacement_guarded.yaml" in payload["opt_in_profiles"]
     assert payload["packaged_assets"]["policy_ready"] is True
     assert payload["packaged_assets"]["missing_skill_assets"] == []
     assert payload["packaged_assets"]["configs_ready"] is True
@@ -465,18 +920,45 @@ def test_smart_cli_learned_release_readiness(capsys) -> None:
     assert payload["substructure_planner"]["stage_source_gate_passed"] is True
     assert payload["substructure_planner"]["stage_source_latest"]["refine"]["accepted"] == 456
     assert payload["substructure_planner"]["stage_source_latest"]["mcts"]["accepted"] == 456
-    assert payload["mcts_replacement_agent"]["status"] == "research_only_not_default_ready"
-    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
-    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 76
+    assert payload["mcts_replacement_can_be_default_candidate"] is True
+    assert payload["mcts_replacement_agent"]["status"] == "guarded_default_candidate_gate_passed"
+    assert payload["mcts_replacement_agent"]["default_candidate_gate_passed"] is True
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_mcts_replacement_guarded.yaml"
+    assert payload["mcts_replacement_agent"]["default_config"] == "configs/learned_default.yaml"
+    assert payload["mcts_replacement_agent"]["runtime_preset"] == "quality_preset=mcts_replacement_guarded"
+    assert "smart run" in payload["default_agent_entrypoints"]
+    assert "smart agent-run" in payload["default_agent_entrypoints"]
+    assert "smart run --agent" in payload["default_agent_entrypoints"]
+    assert "smart --config <your_config.yaml> run --agent" in payload["default_agent_entrypoints"]
+    assert "smart run" in payload["recommended_commands"]
+    assert "smart agent-run" in payload["recommended_commands"]
+    assert "smart run --agent" in payload["recommended_commands"]
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 510
     assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["losses"] == 0
+    assert (
+        payload["mcts_replacement_agent"]["guarded_fallback_default_candidate"][
+            "losses_vs_budgeted_portfolio"
+        ]
+        == 0
+    )
 
     assert smart_main(["learned-release-readiness"]) == 0
     text = capsys.readouterr().out
-    assert "status=release_candidate_opt_in" in text
+    assert "status=release_default_agent_enabled" in text
+    assert "default_agent=True" in text
     assert "opt_in=True" in text
-    assert "can_be_default=False" in text
+    assert "can_be_default=True" in text
     assert smart_main(["learned-release-readiness", "--fail-if-not-ready"]) == 0
-    assert smart_main(["learned-release-readiness", "--require-default-ready"]) == 3
+    assert smart_main(["learned-release-readiness", "--require-default-ready"]) == 0
+
+
+def test_release_preflight_requires_learned_default_agent_gate() -> None:
+    import scripts.release_preflight as release_preflight
+
+    source = inspect.getsource(release_preflight.run_preflight)
+
+    assert source.count('"--fail-if-not-ready"') == 2
+    assert source.count('"--require-default-ready"') == 2
 
 
 def test_smart_cli_learned_release_readiness_fails_when_blocked(monkeypatch, capsys) -> None:
@@ -510,14 +992,24 @@ def test_public_api_exposes_learned_release_readiness() -> None:
     payload = smart.learned_release_readiness_summary()
 
     assert payload["can_ship_opt_in"] is True
-    assert payload["can_be_default"] is False
+    assert payload["can_be_default"] is True
+    assert payload["default_agent_enabled"] is True
+    assert payload["default_agent_config"] == "configs/learned_default.yaml"
+    assert payload["default_blockers"] == []
     assert payload["router"]["status"] == "release_candidate_opt_in"
     assert payload["macro_skill"]["status"] == "release_candidate_opt_in_post_refine"
     assert payload["substructure_planner"]["status"] == "release_candidate_opt_in_substructure_planner"
     assert payload["substructure_planner"]["fresh_500_gate_passed"] is True
     assert payload["substructure_planner"]["fresh_generated_cases"] == 507
-    assert payload["mcts_replacement_agent"]["experimental_use"] == "refine_output_to_macro_planner_without_mcts"
-    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_refine_only.yaml"
+    assert payload["mcts_replacement_can_be_default_candidate"] is True
+    assert payload["mcts_replacement_agent"]["current_safe_use"] == "refine_output_to_macro_planner_without_mcts"
+    assert payload["mcts_replacement_agent"]["default_candidate_gate_passed"] is True
+    assert payload["mcts_replacement_agent"]["fresh_refine_only_latest"]["cases"] == 510
+    assert payload["mcts_replacement_agent"]["packaged_config"] == "configs/learned_macro_mcts_replacement_guarded.yaml"
+    assert payload["mcts_replacement_agent"]["default_config"] == "configs/learned_default.yaml"
+    assert "smart run" in payload["default_agent_entrypoints"]
+    assert "smart agent-run" in payload["default_agent_entrypoints"]
+    assert "smart run --agent" in payload["mcts_replacement_agent"]["commands"]
     assert callable(smart.run_macro_skill_controller)
     assert callable(smart.run_macro_skill_controller_from_files)
     assert callable(smart.run_macro_skill_planner)
@@ -534,8 +1026,20 @@ def test_macro_skill_assets_load_and_rank() -> None:
     memory = macro_skills.load_macro_memory_policy(assets.memory_policy)
     budget_rules = macro_skills.load_budget_rules(assets.budget_rule)
     quality_gate = macro_skills.load_macro_quality_gate(assets.quality_gate)
+    macrohash_skills = macro_skills.load_macrohash_skill_candidates(assets.macrohash_candidates)
+    macrohash_retriever = macro_skills.load_macrohash_retriever(assets.macrohash_retriever)
 
     assert skills
+    assert len(macrohash_skills) >= 700
+    assert macrohash_retriever["model_type"] in {
+        "parameterized_skill_scalar_mlp_v1_json",
+        "parameterized_skill_category_macro_mean_v1_json",
+    }
+    if macrohash_retriever["model_type"] == "parameterized_skill_scalar_mlp_v1_json":
+        assert macrohash_retriever["feature_dim"] == 132
+    else:
+        assert macrohash_retriever["cases"] >= 400
+        assert macrohash_retriever["category_macro_means"]
     assert budget_rules
     thresholds = quality_gate["preset_thresholds"]
     assert set(thresholds) == {"learned_fast", "learned_efficient", "learned_quality"}
@@ -2056,6 +2560,94 @@ def test_coacd_runtime_skips_install_when_cli_already_works(tmp_path, monkeypatc
     assert all("pip" not in part for command in commands for part in command)
 
 
+def test_tetra_skips_ftetwild_when_manifold_repair_surface_is_too_large(
+    tmp_path, monkeypatch
+) -> None:
+    mesh_root = tmp_path / "data" / "table"
+    mesh_dir = mesh_root / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "\n".join(
+            [
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "v 0 0 1",
+                "f 1 2 3",
+                "f 1 2 4",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifold_bin = tmp_path / "manifold"
+    ftetwild_bin = tmp_path / "FloatTetwild_bin"
+    manifold_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    ftetwild_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    commands: list[list[str]] = []
+
+    def fake_run_command(command, **kwargs):
+        command_parts = [str(part) for part in command]
+        commands.append(command_parts)
+        if command_parts[0] == str(manifold_bin):
+            output = Path(command_parts[command_parts.index("--output") + 1])
+            output.write_text(
+                "\n".join(
+                    [
+                        "v 0 0 0",
+                        "v 1 0 0",
+                        "v 0 1 0",
+                        "v 0 0 1",
+                        "f 1 2 3",
+                        "f 1 2 4",
+                        "f 2 3 4",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        return CommandResult(
+            command=command_parts,
+            returncode=0,
+            elapsed_sec=0.0,
+            log_path=Path(kwargs["log_path"]),
+        )
+
+    monkeypatch.setattr("smart.pipeline.stages.run_command", fake_run_command)
+
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["normalization"] = {"enabled": False}
+    cfg["tools"] = {
+        "manifoldplus_bin": str(manifold_bin),
+        "ftetwild_bin": str(ftetwild_bin),
+    }
+    cfg["tetra"].update(
+        {
+            "epsilon": 0.003,
+            "edge_length": 0.2,
+            "retry": {"enabled": False},
+            "input_repair": {"enabled": False},
+            "max_manifold_faces_for_ftetwild": 2,
+        }
+    )
+
+    record = run_tetra_mesh(
+        cfg,
+        {"name": "table", "mesh_root": str(mesh_root), "meshes": ["mesh_a"]},
+        "mesh_a",
+        force=True,
+    )
+
+    assert record.status == "failed"
+    assert len(commands) == 1
+    assert commands[0][0] == str(manifold_bin)
+    attempts = record.metadata["attempts"]
+    assert attempts[0]["failure_class"] == "repair_surface_too_large"
+    assert attempts[0]["manifold_counts"]["faces"] == 3
+
+
 def test_build_cpp_dry_run_can_request_asan_binary(tmp_path) -> None:
     messages = build_cpp_extension({"workspace": str(tmp_path / "runs")}, dry_run=True, asan=True)
 
@@ -2177,6 +2769,33 @@ def test_tetra_input_candidates_wait_for_failure_class_before_fill_holes(tmp_pat
     )
 
     assert [candidate["name"] for candidate in candidates] == ["primary"]
+
+
+def test_tetra_input_candidates_add_fill_holes_for_low_tetra_count(tmp_path, monkeypatch) -> None:
+    mesh_path = tmp_path / "low_tetra.obj"
+    mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    stage_cfg = load_config(None)["tetra"]
+
+    def fake_prepare(source: Path, output: Path, cfg: dict) -> tuple[Path, dict]:
+        repair_cfg = cfg.get("input_repair", {})
+        if repair_cfg.get("fill_holes"):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(mesh_path.read_text(encoding="utf-8"), encoding="utf-8")
+            return output, {"enabled": True, "used": True, "variant": "fill_holes"}
+        return source, {"enabled": True, "used": True, "variant": "primary"}
+
+    monkeypatch.setattr("smart.pipeline.stages._prepare_tetra_input_mesh", fake_prepare)
+
+    candidates, repair_records = _tetra_input_candidates(
+        mesh_path,
+        tmp_path / "logs",
+        stage_cfg,
+        active_failure_classes={"validation_low_tetra_count"},
+    )
+
+    assert candidates[0]["name"] == "primary"
+    assert any(candidate["name"] == "fill_holes" for candidate in candidates)
+    assert any(record.get("variant") == "fill_holes" and record.get("used") for record in repair_records)
 
 
 def test_tetra_input_repair_skips_component_split_unless_needed(tmp_path, monkeypatch) -> None:
@@ -2317,6 +2936,71 @@ def test_public_api_exposes_dry_run_pipeline(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0]["stage"] == "normalize"
     assert records[0]["status"] in {"dry_run", "skipped"}
+
+
+def test_public_api_exposes_learned_agent_run(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.api._run_pipeline", fake_run_pipeline)
+
+    records = smart.run_agent(dry_run=True, category="airplane", meshes=["mesh-a"])
+
+    assert records == []
+    assert captured["cfg"]["run_name"] == "learned_default"
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["kwargs"]["category_name"] == "airplane"
+    assert captured["kwargs"]["meshes"] == ["mesh-a"]
+    assert captured["kwargs"]["dry_run"] is True
+
+
+def test_public_api_run_without_config_uses_learned_default_agent(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.api._run_pipeline", fake_run_pipeline)
+
+    records = smart.run(dry_run=True)
+
+    assert records == []
+    assert captured["cfg"]["run_name"] == "learned_default"
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["kwargs"]["dry_run"] is True
+
+
+def test_public_api_run_agent_flag_overlays_custom_config(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_pipeline(cfg, **kwargs):
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("smart.api._run_pipeline", fake_run_pipeline)
+
+    records = smart.run("configs/smoke_5.yaml", agent=True, dry_run=True)
+
+    assert records == []
+    assert captured["cfg"]["run_name"] == "smoke_5"
+    assert captured["cfg"]["stages"]["refine"] is True
+    assert captured["cfg"]["stages"]["mcts"] is False
+    assert captured["cfg"]["stages"]["macro_skill"] is True
+    assert captured["cfg"]["macro_skill"]["input_stage"] == "refine"
+    assert captured["cfg"]["macro_skill"]["quality_preset"] == "mcts_replacement_guarded"
+    assert captured["cfg"]["render"]["input_stage"] == "macro_skill"
+    assert captured["kwargs"]["dry_run"] is True
 
 
 def test_cli_global_dry_run_is_not_overridden_by_stage_parser(tmp_path: Path, capsys) -> None:
