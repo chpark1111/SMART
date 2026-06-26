@@ -6,7 +6,12 @@
     "manifold_depth_candidates_by_category": {
       "airplane": [6, 8],
       "chair": [6, 8],
-      "table": [7, 8]
+      "table": [0]
+    }
+  },
+  "merge": {
+    "final_k_by_category": {
+      "table": 2
     }
   }
 }

@@ -103,6 +103,17 @@ tetra, and CoACD artifacts.  On a cache hit SMART copies only preprocessing
 artifacts into the run directory and passes `--reuse_preprocessing` to the
 native executable.  Search outputs are never restored from this cache.
 
+A June 27, 2026 local cache probe on the chair smoke mesh
+`11b7c86fc42306ec7e7e25239e7b8f85` measured:
+
+| mode | wall time | artifact check |
+| --- | ---: | --- |
+| cache miss | 17.81s | baseline preprocessing generated |
+| cache hit in a fresh workspace | 0.54s | `tetra.msh`, `coacd_partitions.json`, and final bbox JSON hashes identical |
+
+This is the strongest strict-quality speedup available for repeated runs: the
+geometry artifact is reused rather than approximated or regenerated.
+
 The next high-impact preprocessing optimizations are:
 
 1. tune `tetra.manifold_depth` to keep ManifoldPlus repair enabled while
@@ -113,6 +124,47 @@ The next high-impact preprocessing optimizations are:
    metrics remain stable;
 4. evaluate alternative tetra backends or a newer fTetWild build with real
    threading support.
+
+## Exact-Quality Speed Rules
+
+If the requirement is **no quality regression at all**, preprocessing changes
+must be treated differently from search changes.
+
+Preprocessing changes are not exact-preserving.  Options such as
+`tetra.skip_manifoldplus`, lower `tetra.manifold_depth`, altered CoACD
+parameters, fTetWild threading, or concurrent batch execution can all change
+the tetra mesh or CoACD partition graph.  Once those artifacts change, the
+final SMART boxes can change even when the SMART seed is fixed.  A June 26,
+2026 smoke probe showed this clearly:
+
+| run path | wall time | exact-quality status |
+| --- | ---: | --- |
+| Python `native-run`, one mesh at a time | about 59s for 5 meshes | baseline |
+| C++ `run-batch --jobs 1` | about 60s for 5 meshes | same execution mode class |
+| C++ `run-batch --jobs 2` | about 31s for 5 meshes | faster throughput, but output metrics changed |
+
+The two-worker batch run is useful for dataset throughput, but it is not a
+strict identical-quality acceleration because fresh fTetWild/CoACD outputs can
+differ under repeated or concurrent runs.  In the same probe, the per-mesh stage
+budget was dominated by preprocessing:
+
+| stage | share of one-worker C++ batch time |
+| --- | ---: |
+| fTetWild | 74.9% |
+| CoACD | 16.1% |
+| ManifoldPlus | 4.2% |
+| SMART refine/MCTS | 4.8% |
+
+Therefore the strict release rule is:
+
+- keep default preprocessing unchanged for paper/release metrics;
+- use preprocessing cache or `native_pipeline.reuse_preprocessing=true` for
+  repeated runs on the same mesh and config;
+- use learned routing only behind exact validation/fallback;
+- allow `run-batch --jobs N` for throughput experiments, but do not claim
+  bit-identical or metric-identical output unless the final metrics are checked;
+- promote a fast preprocessing profile only if it passes an exact final metric
+  gate on the target dataset.
 
 `tetra.skip_manifoldplus=true` is intentionally opt-in.  It can save the
 ManifoldPlus repair step on already clean/watertight meshes, but it is not a
@@ -136,8 +188,10 @@ smart --config configs/preprocess_fast.yaml \
 ```
 
 The preset uses `tetra.manifold_depth_candidates_by_category`; SMART tries the
-first candidate and falls back to depth 8 if the native run fails.  On the smoke
-set this selected depth 6 for airplane/chair and depth 7 for table.
+first candidate and falls back to depth 8 if the native run fails.  The current
+profile keeps table on the default depth-0 path and sets
+`merge.final_k_by_category.table=2`, because lower-depth table probes can
+over-merge table parts into one box.
 
 Smoke profiling showed why this knob must be quality-gated:
 
@@ -152,11 +206,11 @@ Smoke profiling showed why this knob must be quality-gated:
 | table | depth 7 | 3.69s | 21,266 | 2 | 1.842 | 0.570 | faster, mixed metric change |
 | table | depth 6 | failed | 5,724 | - | - | - | CoACD crashed after tetra |
 
-With the category fast preset, a first three-mesh probe completed in 24.86s
-rather than 49.35s, but a full five-mesh smoke rerun showed why this is not the
-default release path yet.  The default depth-8 path succeeded on 4/5 meshes;
-the fast preset succeeded on 5/5 by rescuing one CoACD failure, but common-case
-quality was mixed:
+With the category fast preset, an early three-mesh probe completed in 24.86s
+rather than 49.35s, but full smoke reruns showed why this is not the default
+release path yet.  The default path succeeded on 4/5 meshes; the fast preset
+succeeded on 5/5 by rescuing one CoACD failure, but common-case quality was
+mixed:
 
 | metric on common successful cases | fast result |
 | --- | ---: |
@@ -168,15 +222,21 @@ quality was mixed:
 
 For example, the first airplane changed from 7 to 9 boxes: vIoU improved
 (`0.483 -> 0.540`) and Chamfer improved, but BVS worsened slightly
-(`2.225 -> 2.263`) and coverage dropped slightly.  The table changed from
-2 boxes to 1 box and degraded more clearly (`BVS 1.592 -> 2.247`,
-`vIoU 0.644 -> 0.445`).  Therefore `configs/preprocess_fast.yaml` remains
-opt-in for speed/rescue experiments rather than a default replacement.
+(`2.225 -> 2.263`) and coverage dropped slightly.  A table lower-depth probe
+changed from 2 boxes to 1 box and degraded more clearly
+(`BVS 1.592 -> 2.248`, `vIoU 0.644 -> 0.445`).  The packaged fast profile now
+prevents that known over-merge by keeping table on depth 0 and requiring at
+least two table partitions after merge, but it remains opt-in for speed/rescue
+experiments rather than a default replacement.
 
 Lower depth is therefore not a universal default.  It is useful as a
-category/dataset-specific fast preset, or as a speculative fast attempt with a
-fallback to depth 8.  For strict reproducibility, leave `tetra.manifold_depth=0`
-and rely on preprocessing cache/reuse instead.
+category/dataset-specific fast preset, or as a speculative fast attempt with an
+exact fallback.  For strict reproducibility and no-quality-regression runs,
+leave `tetra.manifold_depth=0` and rely on preprocessing cache/reuse or the
+exact-validated learned search path instead.  Fresh fTetWild/CoACD runs can be
+non-identical even with the same SMART seed, so changing preprocessing inputs
+cannot be promoted as a guaranteed quality-preserving speedup without a final
+exact metric gate.
 
 ## Rendering
 

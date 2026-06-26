@@ -173,6 +173,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fast_merge": True,
         "only_nearby": False,
         "final_k": 0,
+        "final_k_by_category": {},
         "data_gen_eps": -1000000000.0,
         "timeout_sec": 10800,
         "worker": 0,

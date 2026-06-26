@@ -32,7 +32,7 @@ from smart.pipeline.stages import (
     validate_tetra_output,
 )
 from smart.pipeline import tools as pipeline_tools
-from smart.pipeline.runner import CommandResult
+from smart.pipeline.runner import CommandResult, command_env
 from smart.pipeline.tools import (
     _first_pymanifold_binary,
     _tool_root_path,
@@ -43,6 +43,20 @@ from smart.pipeline.tools import (
 from smart.cli import _apply_override, main as smart_main
 from smart.evaluation import EvaluationRecord, summarize_records
 import smart
+
+
+def test_command_env_suppresses_macos_crash_dialog_by_default() -> None:
+    env = command_env({"PATH": "/usr/bin"})
+
+    assert env["CRASHREPORTER_DISABLE"] == "1"
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_command_env_can_leave_crash_reporter_enabled() -> None:
+    env = command_env({"SMART_SUPPRESS_MACOS_CRASH_DIALOG": "0"})
+
+    assert "CRASHREPORTER_DISABLE" not in env
+
 
 def test_demo_config_loads() -> None:
     cfg = load_config("configs/demo.yaml")
@@ -343,6 +357,32 @@ def test_native_run_dry_run_uses_category_manifold_depth_attempt(tmp_path) -> No
     assert records[0].command[depth_idx + 1] == "6"
 
 
+def test_native_run_dry_run_uses_category_merge_final_k(tmp_path) -> None:
+    mesh_dir = tmp_path / "data" / "table" / "mesh_a"
+    mesh_dir.mkdir(parents=True)
+    (mesh_dir / "model.obj").write_text(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(None)
+    cfg["workspace"] = str(tmp_path / "runs")
+    cfg["merge"] = {"final_k_by_category": {"table": 2}}
+    cfg["categories"] = [
+        {
+            "name": "table",
+            "mesh_root": str(tmp_path / "data" / "table"),
+            "meshes": ["mesh_a"],
+        }
+    ]
+
+    records = run_native_pipelines(cfg, dry_run=True)
+
+    assert len(records) == 1
+    assert records[0].command is not None
+    final_k_idx = records[0].command.index("--final_k")
+    assert records[0].command[final_k_idx + 1] == "2"
+
+
 def test_native_preprocessing_cache_round_trip(tmp_path) -> None:
     work_dir = tmp_path / "work"
     for rel in (
@@ -582,6 +622,7 @@ def test_learned_default_config_is_guarded_mcts_replacement_agent() -> None:
     assert cfg["macro_skill"]["top_k"] == 3
     assert cfg["macro_skill"]["macro_memory_pool_size"] == -1
     assert cfg["macro_skill"]["planner"]["enabled"] is False
+    assert cfg["native_pipeline"]["preprocessing_cache"] is True
     assert cfg["render"]["input_stage"] == "macro_skill"
 
 

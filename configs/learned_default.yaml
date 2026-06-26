@@ -3,6 +3,10 @@
   "workspace": "examples/runs/learned_default",
   "data_root": "examples/sample_shapes",
   "engine": "cpp_native",
+  "native_pipeline": {
+    "preprocessing_cache": true,
+    "preprocessing_cache_root": "runs/.smart_preprocessing_cache"
+  },
   "normalization": {
     "enabled": true,
     "mode": "bbox_diagonal",

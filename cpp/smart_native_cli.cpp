@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <dirent.h>
 #include <fstream>
 #include <iomanip>
@@ -384,6 +385,10 @@ ProcessResult run_process(const std::vector<std::string>& args,
     throw std::runtime_error("fork failed for command: " + command_for_json(args));
   }
   if (pid == 0) {
+    const char* suppress = ::getenv("SMART_SUPPRESS_MACOS_CRASH_DIALOG");
+    if (suppress == nullptr || ::strcmp(suppress, "0") != 0) {
+      ::setenv("CRASHREPORTER_DISABLE", "1", 0);
+    }
     if (log_fd >= 0) {
       ::dup2(log_fd, STDOUT_FILENO);
       ::dup2(log_fd, STDERR_FILENO);

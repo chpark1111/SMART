@@ -33,6 +33,14 @@ def find_executable(explicit: str | None, env_name: str, fallback: str) -> str |
     return shutil.which(fallback)
 
 
+def command_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    resolved = os.environ.copy() if env is None else dict(env)
+    suppress = str(resolved.get("SMART_SUPPRESS_MACOS_CRASH_DIALOG", "1")).lower()
+    if suppress not in {"0", "false", "no"}:
+        resolved.setdefault("CRASHREPORTER_DISABLE", "1")
+    return resolved
+
+
 def run_command(
     command: list[str],
     *,
@@ -61,7 +69,7 @@ def run_command(
         completed = subprocess.run(
             command,
             cwd=str(cwd) if cwd is not None else None,
-            env=env,
+            env=command_env(env),
             timeout=timeout,
             text=True,
             stdout=subprocess.PIPE,

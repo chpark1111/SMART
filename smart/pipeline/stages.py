@@ -339,6 +339,7 @@ def run_native_pipeline_mesh(
         ftetwild_bin=ftetwild_bin or "$SMART_FTETWILD_BIN",
         coacd_bin=coacd_bin or "$SMART_COACD_BIN",
         mesh_id=mesh_id,
+        category_name=str(category["name"]),
         tetra_cfg=tetra_cfg,
         preseg_cfg=preseg_cfg,
         coacd_cfg=coacd_cfg,
@@ -478,6 +479,7 @@ def _native_pipeline_kwargs(
     ftetwild_bin: str | Path,
     coacd_bin: str | Path,
     mesh_id: str,
+    category_name: str,
     tetra_cfg: dict[str, Any],
     preseg_cfg: dict[str, Any],
     coacd_cfg: dict[str, Any],
@@ -536,7 +538,7 @@ def _native_pipeline_kwargs(
         "coacd_decimate": bool(coacd_cfg.get("decimate", True)),
         "merge_tilted": bool(merge_cfg.get("tilted", True)),
         "merge_only_nearby": bool(merge_cfg.get("only_nearby", False)),
-        "final_k": int(merge_cfg.get("final_k", 0)),
+        "final_k": _merge_final_k_for_category(merge_cfg, category_name),
         "exp_w": float(mcts_cfg.get("exp_w", 0.001)),
         "gamma": float(mcts_cfg.get("gamma", 1.0)),
         "cache_capacity": int(
@@ -569,6 +571,13 @@ def _native_manifold_depth_attempts(
     if fallback > 0 and fallback not in attempts:
         attempts.append(fallback)
     return attempts
+
+
+def _merge_final_k_for_category(stage_cfg: dict[str, Any], category_name: str) -> int:
+    raw_by_category = stage_cfg.get("final_k_by_category", {})
+    if isinstance(raw_by_category, dict) and category_name in raw_by_category:
+        return int(raw_by_category[category_name])
+    return int(stage_cfg.get("final_k", 0))
 
 
 def _parse_depth_attempts(raw: Any) -> list[int]:
@@ -2389,7 +2398,8 @@ def run_merge_mesh(
     force: bool = False,
 ) -> StageRecord:
     started = time.time()
-    stage_cfg = cfg.get("merge", {})
+    stage_cfg = deep_update(cfg.get("merge", {}), category.get("merge", {}))
+    stage_cfg["final_k"] = _merge_final_k_for_category(stage_cfg, str(category["name"]))
     tet_dir = mesh_tetra_dir(cfg, category, mesh_id)
     expected = greedy_segment_path(tet_dir, stage_cfg)
     if expected.exists() and not force:

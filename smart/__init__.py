@@ -53,7 +53,7 @@ __all__ = [
     "workspace",
 ]
 
-__version__ = "0.1.21"
+__version__ = "0.1.22"
 _API_EXPORTS = {
     "build_action_prior_from_traces",
     "build_linear_action_prior_from_traces",

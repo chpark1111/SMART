@@ -94,16 +94,14 @@ full mesh-to-box pipeline can still be dominated by preprocessing:
 normalization, ManifoldPlus repair, fTetWild tetrahedralization, and CoACD
 over-segmentation.
 
-Two preprocessing controls are available:
+For strict quality-preserving timing, the safe preprocessing control is reuse
+or hashing of the same preprocessing artifacts.  `configs/learned_default.yaml`
+enables this cache by default for normal package use:
 
 ```bash
 smart --config configs/learned_default.yaml \
   --set native_pipeline.preprocessing_cache=true \
   run
-
-smart --config configs/smoke_5.yaml \
-  --set tetra.skip_manifoldplus=true \
-  native-run --category airplane --mesh <mesh_id> --force
 ```
 
 `native_pipeline.preprocessing_cache=true` is safe for repeated experiments on
@@ -111,10 +109,27 @@ the same mesh/config.  It caches normalized, tetra, and CoACD artifacts by mesh
 hash and preprocessing config, while always rerunning merge/refine/MCTS or the
 learned macro-skill stage.
 
-`tetra.skip_manifoldplus=true` is an opt-in speed knob for known-clean meshes.
-In a three-mesh local smoke probe it reduced first-run wall time strongly, but
-chair/table partition counts changed, so it is **not** a release default.  Keep
-exact validation enabled and use it only after dataset-level validation.
+On a June 27, 2026 local chair smoke probe, the first cache-miss run took
+17.81s and a fresh-workspace cache-hit run took 0.54s.  The tetra mesh, CoACD
+partition JSON, and final bbox JSON hashes were identical.
+
+`tetra.skip_manifoldplus=true`, lower ManifoldPlus depth, CoACD tuning, and
+multi-worker fresh preprocessing are **not** strict same-quality acceleration
+paths.  They can be useful for dataset-specific rescue or throughput
+experiments, but they change the geometry artifact entering SMART and must be
+validated against final exact metrics before any claim is made.
+
+A June 26, 2026 smoke timing check showed the boundary:
+
+| path | effect |
+| --- | --- |
+| C++ batch `--jobs 2` | about 1.9x faster throughput on 5 meshes, but metrics changed |
+| preprocessing cache/reuse | exact artifact reuse for repeated runs |
+| learned router with exact validation | fewer search exact checks, final SMART/Manifold scorer unchanged |
+
+The package default therefore keeps exact preprocessing semantics and uses the
+learned path only where exact validation and rollback keep the result
+non-worse.
 
 ## Latest Transformer Research Comparison
 
